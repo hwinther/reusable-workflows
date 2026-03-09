@@ -1,0 +1,7 @@
+{
+  "singleQuote": true,
+  "endOfLine": "auto",
+  "trailingComma": "es5",
+  "parser": "json",
+  "printWidth": 120
+}

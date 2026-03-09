@@ -1,0 +1,112 @@
+# Lager tag og release basert på brukerinput eller automatisk versjonsøkning
+# Hvis navnet settes til auto så blir den nyeste taggen funnet i repoet økt med 1 på minor versjonen
+name: "Opprett tag og release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Navn på tag (f.eks. v1.2.3)"
+        required: false
+        default: "auto"
+      release_notes:
+        description: "Utgivelsesnotater for denne taggen"
+        required: false
+      create_release:
+        description: "Opprett en GitHub Release for denne taggen"
+        required: false
+        default: "true"
+  workflow_call:
+    inputs:
+      tag_name:
+        description: "Navn på tag (f.eks. v1.2.3)"
+        type: string
+        required: false
+        default: "auto"
+      release_notes:
+        description: "Utgivelsesnotater for denne taggen"
+        type: string
+        required: false
+      create_release:
+        description: "Opprett en GitHub Release for denne taggen"
+        type: string
+        required: false
+        default: "true"
+    outputs:
+      tag_name:
+        description: "Navn på den opprettede taggen"
+        value: ${{ jobs.tag.outputs.tag_name }}
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      tag_name: ${{ steps.determine_tag.outputs.tag_name }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Avgjør pakkeversjon og docker tag
+        id: gitversion
+        if: ${{ github.event.inputs.tag_name == 'auto' }}
+        uses: hwinther/reusable-workflows/.github/actions/gitversion@main
+
+      - name: Bestem tag navn
+        id: determine_tag
+        run: |
+          TAG_INPUT="${{ github.event.inputs.tag_name }}"
+
+          if [ "$TAG_INPUT" == "auto" ]; then
+            IFS='.' read -ra VERSION_PARTS <<< "${{ steps.gitversion.outputs.version }}"
+            MAJOR=${VERSION_PARTS[0]}
+            MINOR=${VERSION_PARTS[1]:-0}
+            PATCH=${VERSION_PARTS[2]:-0}
+            
+            MINOR=$((MINOR + 1))
+            PATCH=0
+            
+            NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+
+            echo "tag_name=$NEW_TAG" >> $GITHUB_OUTPUT
+            echo "Ny tag: $NEW_TAG"
+          else
+            echo "tag_name=$TAG_INPUT" >> $GITHUB_OUTPUT
+            echo "Bruker angitt tag: $TAG_INPUT"
+          fi
+
+      - name: Opprett tag ${{ steps.determine_tag.outputs.tag_name }}
+        id: create_tag
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git tag ${{ steps.determine_tag.outputs.tag_name }}
+          git push origin ${{ steps.determine_tag.outputs.tag_name }}
+
+      - name: Opprett release ${{ steps.determine_tag.outputs.tag_name }}
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        with:
+          tag_name: ${{ steps.determine_tag.outputs.tag_name }}
+          draft: false
+          prerelease: false
+          make_latest: true
+          body: ${{ github.event.inputs.release_notes }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Vis lenke til release ${{ steps.determine_tag.outputs.tag_name }}
+        if: ${{ github.event.inputs.create_release == 'true' }}
+        run: |
+          echo "## ✅ Release opprettet" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Tag:** ${{ steps.determine_tag.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [Gå til release (utkast) for gjennomgang og publisering](${{ steps.create_release.outputs.url }})" >> $GITHUB_STEP_SUMMARY
