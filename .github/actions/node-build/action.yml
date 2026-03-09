@@ -75,7 +75,7 @@ runs:
     working-directory: ${{ inputs.node_source_path }}
     shell: bash
     run: |
-      git checkout HEAD -- .npmrc
+      git checkout HEAD -- .npmrc || exit 0
 
   - name: Typecheck
     id: node-typecheck
