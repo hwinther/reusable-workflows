@@ -350,7 +350,7 @@ runs:
     shell: bash
     env:
       INPUT: "${{ inputs.node_source_path }}/coverage/json-report.json"
-      OUTPUT: "$TEMP_DIR/test-results.md"
+      OUTPUT: "${{ env.TEMP_DIR }}/test-results.md"
     run: |
       echo "::group::Test rapport"
       if [[ ! -f "$INPUT" ]]; then
