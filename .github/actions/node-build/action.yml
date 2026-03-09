@@ -288,7 +288,7 @@ runs:
         cat $TEMP_DIR/lint.err >> $TEMP_DIR/lint.md
         LINT_FAILED=1
       else
-        if [ ! -s $TEMP_DIR/lint.out ] || [ "$(cat $TEMP_DIR/eslint.json)" = "[]" ]
+        if [ ! -s $TEMP_DIR/eslint.json ] || [ "$(cat $TEMP_DIR/eslint.json)" = "[]" ]
         then
           echo "## ✅ Ingen lint-problemer 🎊" > $TEMP_DIR/lint.md
         else
