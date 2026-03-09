@@ -44,7 +44,7 @@ on:
       dotnet_solution_file:
         required: false
         type: string
-        description: "Løsningsfilen som skal bygges, f.eks. StorSak.Dokumentmottak.slnx, relativt til dotnet_source_path"
+        description: "Løsningsfilen som skal bygges, f.eks. ProsjektNavn.slnx, relativt til dotnet_source_path"
       dotnet_changes_regex:
         required: false
         type: string
