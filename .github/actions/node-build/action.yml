@@ -303,6 +303,8 @@ runs:
             # Parse JSON and create GitHub error annotations
             echo "## ❌ Følgende lint-problemer bør fikses:" > $TEMP_DIR/lint.md
             LINT_FAILED=1
+
+            echo "WORKFLOW_AGENT_PATH: ${{ env.WORKFLOW_AGENT_PATH }}"
             
             # Use jq to parse JSON and create annotations
             if command -v jq >/dev/null 2>&1; then
