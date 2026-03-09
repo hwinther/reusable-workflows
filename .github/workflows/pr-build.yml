@@ -1,3 +1,11 @@
+# Bygg og lint i PR - støtter node og dotnet
+
+# Node forutsetter at man har package lock laget av npm og at følgende script finnes:
+# typecheck (tsc), lint:ci (eslint), build (npm run build) og coverage:ci (test og generere kode dekningsrapport)
+
+# Dotnet forutsetter at man har en løsningsfil (sln/slnx) og at følgende script finnes:
+# build (dotnet build)
+
 name: "Bygg og lint i PR"
 
 on:
