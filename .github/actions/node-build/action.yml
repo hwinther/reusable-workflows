@@ -38,7 +38,7 @@ runs:
   - name: Legger til GitHub token i .npmrc
     working-directory: ${{ inputs.node_source_path }}
     shell: bash
-    run: echo -e "\n//npm.pkg.github.com/:_authToken=${{ inputs.github_token }}" >> ${{ inputs.node_source_path }}/.npmrc
+    run: touch ./.npmrc && echo -e "\n//npm.pkg.github.com/:_authToken=${{ inputs.github_token }}" >> ./.npmrc
 
   - name: Installer avhengigheter
     id: dependency-install
