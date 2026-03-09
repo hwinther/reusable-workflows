@@ -6,11 +6,11 @@ branding:
 
 inputs:
   docker_registry:
-    description: 'Docker registry, f.eks. pnweplatformcr.azurecr.io'
-    default: 'pnweplatformcr.azurecr.io'
+    description: 'Docker registry, f.eks. egenacr.azurecr.io'
+    default: 'egenacr.azurecr.io'
     type: string
   docker_image:
-    description: 'Docker image navn, f.eks. storsak/sak/frontend'
+    description: 'Docker image navn, f.eks. mappe/undermappe/frontend'
     default: ''
     type: string
   override_config:

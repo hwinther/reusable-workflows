@@ -13,7 +13,7 @@ inputs:
     description: "Mappen der .NET koden ligger, f.eks. backend"
   dotnet_solution_file:
     required: true
-    description: "Løsningsfilen som skal bygges, f.eks. backend/StorSak.Dokumentmottak.slnx"
+    description: "Løsningsfilen som skal bygges, f.eks. backend/ProsjektNavn.slnx"
   github_token:
     required: true
     description: "GitHub token for å få tilgang til private NuGet pakker"
@@ -49,7 +49,7 @@ runs:
     env:
       NUGET_AUTH_TOKEN: ${{ inputs.github_token }}
 
-  - name: Add StorSak Source
+  - name: Add ekstra nuget source
     shell: bash
     if: ${{ inputs.extra_nuget_source != '' }}
     run: |
@@ -60,7 +60,11 @@ runs:
     shell: bash
     run: |
       dotnet restore ${{ inputs.dotnet_solution_file }} --locked-mode
-      git checkout -- nuget.config # Fordi vi gjør add og remove source rett over her
+      if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
+        git checkout HEAD -- nuget.config
+      else
+        rm -f nuget.config || true
+      fi
 
   - name: Bygg
     id: dotnet-build
