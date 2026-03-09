@@ -170,7 +170,7 @@ jobs:
       - name: Bygg node
         id: node-build
         if: matrix.build_type == 'node'
-        uses: hwinther/reusable-workflows/.github/actions/node-build@feat/node-test-and-coverage
+        uses: hwinther/reusable-workflows/.github/actions/node-build@main
         with:
           node_version: ${{ env.NODE_VERSION }}
           node_source_path: ${{ env.NODE_SOURCE_PATH }}
