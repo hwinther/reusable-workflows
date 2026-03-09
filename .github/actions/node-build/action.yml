@@ -387,7 +387,7 @@ runs:
 
       mkdir -p "$(dirname "$OUTPUT")"
       {
-        echo "## Test results"
+        echo "## 🧪 Testresultater"
         echo ""
         echo "| Total | Passed | Failed | Skipped | Todo |"
         echo "|-------|--------|--------|---------|------|"
