@@ -195,8 +195,13 @@ runs:
       # Combine all error formats
       cat $TEMP_DIR/build.err.ts_new $TEMP_DIR/build.err.ts_old $TEMP_DIR/build.err.generic > $TEMP_DIR/build.err 2>/dev/null || (exit 0)
 
+      # Extract warnings (e.g. bundler warnings)
+      grep -iE "Warning:|\[.*\]\[Warning\]" $TEMP_DIR/build.out.nocolor > $TEMP_DIR/build.warn || (exit 0)
+
       echo -e "\nEkstraherte byggfeil:\n"
       cat $TEMP_DIR/build.err
+      echo -e "\nEkstraherte byggadvarsler:\n"
+      cat $TEMP_DIR/build.warn
 
       if [ ! -s $TEMP_DIR/build.err ]
       then
@@ -229,6 +234,17 @@ runs:
         sed -i '/^$/d' $TEMP_DIR/build.md             # removes empty lines
         sed -i -e 's/^/- ❌ /' $TEMP_DIR/build.md     # prefix with markdown list item and cross mark emoji
         echo "## ❌ Følgende byggfeil bør fikses:" | cat - $TEMP_DIR/build.md > $TEMP_DIR/build.md.temp && mv $TEMP_DIR/build.md.temp $TEMP_DIR/build.md
+      fi
+
+      # Process warnings - emit GitHub annotations and append to markdown
+      if [ -s $TEMP_DIR/build.warn ]; then
+        while IFS= read -r line; do
+          echo "::warning::$line"
+        done < $TEMP_DIR/build.warn
+        echo "" >> $TEMP_DIR/build.md
+        echo "## ⚠️ Byggadvarsler:" >> $TEMP_DIR/build.md
+        sed -i '/^$/d' $TEMP_DIR/build.warn
+        sed -e 's/^/- ⚠️ /' $TEMP_DIR/build.warn >> $TEMP_DIR/build.md
       fi
 
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/build.md)"$'\n'EOF >> $GITHUB_OUTPUT
