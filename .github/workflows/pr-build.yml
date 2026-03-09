@@ -19,8 +19,8 @@ on:
       node_source_path:
         required: false
         type: string
-        description: "Mappen der for eksempel frontend koden ligger"
-        default: "./"
+        description: "Mappen der for eksempel frontend koden ligger, for eksempel 'frontend'"
+        default: "."
       node_changes_regex:
         required: false
         type: string
