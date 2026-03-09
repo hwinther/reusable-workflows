@@ -273,8 +273,9 @@ runs:
       echo "Lint exit code: $LINT_EXIT_CODE"
       set -e
 
-      echo -e "\nLint-resultat:\n"
+      echo -e "\n::group::Lint-resultat\n"
       cat $TEMP_DIR/eslint.json
+      echo -e "\n::endgroup::\n"
 
       LINT_FAILED=0
 
