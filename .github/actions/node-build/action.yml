@@ -373,6 +373,10 @@ runs:
       indicators: true
       output: both
       thresholds: "60 80"
+  - name: Flytter kode dekningsrapport til midlertidig mappe
+    shell: bash
+    run: |
+      mv code-coverage-results.md $TEMP_DIR/
 
   - name: Create Todo Comments
     uses: gkampitakis/github-action-todo-commenter@v1
@@ -415,7 +419,7 @@ runs:
       [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/lint.md ] && cat $TEMP_DIR/lint.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/test-coverage.md ] && cat $TEMP_DIR/test-coverage.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
