@@ -268,13 +268,13 @@ runs:
     run: |
       echo "::group::Lint"
       set +e
-      npm run lint:ci 1>$TEMP_DIR/lint.out 2>$TEMP_DIR/lint.err || (exit 0)
+      npm run lint:ci -- --output-file $TEMP_DIR/eslint.json 2>$TEMP_DIR/lint.err || (exit 0)
       LINT_EXIT_CODE=$?
       echo "Lint exit code: $LINT_EXIT_CODE"
       set -e
 
       echo -e "\nLint-resultat:\n"
-      cat $TEMP_DIR/lint.out
+      cat $TEMP_DIR/eslint.json
 
       LINT_FAILED=0
 
@@ -288,13 +288,12 @@ runs:
         cat $TEMP_DIR/lint.err >> $TEMP_DIR/lint.md
         LINT_FAILED=1
       else
-        if [ ! -s $TEMP_DIR/lint.out ] || [ "$(cat $TEMP_DIR/lint.out)" = "[]" ]
+        if [ ! -s $TEMP_DIR/lint.out ] || [ "$(cat $TEMP_DIR/eslint.json)" = "[]" ]
         then
           echo "## ✅ Ingen lint-problemer 🎊" > $TEMP_DIR/lint.md
         else
           # Check if there are any actual lint errors/warnings
-          cat $TEMP_DIR/lint.out | grep "\[" > $TEMP_DIR/lint.out.json
-          ERROR_COUNT=$(jq '[.[] | select(.errorCount > 0 or .warningCount > 0)] | length' $TEMP_DIR/lint.out.json 2>/dev/null || echo "0")
+          ERROR_COUNT=$(jq '[.[] | select(.errorCount > 0 or .warningCount > 0)] | length' $TEMP_DIR/eslint.json 2>/dev/null || echo "0")
           
           if [ "$ERROR_COUNT" = "0" ]
           then
@@ -307,14 +306,14 @@ runs:
             # Use jq to parse JSON and create annotations
             if command -v jq >/dev/null 2>&1; then
               # Create GitHub error annotations
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/lint.out.json 2>/dev/null || true
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
               
               # Create markdown output for PR comment
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "- ❌ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/lint.out.json >> $TEMP_DIR/lint.md 2>/dev/null || true
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "- ❌ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
             else
               # Fallback if jq is not available
               echo "jq not available, showing raw JSON output" >> $TEMP_DIR/lint.md
-              cat $TEMP_DIR/lint.out >> $TEMP_DIR/lint.md
+              cat $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md
             fi
           fi
         fi
