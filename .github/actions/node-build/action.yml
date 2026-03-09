@@ -313,6 +313,43 @@ runs:
       echo "::endgroup::"
       echo "✅ Ingen lint feil funnet"
 
+  - name: Kjør tester
+    id: test-coverage
+    shell: bash
+    working-directory: ${{ inputs.node_source_path }}
+    run: npm run coverage:ci
+
+  - name: Test reporter
+    uses: dorny/test-reporter@v2
+    id: test-reporter
+    with:
+      name: "Node tester"
+      working-directory: ${{ inputs.node_source_path }}
+      path: "${{ inputs.node_source_path }}/coverage/junit-report.xml"
+      reporter: jest-junit
+      fail-on-error: false
+
+  - name: Code Coverage Report
+    uses: irongut/CodeCoverageSummary@v1.3.0
+    with:
+      filename: "${{ inputs.node_source_path }}/coverage/cobertura-coverage.xml"
+      badge: true
+      fail_below_min: false
+      format: markdown
+      hide_branch_rate: false
+      hide_complexity: true
+      indicators: true
+      output: both
+      thresholds: "60 80"
+
+  - name: Create Todo Comments
+    uses: gkampitakis/github-action-todo-commenter@v1
+    if: always()
+    with:
+      github-token: ${{ inputs.github_token }}
+      review-message: "Please take a look :eyes:"
+      tags: "TODO:,FIXME:,BUG:"
+
   - name: Ser etter endringer som ikke er sjekket inn
     shell: bash
     working-directory: ${{ inputs.node_source_path }}
@@ -346,6 +383,7 @@ runs:
       [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/lint.md ] && cat $TEMP_DIR/lint.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/test-coverage.md ] && cat $TEMP_DIR/test-coverage.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
