@@ -345,6 +345,61 @@ runs:
     working-directory: ${{ inputs.node_source_path }}
     run: npm run coverage:ci
 
+  - name: Lag rapport over testkjøringen
+    id: test-markdown-report
+    shell: bash
+    working-directory: ${{ inputs.node_source_path }}
+    env:
+      INPUT: "${{ inputs.node_source_path }}/coverage/json-report.json"
+      OUTPUT: "$TEMP_DIR/test-results.md"
+    run: |
+      echo "::group::Test rapport"
+      if [[ ! -f "$INPUT" ]]; then
+        echo "Error: $INPUT not found" >&2
+        exit 1
+      fi
+
+      total=$(jq -r '.numTotalTests // 0' "$INPUT")
+      passed=$(jq -r '.numPassedTests // 0' "$INPUT")
+      failed=$(jq -r '.numFailedTests // 0' "$INPUT")
+      skipped=$(jq -r '.numPendingTests // 0' "$INPUT")
+      todo=$(jq -r '.numTodoTests // 0' "$INPUT")
+      success=$(jq -r '.success // false' "$INPUT")
+      start_time=$(jq -r '.startTime // empty' "$INPUT")
+      last_end=$(jq -r '.testResults[-1].endTime // empty' "$INPUT")
+
+      if [[ "$success" == "true" ]]; then
+        status="All tests passed"
+      elif [[ "$failed" -gt 0 ]]; then
+        status="${failed} test(s) failed"
+      else
+        status="Tests incomplete or skipped"
+      fi
+
+      duration_line=""
+      if [[ -n "$start_time" && -n "$last_end" ]]; then
+        duration_ms=$(jq -r --argjson s "$start_time" --argjson e "$last_end" '($e - $s) | floor' "$INPUT" 2>/dev/null || true)
+        if [[ -n "$duration_ms" && "$duration_ms" != "null" ]]; then
+          duration_sec=$(echo "scale=2; $duration_ms / 1000" | bc 2>/dev/null || echo "$(( duration_ms / 1000 ))")
+          duration_line="**Duration:** ${duration_sec}s"
+        fi
+      fi
+
+      mkdir -p "$(dirname "$OUTPUT")"
+      {
+        echo "## Test results"
+        echo ""
+        echo "| Total | Passed | Failed | Skipped | Todo |"
+        echo "|-------|--------|--------|---------|------|"
+        echo "| $total | $passed | $failed | $skipped | $todo |"
+        echo ""
+        echo "**Status:** $status"
+        [[ -n "$duration_line" ]] && echo "$duration_line"
+      } > "$OUTPUT"
+
+      echo "Wrote test results to $OUTPUT"
+      echo "::endgroup::"
+
   - name: Opplasting av testresultater
     uses: actions/upload-artifact@v7
     if: ${{ !cancelled() }}
@@ -360,6 +415,12 @@ runs:
       path: "${{ inputs.node_source_path }}/coverage/junit-report.xml"
       reporter: jest-junit
       fail-on-error: false
+
+  - name: 'Report Coverage'
+    if: always() 
+    uses: davelosert/vitest-coverage-report-action@v2
+    with:
+      json-summary-path: "${{ inputs.node_source_path }}/coverage/coverage-final.json"
 
   - name: Code Coverage Report
     uses: irongut/CodeCoverageSummary@v1.3.0
@@ -422,7 +483,15 @@ runs:
       [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/lint.md ] && cat $TEMP_DIR/lint.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/test-results.md ] && cat $TEMP_DIR/test-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
+
+  - name: Gi workflowen status feilet dersom en eller flere tester feilet
+    if: steps.test-reporter.conclusion == 'failure'
+    shell: bash
+    run: |
+      echo "::error::Tests failed. Check test reports for details."
+      exit 1
