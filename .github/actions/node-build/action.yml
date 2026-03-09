@@ -348,7 +348,6 @@ runs:
   - name: Lag rapport over testkjøringen
     id: test-markdown-report
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
     env:
       INPUT: "${{ inputs.node_source_path }}/coverage/json-report.json"
       OUTPUT: "$TEMP_DIR/test-results.md"
