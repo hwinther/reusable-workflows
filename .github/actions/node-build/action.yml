@@ -311,7 +311,6 @@ runs:
             if command -v jq >/dev/null 2>&1; then
               # Create GitHub error annotations (severity 2)
               jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "DEBUGerror file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
               # Create GitHub warning annotations (severity 1)
               jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 1) | "::warning file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
               
