@@ -305,11 +305,14 @@ runs:
             
             # Use jq to parse JSON and create annotations
             if command -v jq >/dev/null 2>&1; then
-              # Create GitHub error annotations
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
+              # Create GitHub error annotations (severity 2)
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
+              # Create GitHub warning annotations (severity 1)
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 1) | "::warning file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
               
-              # Create markdown output for PR comment
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "- ❌ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
+              # Create markdown output for PR comment (errors first, then warnings)
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "- ❌ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 1) | "- ⚠️ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
             else
               # Fallback if jq is not available
               echo "jq not available, showing raw JSON output" >> $TEMP_DIR/lint.md
