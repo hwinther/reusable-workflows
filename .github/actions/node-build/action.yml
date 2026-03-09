@@ -75,7 +75,11 @@ runs:
     working-directory: ${{ inputs.node_source_path }}
     shell: bash
     run: |
-      git checkout HEAD -- .npmrc || exit 0
+      if git ls-files --error-unmatch .npmrc > /dev/null 2>&1; then
+        git checkout HEAD -- .npmrc
+      else
+        rm -f .npmrc || true
+      fi
 
   - name: Typecheck
     id: node-typecheck
