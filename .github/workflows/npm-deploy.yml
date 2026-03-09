@@ -1,0 +1,80 @@
+name: "Deploy pakke til GitHub Packages"
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: false
+        type: string
+        description: "Mappen der for eksempel bibliotek koden ligger"
+        default: "./"
+      node_version:
+        required: false
+        type: string
+        description: "Node versjon, f.eks. 24.x"
+        default: "24.x"
+      package_version:
+        required: true
+        type: string
+        description: "Pakkeversjon som skal publiseres, f.eks. 1.0.0 eller 1.0.0-beta.1"
+      is_alpha:
+        required: false
+        type: string # Vi må ha denne inn som en string fordi output fra den andre arbeidsflyten blir en string
+        description: "Indikerer om versjonen som skal publiseres er en alpha/prerelease versjon"
+        default: 'false'
+      scope:
+        required: false
+        type: string
+        description: "Scope for pakken, f.eks. '@organisasjon'"
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  NODE_VERSION: ${{ inputs.node_version }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hent kode
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        name: Sett opp Node
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          registry-url: "https://npm.pkg.github.com/"
+          scope: ${{ inputs.scope }}
+          cache: "npm"
+          cache-dependency-path: "${{ inputs.working-directory }}/package-lock.json"
+
+      - name: Legger til GitHub token i npmrc
+        working-directory: ${{ inputs.working-directory }}
+        run: echo -e "\n//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ./.npmrc
+
+      - name: Oppdater pakkeversjonen
+        working-directory: ${{ inputs.working-directory }}
+        run: npm version ${{ inputs.package_version }} --no-git-tag-version
+
+      - name: Installer avhengigheter
+        working-directory: ${{ inputs.working-directory }}
+        id: dependency-install
+        run: npm ci
+
+      - name: Bygg pakke
+        working-directory: ${{ inputs.working-directory }}
+        run: npm run build
+
+      - name: Publiser pakke
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ inputs.is_alpha }}" = "true" ]; then
+            npm publish --tag alpha
+          else
+            npm publish
+          fi

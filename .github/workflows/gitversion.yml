@@ -1,0 +1,58 @@
+name: "Avgjør pakkeversjon og docker tag"
+
+on:
+  workflow_call:
+    inputs:
+      docker_registry:
+        description: 'Docker registry, f.eks. pnweplatformcr.azurecr.io'
+        default: 'pnweplatformcr.azurecr.io'
+        type: string
+      docker_image:
+        description: 'Docker image navn, f.eks. storsak/sak/frontend'
+        default: ''
+        type: string
+      override_config:
+        description: 'Overstyring av GitVersion konfigurasjonselementer i YAML format'
+        default: ''
+        type: string
+    outputs:
+      deployTag:
+        description: "Deploy tag, docker repository og image navn med tag som skal deployes til miljø"
+        value: ${{ jobs.finn-versjon.outputs.deployTag }}
+      dockerTags:
+        description: "Docker repository og image navn med tags som skal deployes til container registry"
+        value: ${{ jobs.finn-versjon.outputs.dockerTags }}
+      version:
+        description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
+        value: ${{ jobs.finn-versjon.outputs.version }}
+      is_alpha:
+        description: "Boolsk verdi som indikerer om versjonen er en alpha/prerelease versjon"
+        value: ${{ jobs.finn-versjon.outputs.is_alpha }}
+      gitVersionMajorMinorPatch:
+        description: "GitVersion Major.Minor.Patch versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
+        value: ${{ jobs.finn-versjon.outputs.gitVersionMajorMinorPatch }}
+      gitVersionSemVer:
+        description: "GitVersion SemVer versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
+        value: ${{ jobs.finn-versjon.outputs.gitVersionSemVer }}
+
+permissions:
+  contents: read
+
+jobs:
+  finn-versjon:
+    runs-on: ubuntu-latest
+    outputs:
+      deployTag: ${{ steps.gitversion.outputs.deployTag }}
+      dockerTags: ${{ steps.gitversion.outputs.dockerTags }}
+      version: ${{ steps.gitversion.outputs.version }}
+      is_alpha: ${{ steps.gitversion.outputs.is_alpha }}
+      gitVersionMajorMinorPatch: ${{ steps.gitversion.outputs.gitVersionMajorMinorPatch }}
+      gitVersionSemVer: ${{ steps.gitversion.outputs.gitVersionSemVer }}
+    steps:
+      - name: Avgjør pakkeversjon og docker tag
+        id: gitversion
+        uses: hwinther/reusable-workflows/.github/actions/gitversion@main
+        with:
+          docker_registry: ${{ inputs.docker_registry }}
+          docker_image: ${{ inputs.docker_image }}
+          override_config: ${{ inputs.override_config }}
