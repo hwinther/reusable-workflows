@@ -202,6 +202,7 @@ runs:
       cat $TEMP_DIR/build.err
       echo -e "\nEkstraherte byggadvarsler:\n"
       cat $TEMP_DIR/build.warn
+      echo -e "\n"
 
       if [ ! -s $TEMP_DIR/build.err ]
       then
