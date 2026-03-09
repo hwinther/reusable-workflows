@@ -38,7 +38,7 @@ runs:
   - name: Legger til GitHub token i .npmrc
     working-directory: ${{ inputs.node_source_path }}
     shell: bash
-    run: echo -e "\n//npm.pkg.github.com/:_authToken=${{ inputs.github_token }}" >> ./.npmrc
+    run: touch ./.npmrc && echo -e "\n//npm.pkg.github.com/:_authToken=${{ inputs.github_token }}" >> ./.npmrc
 
   - name: Installer avhengigheter
     id: dependency-install
@@ -75,7 +75,11 @@ runs:
     working-directory: ${{ inputs.node_source_path }}
     shell: bash
     run: |
-      git checkout HEAD -- .npmrc
+      if git ls-files --error-unmatch .npmrc > /dev/null 2>&1; then
+        git checkout HEAD -- .npmrc
+      else
+        rm -f .npmrc || true
+      fi
 
   - name: Typecheck
     id: node-typecheck
@@ -191,8 +195,14 @@ runs:
       # Combine all error formats
       cat $TEMP_DIR/build.err.ts_new $TEMP_DIR/build.err.ts_old $TEMP_DIR/build.err.generic > $TEMP_DIR/build.err 2>/dev/null || (exit 0)
 
+      # Extract warnings (e.g. bundler warnings)
+      grep -iE "Warning:|\[.*\]\[Warning\]" $TEMP_DIR/build.out.nocolor > $TEMP_DIR/build.warn || (exit 0)
+
       echo -e "\nEkstraherte byggfeil:\n"
       cat $TEMP_DIR/build.err
+      echo -e "\nEkstraherte byggadvarsler:\n"
+      cat $TEMP_DIR/build.warn
+      echo -e "\n"
 
       if [ ! -s $TEMP_DIR/build.err ]
       then
@@ -227,6 +237,17 @@ runs:
         echo "## ❌ Følgende byggfeil bør fikses:" | cat - $TEMP_DIR/build.md > $TEMP_DIR/build.md.temp && mv $TEMP_DIR/build.md.temp $TEMP_DIR/build.md
       fi
 
+      # Process warnings - emit GitHub annotations and append to markdown
+      if [ -s $TEMP_DIR/build.warn ]; then
+        while IFS= read -r line; do
+          echo "::warning::$line"
+        done < $TEMP_DIR/build.warn
+        echo "" >> $TEMP_DIR/build.md
+        echo "## ⚠️ Byggadvarsler:" >> $TEMP_DIR/build.md
+        sed -i '/^$/d' $TEMP_DIR/build.warn
+        sed -e 's/^/- ⚠️ /' $TEMP_DIR/build.warn >> $TEMP_DIR/build.md
+      fi
+
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/build.md)"$'\n'EOF >> $GITHUB_OUTPUT
 
       if [ -s $TEMP_DIR/build.err ]
@@ -248,13 +269,14 @@ runs:
     run: |
       echo "::group::Lint"
       set +e
-      npm run lint:ci 1>$TEMP_DIR/lint.out 2>$TEMP_DIR/lint.err || (exit 0)
+      npm run lint:ci -- --output-file $TEMP_DIR/eslint.json 2>$TEMP_DIR/lint.err || (exit 0)
       LINT_EXIT_CODE=$?
       echo "Lint exit code: $LINT_EXIT_CODE"
       set -e
 
-      echo -e "\nLint-resultat:\n"
-      cat $TEMP_DIR/lint.out
+      echo -e "\n::group::Lint-resultat\n"
+      cat $TEMP_DIR/eslint.json
+      echo -e "\n::endgroup::\n"
 
       LINT_FAILED=0
 
@@ -268,13 +290,12 @@ runs:
         cat $TEMP_DIR/lint.err >> $TEMP_DIR/lint.md
         LINT_FAILED=1
       else
-        if [ ! -s $TEMP_DIR/lint.out ] || [ "$(cat $TEMP_DIR/lint.out)" = "[]" ]
+        if [ ! -s $TEMP_DIR/eslint.json ] || [ "$(cat $TEMP_DIR/eslint.json)" = "[]" ]
         then
           echo "## ✅ Ingen lint-problemer 🎊" > $TEMP_DIR/lint.md
         else
           # Check if there are any actual lint errors/warnings
-          cat $TEMP_DIR/lint.out | grep "\[" > $TEMP_DIR/lint.out.json
-          ERROR_COUNT=$(jq '[.[] | select(.errorCount > 0 or .warningCount > 0)] | length' $TEMP_DIR/lint.out.json 2>/dev/null || echo "0")
+          ERROR_COUNT=$(jq '[.[] | select(.errorCount > 0 or .warningCount > 0)] | length' $TEMP_DIR/eslint.json 2>/dev/null || echo "0")
           
           if [ "$ERROR_COUNT" = "0" ]
           then
@@ -283,18 +304,23 @@ runs:
             # Parse JSON and create GitHub error annotations
             echo "## ❌ Følgende lint-problemer bør fikses:" > $TEMP_DIR/lint.md
             LINT_FAILED=1
+
+            echo "WORKFLOW_AGENT_PATH: ${{ env.WORKFLOW_AGENT_PATH }}"
             
             # Use jq to parse JSON and create annotations
             if command -v jq >/dev/null 2>&1; then
-              # Create GitHub error annotations
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/lint.out.json 2>/dev/null || true
+              # Create GitHub error annotations (severity 2)
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
+              # Create GitHub warning annotations (severity 1)
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 1) | "::warning file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
               
-              # Create markdown output for PR comment
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | "- ❌ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/lint.out.json >> $TEMP_DIR/lint.md 2>/dev/null || true
+              # Create markdown output for PR comment (errors first, then warnings)
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "- ❌ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 1) | "- ⚠️ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
             else
               # Fallback if jq is not available
               echo "jq not available, showing raw JSON output" >> $TEMP_DIR/lint.md
-              cat $TEMP_DIR/lint.out >> $TEMP_DIR/lint.md
+              cat $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md
             fi
           fi
         fi
@@ -312,6 +338,116 @@ runs:
 
       echo "::endgroup::"
       echo "✅ Ingen lint feil funnet"
+
+  - name: Kjør tester
+    id: test-coverage
+    shell: bash
+    working-directory: ${{ inputs.node_source_path }}
+    run: npm run coverage:ci
+
+  - name: Lag rapport over testkjøringen
+    id: test-markdown-report
+    shell: bash
+    env:
+      INPUT: "${{ inputs.node_source_path }}/coverage/json-report.json"
+      OUTPUT: "${{ env.TEMP_DIR }}/test-results.md"
+    run: |
+      echo "::group::Test rapport"
+      if [[ ! -f "$INPUT" ]]; then
+        echo "Error: $INPUT not found" >&2
+        exit 1
+      fi
+
+      total=$(jq -r '.numTotalTests // 0' "$INPUT")
+      passed=$(jq -r '.numPassedTests // 0' "$INPUT")
+      failed=$(jq -r '.numFailedTests // 0' "$INPUT")
+      skipped=$(jq -r '.numPendingTests // 0' "$INPUT")
+      todo=$(jq -r '.numTodoTests // 0' "$INPUT")
+      success=$(jq -r '.success // false' "$INPUT")
+      start_time=$(jq -r '.startTime // empty' "$INPUT")
+      last_end=$(jq -r '.testResults[-1].endTime // empty' "$INPUT")
+
+      if [[ "$success" == "true" ]]; then
+        status="All tests passed"
+      elif [[ "$failed" -gt 0 ]]; then
+        status="${failed} test(s) failed"
+      else
+        status="Tests incomplete or skipped"
+      fi
+
+      duration_line=""
+      if [[ -n "$start_time" && -n "$last_end" ]]; then
+        duration_ms=$(jq -r --argjson s "$start_time" --argjson e "$last_end" '($e - $s) | floor' "$INPUT" 2>/dev/null || true)
+        if [[ -n "$duration_ms" && "$duration_ms" != "null" ]]; then
+          duration_sec=$(echo "scale=2; $duration_ms / 1000" | bc 2>/dev/null || echo "$(( duration_ms / 1000 ))")
+          duration_line="**Duration:** ${duration_sec}s"
+        fi
+      fi
+
+      mkdir -p "$(dirname "$OUTPUT")"
+      {
+        echo "## 🧪 Testresultater"
+        echo ""
+        echo "| Total | Passed | Failed | Skipped | Todo |"
+        echo "|-------|--------|--------|---------|------|"
+        echo "| $total | $passed | $failed | $skipped | $todo |"
+        echo ""
+        echo "**Status:** $status"
+        [[ -n "$duration_line" ]] && echo "$duration_line"
+      } > "$OUTPUT"
+
+      echo "Wrote test results to $OUTPUT"
+      echo "::endgroup::"
+
+  - name: Opplasting av testresultater
+    uses: actions/upload-artifact@v7
+    if: ${{ !cancelled() }}
+    with:
+      name: coverage
+      path: ${{ inputs.node_source_path }}/coverage
+
+  - name: Test reporter
+    uses: dorny/test-reporter@v2
+    id: test-reporter
+    with:
+      name: "Node tester"
+      path: "${{ inputs.node_source_path }}/coverage/junit-report.xml"
+      reporter: jest-junit
+      fail-on-error: false
+
+  # - name: 'Report Coverage'
+  #   if: always() 
+  #   uses: davelosert/vitest-coverage-report-action@v2
+  #   with:
+  #     json-summary-path: "${{ inputs.node_source_path }}/coverage/coverage-final.json"
+
+  - name: Code Coverage Report
+    uses: irongut/CodeCoverageSummary@v1.3.0
+    with:
+      filename: "${{ inputs.node_source_path }}/coverage/cobertura-coverage.xml"
+      badge: true
+      fail_below_min: false
+      format: markdown
+      hide_branch_rate: false
+      hide_complexity: true
+      indicators: true
+      output: both
+      thresholds: "60 80"
+  - name: Flytter kode dekningsrapport til midlertidig mappe
+    shell: bash
+    run: |
+      echo "## 📊 Kode dekningsrapport" > $TEMP_DIR/code-coverage-results.md
+      echo "" >> $TEMP_DIR/code-coverage-results.md
+      cat code-coverage-results.md >> $TEMP_DIR/code-coverage-results.md
+      rm code-coverage-results.md
+
+  - name: Create Todo Comments
+    uses: gkampitakis/github-action-todo-commenter@v1
+    if: always()
+    with:
+      github-token: ${{ inputs.github_token }}
+      review-message: "Please take a look :eyes:"
+      tags: "TODO:,FIXME:,BUG:"
 
   - name: Ser etter endringer som ikke er sjekket inn
     shell: bash
@@ -346,6 +482,15 @@ runs:
       [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/lint.md ] && cat $TEMP_DIR/lint.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/test-results.md ] && cat $TEMP_DIR/test-results.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
+
+  - name: Gi workflowen status feilet dersom en eller flere tester feilet
+    if: steps.test-reporter.conclusion == 'failure'
+    shell: bash
+    run: |
+      echo "::error::Tests failed. Check test reports for details."
+      exit 1
