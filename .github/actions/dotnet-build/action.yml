@@ -163,14 +163,14 @@ runs:
       dotnet test ${{ inputs.solution_file }} --no-restore -- --report-trx --report-trx-filename test-results.trx --coverage --coverage-output-format cobertura --coverage-output coverage.cobertura.xml
     continue-on-error: true
 
-  - name: Generate test report
-    uses: dorny/test-reporter@v2
-    id: test-reporter
-    with:
-      name: "Testreport"
-      path: "**/TestResults/test-results.trx"
-      reporter: dotnet-trx
-      fail-on-error: false
+  # - name: Generate test report
+  #   uses: dorny/test-reporter@v2
+  #   id: test-reporter
+  #   with:
+  #     name: "Testreport"
+  #     path: "**/TestResults/test-results.trx"
+  #     reporter: dotnet-trx
+  #     fail-on-error: false
 
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@v1.3.0
@@ -184,6 +184,35 @@ runs:
       indicators: true
       output: both
       thresholds: "60 80"
+
+  - name: Install ReportGenerator
+    shell: bash
+    run: dotnet tool install -g dotnet-reportgenerator-globaltool
+
+  - name: Generate ReportGenerator coverage report
+    id: reportgenerator
+    shell: bash
+    working-directory: ${{ inputs.working_directory }}
+    continue-on-error: true
+    run: |
+      dotnet reportgenerator "-reports:**/coverage.cobertura.xml" "-targetdir:coverage-report" "-reporttypes:MarkdownSummaryGithub;Html"
+
+  - name: Move ReportGenerator summary to temp folder
+    shell: bash
+    run: |
+      if [ -f "${{ inputs.working_directory }}/coverage-report/Summary.md" ]; then
+        echo "## 📊 Coverage report (ReportGenerator)" > $TEMP_DIR/reportgenerator-summary.md
+        echo "" >> $TEMP_DIR/reportgenerator-summary.md
+        cat "${{ inputs.working_directory }}/coverage-report/Summary.md" >> $TEMP_DIR/reportgenerator-summary.md
+      fi
+
+  - name: Upload coverage reports
+    uses: actions/upload-artifact@v4
+    if: steps.reportgenerator.outcome == 'success'
+    with:
+      name: coverage-report
+      path: ${{ inputs.working_directory }}/coverage-report
+
   - name: Move code coverage report to temp folder
     shell: bash
     run: |
@@ -235,6 +264,7 @@ runs:
       echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
       cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
