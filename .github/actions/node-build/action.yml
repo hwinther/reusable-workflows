@@ -30,7 +30,7 @@ runs:
     run: |
       TEMP_DIR=$(mktemp -d)
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
-      
+
   - uses: actions/setup-node@v4
     name: Set up Node
     with:
@@ -90,6 +90,13 @@ runs:
       NODE_DISABLE_COLORS: 1
     run: |
       echo "::group::Typecheck"
+      if ! node -e "const s=require('./package.json').scripts; process.exit(s && s.typecheck ? 0 : 1)"; then
+        echo "Script 'typecheck' not found in package.json, skipping"
+        echo "## ⚠️ Script 'typecheck' not found in package.json, skipping" > $TEMP_DIR/typecheck.md
+        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/typecheck.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 0
+      fi
       set +e
       npm run typecheck 1>$TEMP_DIR/typecheck.out 2>&1 || (exit 0)
       TYPECHECK_EXIT_CODE=$?
@@ -173,6 +180,13 @@ runs:
       NODE_DISABLE_COLORS: 1
     run: |
       echo "::group::Build"
+      if ! node -e "const s=require('./package.json').scripts; process.exit(s && s.build ? 0 : 1)"; then
+        echo "Script 'build' not found in package.json, skipping"
+        echo "## ⚠️ Script 'build' not found in package.json, skipping" > $TEMP_DIR/build.md
+        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/build.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 0
+      fi
       npm run build 1>$TEMP_DIR/build.out 2>&1 || (exit 0)
       echo -e "\nBuild result:\n"
       cat $TEMP_DIR/build.out
@@ -268,6 +282,13 @@ runs:
       WORKFLOW_AGENT_PATH: "${{ github.workspace }}/"
     run: |
       echo "::group::Lint"
+      if ! node -e "const s=require('./package.json').scripts; process.exit(s && s['lint:ci'] ? 0 : 1)"; then
+        echo "Script 'lint:ci' not found in package.json, skipping"
+        echo "## ⚠️ Script 'lint:ci' not found in package.json, skipping" > $TEMP_DIR/lint.md
+        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/lint.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        echo "::endgroup::"
+        exit 0
+      fi
       set +e
       npm run lint:ci -- --output-file $TEMP_DIR/eslint.json 2>$TEMP_DIR/lint.err || (exit 0)
       LINT_EXIT_CODE=$?
@@ -343,7 +364,12 @@ runs:
     id: test-coverage
     shell: bash
     working-directory: ${{ inputs.working_directory }}
-    run: npm run coverage:ci
+    run: |
+      if ! node -e "const s=require('./package.json').scripts; process.exit(s && s['coverage:ci'] ? 0 : 1)"; then
+        echo "Script 'coverage:ci' not found in package.json, skipping"
+        exit 0
+      fi
+      npm run coverage:ci
 
   - name: Generate test run report
     id: test-markdown-report
@@ -355,8 +381,13 @@ runs:
     run: |
       echo "::group::Test report"
       if [[ ! -f "$INPUT" ]]; then
-        echo "Error: $INPUT not found" >&2
-        exit 1
+        echo "Test report not found ($INPUT), skipping (e.g. coverage:ci script not in package.json)"
+        mkdir -p "$(dirname "$OUTPUT")"
+        echo "## 🧪 Test results" > "$OUTPUT"
+        echo "" >> "$OUTPUT"
+        echo "No test report (coverage:ci script not run or report not generated)." >> "$OUTPUT"
+        echo "::endgroup::"
+        exit 0
       fi
 
       total=$(jq -r '.numTotalTests // 0' "$INPUT")

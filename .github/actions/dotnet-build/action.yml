@@ -186,7 +186,6 @@ runs:
       thresholds: "60 80"
   - name: Move code coverage report to temp folder
     shell: bash
-    working-directory: ${{ inputs.working_directory }}
     run: |
       echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
       echo "" >> $TEMP_DIR/code-coverage-results.md

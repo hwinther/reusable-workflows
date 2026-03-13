@@ -144,6 +144,17 @@ jobs:
             echo "No changes detected in pattern."
           fi
 
+      - name: Write change check summary
+        run: |
+          echo "## Change checks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Changes detected |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------------------|" >> $GITHUB_STEP_SUMMARY
+          NODE="${{ steps.node-check.outputs.changes_detected || 'false' }}"
+          DOTNET="${{ steps.dotnet-check.outputs.changes_detected || 'false' }}"
+          echo "| Node (frontend) | $([ \"$NODE\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dotnet (backend) | $([ \"$DOTNET\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
+
   node-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.node_changes == 'true'
@@ -205,6 +216,33 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Write change check status to summary
+        run: |
+          echo "## Change checks" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Changes detected | Build result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|------------------|--------------|" >> $GITHUB_STEP_SUMMARY
+          NODE_CHANGES="${{ needs.detect-changes.outputs.node_changes }}"
+          DOTNET_CHANGES="${{ needs.detect-changes.outputs.dotnet_changes }}"
+          NODE_RESULT="${{ needs.node-build.result }}"
+          DOTNET_RESULT="${{ needs.dotnet-build.result }}"
+          if [ "$NODE_CHANGES" = "true" ]; then
+            NODE_STATUS="✅ Yes"
+            NODE_BUILD="$([ \"$NODE_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $NODE_RESULT\")"
+          else
+            NODE_STATUS="No"
+            NODE_BUILD="— (skipped)"
+          fi
+          if [ "$DOTNET_CHANGES" = "true" ]; then
+            DOTNET_STATUS="✅ Yes"
+            DOTNET_BUILD="$([ \"$DOTNET_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $DOTNET_RESULT\")"
+          else
+            DOTNET_STATUS="No"
+            DOTNET_BUILD="— (skipped)"
+          fi
+          echo "| Node (frontend) | $NODE_STATUS | $NODE_BUILD |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dotnet (backend) | $DOTNET_STATUS | $DOTNET_BUILD |" >> $GITHUB_STEP_SUMMARY
+
       - name: Check build status
         run: |
           NODE_CHANGES="${{ needs.detect-changes.outputs.node_changes }}"
