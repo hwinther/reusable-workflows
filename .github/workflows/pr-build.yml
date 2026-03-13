@@ -155,6 +155,8 @@ jobs:
           echo "|-------|------------------|" >> $GITHUB_STEP_SUMMARY
           NODE="${NODE_CHANGES:-false}"
           DOTNET="${DOTNET_CHANGES:-false}"
+          NODE="${NODE//[[:space:]]/}"
+          DOTNET="${DOTNET//[[:space:]]/}"
           echo "| Node (frontend) | $([ \"$NODE\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
           echo "| Dotnet (backend) | $([ \"$DOTNET\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
 
