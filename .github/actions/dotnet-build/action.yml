@@ -37,6 +37,13 @@ outputs:
 runs:
   using: "composite"
   steps:
+  - name: Create temp directory
+    id: temp-dir
+    shell: bash
+    run: |
+      TEMP_DIR=$(mktemp -d)
+      echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
+
   - name: Install .NET
     uses: actions/setup-dotnet@v5
     with:
@@ -44,7 +51,6 @@ runs:
       source-url: ${{ inputs.primary_nuget_source }}
       cache: ${{ inputs.cache }}
       cache-dependency-path: "${{ inputs.working_directory }}/**/packages.lock.json"
-
     env:
       NUGET_AUTH_TOKEN: ${{ inputs.github_token }}
 
@@ -74,9 +80,6 @@ runs:
     env:
       WORKFLOW_AGENT_PATH: "${{ github.workspace }}/"
     run: |
-      TEMP_DIR=$(mktemp -d)
-      echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
-
       echo "::group::Build"
       dotnet build ${{ inputs.solution_file }} -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1 || (exit 0)
       grep "): error " $TEMP_DIR/build.out > $TEMP_DIR/build.err || (exit 0)

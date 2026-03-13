@@ -24,6 +24,13 @@ outputs:
 runs:
   using: "composite"
   steps:
+  - name: Create temp directory
+    id: temp-dir
+    shell: bash
+    run: |
+      TEMP_DIR=$(mktemp -d)
+      echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
+      
   - uses: actions/setup-node@v4
     name: Set up Node
     with:
@@ -42,10 +49,6 @@ runs:
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
-      # Create temporary directory for output files
-      TEMP_DIR=$(mktemp -d)
-      echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
-
       echo "::group::Install dependencies"
       set +e
       npm ci 1>$TEMP_DIR/dependency.out 2>&1

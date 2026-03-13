@@ -30,10 +30,10 @@ on:
         description: "Regex for files to check for changes"
         default: ""
       node_scope:
-          required: false
-          type: string
-          description: "Package scope, e.g. '@org'"
-          default: ''
+        required: false
+        type: string
+        description: "Package scope, e.g. '@org'"
+        default: ''
       dotnet_enabled:
         required: false
         type: boolean
