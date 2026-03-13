@@ -63,15 +63,30 @@ runs:
       dotnet nuget add source ${{ inputs.extra_nuget_source }} --name ${{ inputs.extra_nuget_source_name }} --username az --password ${{ inputs.github_token }} --store-password-in-clear-text
 
   - name: Run dotnet restore
+    id: dotnet-restore
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
-      dotnet restore ${{ inputs.solution_file }} --locked-mode
+      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
+      RESTORE_EXIT=${PIPESTATUS[0]}
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
         git checkout HEAD -- nuget.config
       else
         rm -f nuget.config || true
       fi
+      if [ $RESTORE_EXIT -ne 0 ]; then
+        echo "## ❌ Restore failed" > $TEMP_DIR/restore.md
+        echo "" >> $TEMP_DIR/restore.md
+        grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
+        if [ -s $TEMP_DIR/restore.err ]; then
+          sed "s|$GITHUB_WORKSPACE/||g" $TEMP_DIR/restore.err | sed '/^$/d' | sed 's/^/- ❌ /' >> $TEMP_DIR/restore.md
+        else
+          echo '```' >> $TEMP_DIR/restore.md
+          tail -100 $TEMP_DIR/restore.out >> $TEMP_DIR/restore.md
+          echo '```' >> $TEMP_DIR/restore.md
+        fi
+      fi
+      exit $RESTORE_EXIT
 
   - name: Build
     id: dotnet-build
