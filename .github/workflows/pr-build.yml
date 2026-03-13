@@ -89,7 +89,6 @@ jobs:
     outputs:
       node_changes: ${{ steps.node-check.outputs.changes_detected }}
       dotnet_changes: ${{ steps.dotnet-check.outputs.changes_detected }}
-      build_types: ${{ steps.set-matrix.outputs.build_types }}
     steps:
       - name: Hent kode
         uses: actions/checkout@v6
@@ -140,27 +139,10 @@ jobs:
             echo "Ingen endringer oppdaget i mønsteret."
           fi
 
-      - name: Sett matrix for builds
-        id: set-matrix
-        run: |
-          BUILD_TYPES="[]"
-          if [ "${{ steps.node-check.outputs.changes_detected }}" == "true" ]; then
-            BUILD_TYPES=$(echo "$BUILD_TYPES" | jq -c '. += ["node"]')
-          fi
-          if [ "${{ steps.dotnet-check.outputs.changes_detected }}" == "true" ]; then
-            BUILD_TYPES=$(echo "$BUILD_TYPES" | jq -c '. += ["dotnet"]')
-          fi
-          echo "build_types=$BUILD_TYPES" >> $GITHUB_OUTPUT
-          echo "Build types to run: $BUILD_TYPES"
-
-  build-matrix:
+  node-build:
     needs: detect-changes
-    if: needs.detect-changes.outputs.build_types != '[]'
+    if: needs.detect-changes.outputs.node_changes == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        build_type: ${{ fromJson(needs.detect-changes.outputs.build_types) }}
     steps:
       - name: Hent kode
         uses: actions/checkout@v6
@@ -169,7 +151,6 @@ jobs:
 
       - name: Bygg node
         id: node-build
-        if: matrix.build_type == 'node'
         uses: hwinther/reusable-workflows/.github/actions/node-build@main
         with:
           node_version: ${{ env.NODE_VERSION }}
@@ -177,9 +158,26 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           scope: ${{ inputs.node_scope }}
 
+      - name: "Opprett eller oppdater PR-kommentar for node"
+        uses: im-open/update-pr-comment@v1.2.2
+        if: always() && github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-identifier: "build-results-node"
+          comment-content: ${{ steps.node-build.outputs.pr-comment }}
+
+  dotnet-build:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.dotnet_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hent kode
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2  # Fetch at least 2 commits to enable diff with HEAD^
+
       - name: Bygg dotnet
         id: dotnet-build
-        if: matrix.build_type == 'dotnet'
         uses: hwinther/reusable-workflows/.github/actions/dotnet-build@main
         with:
           dotnet_version: ${{ env.DOTNET_VERSION }}
@@ -190,46 +188,50 @@ jobs:
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
 
-      - name: "Opprett eller oppdater PR-kommentar for node"
-        uses: im-open/update-pr-comment@v1.2.2
-        if: always() && matrix.build_type == 'node' && github.event_name == 'pull_request'
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-identifier: "build-results-node"
-          comment-content: ${{ steps.node-build.outputs.pr-comment }}
-
       - name: "Opprett eller oppdater PR-kommentar for dotnet"
         uses: im-open/update-pr-comment@v1.2.2
-        if: always() && matrix.build_type == 'dotnet' && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: "build-results-dotnet"
           comment-content: ${{ steps.dotnet-build.outputs.pr-comment }}
 
   pr-build:
-    needs: [detect-changes, build-matrix]
+    needs: [detect-changes, node-build, dotnet-build]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Sjekk build-status
         run: |
-          if [ "${{ needs.detect-changes.outputs.build_types }}" == "[]" ]; then
+          NODE_CHANGES="${{ needs.detect-changes.outputs.node_changes }}"
+          DOTNET_CHANGES="${{ needs.detect-changes.outputs.dotnet_changes }}"
+          NODE_RESULT="${{ needs.node-build.result }}"
+          DOTNET_RESULT="${{ needs.dotnet-build.result }}"
+
+          if [ "$NODE_CHANGES" != "true" ] && [ "$DOTNET_CHANGES" != "true" ]; then
             echo "✅ Ingen relevante endringer funnet for bygging eller linting."
             exit 0
-          elif [ "${{ needs.build-matrix.result }}" == "success" ]; then
-            echo "✅ Alle builds var vellykkede."
-            exit 0
-          elif [ "${{ needs.build-matrix.result }}" == "skipped" ]; then
-            echo "✅ Ingen builds ble kjørt."
-            exit 0
-          else
-            echo "❌ En eller flere builds feilet."
+          fi
+
+          FAILED=0
+          if [ "$NODE_CHANGES" == "true" ] && [ "$NODE_RESULT" != "success" ]; then
+            echo "❌ Node-build feilet eller ble ikke kjørt."
+            FAILED=1
+          fi
+          if [ "$DOTNET_CHANGES" == "true" ] && [ "$DOTNET_RESULT" != "success" ]; then
+            echo "❌ Dotnet-build feilet eller ble ikke kjørt."
+            FAILED=1
+          fi
+
+          if [ $FAILED -eq 1 ]; then
             exit 1
           fi
+          echo "✅ Alle relevante builds var vellykkede."
+          exit 0
 
       - name: "Opprett eller oppdater PR-kommentar (ingen relevante endringer)"
         uses: im-open/update-pr-comment@v1.2.2
-        if: github.event_name == 'pull_request' && needs.detect-changes.outputs.build_types == '[]'
+        if: github.event_name == 'pull_request' && needs.detect-changes.outputs.node_changes != 'true' && needs.detect-changes.outputs.dotnet_changes != 'true'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: "build-results"
