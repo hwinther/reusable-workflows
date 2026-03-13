@@ -145,13 +145,16 @@ jobs:
           fi
 
       - name: Write change check summary
+        env:
+          NODE_CHANGES: ${{ steps.node-check.outputs.changes_detected || 'false' }}
+          DOTNET_CHANGES: ${{ steps.dotnet-check.outputs.changes_detected || 'false' }}
         run: |
           echo "## Change checks" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Changes detected |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|------------------|" >> $GITHUB_STEP_SUMMARY
-          NODE="${{ steps.node-check.outputs.changes_detected || 'false' }}"
-          DOTNET="${{ steps.dotnet-check.outputs.changes_detected || 'false' }}"
+          NODE="${NODE_CHANGES:-false}"
+          DOTNET="${DOTNET_CHANGES:-false}"
           echo "| Node (frontend) | $([ \"$NODE\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
           echo "| Dotnet (backend) | $([ \"$DOTNET\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
 
@@ -222,45 +225,42 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Changes detected | Build result |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|------------------|--------------|" >> $GITHUB_STEP_SUMMARY
-          NODE_CHANGES="${{ needs.detect-changes.outputs.node_changes }}"
-          DOTNET_CHANGES="${{ needs.detect-changes.outputs.dotnet_changes }}"
           NODE_RESULT="${{ needs.node-build.result }}"
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
-          if [ "$NODE_CHANGES" = "true" ]; then
-            NODE_STATUS="✅ Yes"
-            NODE_BUILD="$([ \"$NODE_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $NODE_RESULT\")"
-          else
+          # Derive "changes detected" from whether the build ran (outputs can be empty when jobs are skipped + always())
+          if [ "$NODE_RESULT" = "skipped" ]; then
             NODE_STATUS="No"
             NODE_BUILD="— (skipped)"
-          fi
-          if [ "$DOTNET_CHANGES" = "true" ]; then
-            DOTNET_STATUS="✅ Yes"
-            DOTNET_BUILD="$([ \"$DOTNET_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $DOTNET_RESULT\")"
           else
+            NODE_STATUS="✅ Yes"
+            NODE_BUILD="$([ \"$NODE_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $NODE_RESULT\")"
+          fi
+          if [ "$DOTNET_RESULT" = "skipped" ]; then
             DOTNET_STATUS="No"
             DOTNET_BUILD="— (skipped)"
+          else
+            DOTNET_STATUS="✅ Yes"
+            DOTNET_BUILD="$([ \"$DOTNET_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $DOTNET_RESULT\")"
           fi
           echo "| Node (frontend) | $NODE_STATUS | $NODE_BUILD |" >> $GITHUB_STEP_SUMMARY
           echo "| Dotnet (backend) | $DOTNET_STATUS | $DOTNET_BUILD |" >> $GITHUB_STEP_SUMMARY
 
       - name: Check build status
         run: |
-          NODE_CHANGES="${{ needs.detect-changes.outputs.node_changes }}"
-          DOTNET_CHANGES="${{ needs.detect-changes.outputs.dotnet_changes }}"
           NODE_RESULT="${{ needs.node-build.result }}"
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
 
-          if [ "$NODE_CHANGES" != "true" ] && [ "$DOTNET_CHANGES" != "true" ]; then
+          if [ "$NODE_RESULT" = "skipped" ] && [ "$DOTNET_RESULT" = "skipped" ]; then
             echo "✅ No relevant changes found for build or lint."
             exit 0
           fi
 
           FAILED=0
-          if [ "$NODE_CHANGES" == "true" ] && [ "$NODE_RESULT" != "success" ]; then
+          if [ "$NODE_RESULT" != "skipped" ] && [ "$NODE_RESULT" != "success" ]; then
             echo "❌ Node build failed or did not run."
             FAILED=1
           fi
-          if [ "$DOTNET_CHANGES" == "true" ] && [ "$DOTNET_RESULT" != "success" ]; then
+          if [ "$DOTNET_RESULT" != "skipped" ] && [ "$DOTNET_RESULT" != "success" ]; then
             echo "❌ Dotnet build failed or did not run."
             FAILED=1
           fi
@@ -273,7 +273,7 @@ jobs:
 
       - name: "Create or update PR comment (no relevant changes)"
         uses: im-open/update-pr-comment@v1.2.2
-        if: github.event_name == 'pull_request' && needs.detect-changes.outputs.node_changes != 'true' && needs.detect-changes.outputs.dotnet_changes != 'true'
+        if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: "build-results"
