@@ -1,64 +1,72 @@
-# Bygg og lint i PR - støtter node og dotnet
+# Build and lint in PR - supports node and dotnet
 
-# Node forutsetter at man har package lock laget av npm og at følgende script finnes:
-# typecheck (tsc), lint:ci (eslint -f json), build (npm run build) og coverage:ci (test og generere kode dekningsrapport)
+# Node expects a package lock from npm and the following scripts: typecheck (tsc), lint:ci (eslint -f json), build (npm run build), coverage:ci (test and generate coverage report)
 
-# Dotnet forutsetter at man har en løsningsfil (sln/slnx) og at følgende script finnes:
-# build (dotnet build)
+# Dotnet expects a solution file (sln/slnx) and: build (dotnet build)
 
-name: "Bygg og lint i PR"
+name: "Build and lint in PR"
 
 on:
   workflow_call:
     inputs:
+      node_enabled:
+        required: false
+        type: boolean
+        description: "Run node build and file change detection for frontend"
+        default: true
       node_version:
         required: false
         type: string
-        description: "Node versjon, f.eks. 24.x"
+        description: "Node version, e.g. 24.x"
         default: "24.x"
       node_source_path:
         required: false
         type: string
-        description: "Mappen der for eksempel frontend koden ligger, for eksempel 'frontend'"
+        description: "Path to frontend code, e.g. 'frontend'"
         default: "."
       node_changes_regex:
         required: false
         type: string
-        description: "Regulært uttrykk for filer som skal sjekkes for endringer"
+        description: "Regex for files to check for changes"
         default: ""
       node_scope:
           required: false
           type: string
-          description: "Scope for pakker, f.eks. '@organisasjon'"
+          description: "Package scope, e.g. '@org'"
           default: ''
+      dotnet_enabled:
+        required: false
+        type: boolean
+        description: "Run dotnet build and file change detection for backend"
+        default: true
       dotnet_version:
         required: false
         type: string
-        description: ".NET versjon, f.eks. 10.0.x"
+        description: ".NET version, e.g. 10.0.x"
         default: "10.0.x"
       dotnet_source_path:
         required: false
         type: string
-        description: "Mappen der for eksempel backend koden ligger"
+        description: "Path to backend code"
         default: "./"
       dotnet_solution_file:
         required: false
         type: string
-        description: "Løsningsfilen som skal bygges, f.eks. ProsjektNavn.slnx, relativt til dotnet_source_path"
+        description: "Solution file to build, e.g. ProjectName.slnx, relative to dotnet_source_path"
       dotnet_changes_regex:
         required: false
         type: string
-        description: "Regulært uttrykk for filer som skal sjekkes for endringer"
+        description: "Regex for files to check for changes"
         default: ""
       dotnet_extra_nuget_source:
         required: false
         type: string
-        description: "Ekstra NuGet kilde for private pakker, f.eks. https://pkgs.dev.azure.com/organisasjon/samling/_packaging/samling/nuget/v3/index.json"
+        description: "Extra NuGet source for private packages, e.g. https://pkgs.dev.azure.com/org/collection/_packaging/feed/nuget/v3/index.json"
         default: ""
       dotnet_extra_nuget_source_name:
         required: false
         type: string
-        description: "Navn på den ekstra NuGet kilden, f.eks. 'samling'"
+        description: "Name of the extra NuGet source, e.g. 'feed'"
         default: ""
 
 permissions:
@@ -72,16 +80,29 @@ jobs:
     runs-on: ubuntu-latest
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
     outputs:
-      node_changes: ${{ steps.node-check.outputs.changes_detected }}
-      dotnet_changes: ${{ steps.dotnet-check.outputs.changes_detected }}
+      node_changes: ${{ steps.node-check.outputs.changes_detected || 'false' }}
+      dotnet_changes: ${{ steps.dotnet-check.outputs.changes_detected || 'false' }}
     steps:
-      - name: Hent kode
+      - name: Checkout code
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Sjekk om frontend har endringer
+      - name: Set comparison base
+        id: set-base
+        run: |
+          if [ "${{ github.event_name }}" == "pull_request" ]; then
+            echo "base_ref=${{ github.event.pull_request.base.sha }}" >> $GITHUB_OUTPUT
+            echo "Comparing with PR base branch (${{ github.event.pull_request.base.ref }}): ${{ github.event.pull_request.base.sha }}"
+          else
+            git fetch origin main
+            echo "base_ref=origin/main" >> $GITHUB_OUTPUT
+            echo "Comparing with main branch"
+          fi
+
+      - name: Check for frontend changes
         id: node-check
+        if: ${{ inputs.node_enabled }}
         run: |
           if [ -z "${{ inputs.node_changes_regex }}" ]; then
             PATTERN="^${{ inputs.node_source_path }}/"
@@ -89,20 +110,21 @@ jobs:
             PATTERN="${{ inputs.node_changes_regex }}"
           fi
           
-          echo "Bruker det regulære uttrykket: $PATTERN"
-          echo "For å se om noen av disse filene passer:"
-          git diff --name-only HEAD^ HEAD
+          echo "Using regex pattern: $PATTERN"
+          echo "Files to check against:"
+          git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD
           
-          if git diff --name-only HEAD^ HEAD | grep -qE "$PATTERN"; then
+          if git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD | grep -qE "$PATTERN"; then
             echo "changes_detected=true" >> $GITHUB_OUTPUT
-            echo "Endringer oppdaget i mønsteret."
+            echo "Changes detected in pattern."
           else
             echo "changes_detected=false" >> $GITHUB_OUTPUT
-            echo "Ingen endringer oppdaget i mønsteret."
+            echo "No changes detected in pattern."
           fi
 
-      - name: Sjekk om backend har endringer
+      - name: Check for backend changes
         id: dotnet-check
+        if: ${{ inputs.dotnet_enabled }}
         run: |
           if [ -z "${{ inputs.dotnet_changes_regex }}" ]; then
             PATTERN="^${{ inputs.dotnet_source_path }}/"
@@ -110,16 +132,16 @@ jobs:
             PATTERN="${{ inputs.dotnet_changes_regex }}"
           fi
 
-          echo "Bruker det regulære uttrykket: $PATTERN"
-          echo "For å se om noen av disse filene passer:"
-          git diff --name-only HEAD^ HEAD
+          echo "Using regex pattern: $PATTERN"
+          echo "Files to check against:"
+          git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD
 
-          if git diff --name-only HEAD^ HEAD | grep -qE "$PATTERN"; then
+          if git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD | grep -qE "$PATTERN"; then
             echo "changes_detected=true" >> $GITHUB_OUTPUT
-            echo "Endringer oppdaget i mønsteret."
+            echo "Changes detected in pattern."
           else
             echo "changes_detected=false" >> $GITHUB_OUTPUT
-            echo "Ingen endringer oppdaget i mønsteret."
+            echo "No changes detected in pattern."
           fi
 
   node-build:
@@ -127,21 +149,21 @@ jobs:
     if: needs.detect-changes.outputs.node_changes == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Hent kode
+      - name: Checkout code
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Bygg node
+      - name: Build node
         id: node-build
         uses: hwinther/reusable-workflows/.github/actions/node-build@refactor/matrix
         with:
           node_version: ${{ inputs.node_version }}
-          node_source_path: ${{ inputs.node_source_path }}
+          source_path: ${{ inputs.node_source_path }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           scope: ${{ inputs.node_scope }}
 
-      - name: "Opprett eller oppdater PR-kommentar for node"
+      - name: "Create or update PR comment for node"
         uses: im-open/update-pr-comment@v1.2.2
         if: always() && github.event_name == 'pull_request'
         with:
@@ -154,12 +176,12 @@ jobs:
     if: needs.detect-changes.outputs.dotnet_changes == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Hent kode
+      - name: Checkout code
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Bygg dotnet
+      - name: Build dotnet
         id: dotnet-build
         uses: hwinther/reusable-workflows/.github/actions/dotnet-build@refactor/matrix
         with:
@@ -170,7 +192,7 @@ jobs:
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
 
-      - name: "Opprett eller oppdater PR-kommentar for dotnet"
+      - name: "Create or update PR comment for dotnet"
         uses: im-open/update-pr-comment@v1.2.2
         if: always() && github.event_name == 'pull_request'
         with:
@@ -183,7 +205,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Sjekk build-status
+      - name: Check build status
         run: |
           NODE_CHANGES="${{ needs.detect-changes.outputs.node_changes }}"
           DOTNET_CHANGES="${{ needs.detect-changes.outputs.dotnet_changes }}"
@@ -191,30 +213,30 @@ jobs:
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
 
           if [ "$NODE_CHANGES" != "true" ] && [ "$DOTNET_CHANGES" != "true" ]; then
-            echo "✅ Ingen relevante endringer funnet for bygging eller linting."
+            echo "✅ No relevant changes found for build or lint."
             exit 0
           fi
 
           FAILED=0
           if [ "$NODE_CHANGES" == "true" ] && [ "$NODE_RESULT" != "success" ]; then
-            echo "❌ Node-build feilet eller ble ikke kjørt."
+            echo "❌ Node build failed or did not run."
             FAILED=1
           fi
           if [ "$DOTNET_CHANGES" == "true" ] && [ "$DOTNET_RESULT" != "success" ]; then
-            echo "❌ Dotnet-build feilet eller ble ikke kjørt."
+            echo "❌ Dotnet build failed or did not run."
             FAILED=1
           fi
 
           if [ $FAILED -eq 1 ]; then
             exit 1
           fi
-          echo "✅ Alle relevante builds var vellykkede."
+          echo "✅ All relevant builds succeeded."
           exit 0
 
-      - name: "Opprett eller oppdater PR-kommentar (ingen relevante endringer)"
+      - name: "Create or update PR comment (no relevant changes)"
         uses: im-open/update-pr-comment@v1.2.2
         if: github.event_name == 'pull_request' && needs.detect-changes.outputs.node_changes != 'true' && needs.detect-changes.outputs.dotnet_changes != 'true'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: "build-results"
-          comment-content: "## ✅ Ingen relevante endringer funnet for bygging eller linting."
+          comment-content: "## ✅ No relevant changes found for build or lint."
