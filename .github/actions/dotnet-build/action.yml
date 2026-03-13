@@ -163,14 +163,14 @@ runs:
       dotnet test ${{ inputs.solution_file }} --no-restore -- --report-trx --report-trx-filename test-results.trx --coverage --coverage-output-format cobertura --coverage-output coverage.cobertura.xml
     continue-on-error: true
 
-  # - name: Generate test report
-  #   uses: dorny/test-reporter@v2
-  #   id: test-reporter
-  #   with:
-  #     name: "Testreport"
-  #     path: "**/TestResults/test-results.trx"
-  #     reporter: dotnet-trx
-  #     fail-on-error: false
+  - name: Generate test report
+    uses: dorny/test-reporter@v2
+    id: test-reporter
+    with:
+      name: "Testreport"
+      path: "**/TestResults/test-results.trx"
+      reporter: dotnet-trx
+      fail-on-error: false
 
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@v1.3.0
