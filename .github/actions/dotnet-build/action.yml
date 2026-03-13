@@ -66,6 +66,7 @@ runs:
     id: dotnet-restore
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    continue-on-error: true
     run: |
       dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
       RESTORE_EXIT=${PIPESTATUS[0]}
@@ -85,11 +86,13 @@ runs:
           tail -100 $TEMP_DIR/restore.out >> $TEMP_DIR/restore.md
           echo '```' >> $TEMP_DIR/restore.md
         fi
+        cp $TEMP_DIR/restore.md $GITHUB_WORKSPACE/.dotnet-build-restore.md
       fi
       exit $RESTORE_EXIT
 
   - name: Build
     id: dotnet-build
+    if: steps.dotnet-restore.outcome == 'success'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -172,6 +175,7 @@ runs:
 
   - name: Run tests
     id: run-tests
+    if: steps.dotnet-restore.outcome == 'success'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
@@ -277,13 +281,24 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
+      if [ -f $TEMP_DIR/restore.md ]; then
+        cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
+      elif [ -f $GITHUB_WORKSPACE/.dotnet-build-restore.md ]; then
+        cat $GITHUB_WORKSPACE/.dotnet-build-restore.md >> $TEMP_DIR/combined.md
+      fi
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
+
+  - name: Fail workflow if restore failed
+    if: always() && steps.dotnet-restore.outcome == 'failure'
+    shell: bash
+    run: |
+      echo "::error::Restore failed. Check the PR comment or job summary for details."
+      exit 1
 
   - name: Fail workflow if one or more tests failed
     if: steps.run-tests.outcome == 'failure'
