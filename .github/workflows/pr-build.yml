@@ -143,23 +143,7 @@ jobs:
             echo "changes_detected=false" >> $GITHUB_OUTPUT
             echo "No changes detected in pattern."
           fi
-
-      - name: Write change check summary
-        env:
-          NODE_CHANGES: ${{ steps.node-check.outputs.changes_detected || 'false' }}
-          DOTNET_CHANGES: ${{ steps.dotnet-check.outputs.changes_detected || 'false' }}
-        run: |
-          echo "## Change checks" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Check | Changes detected |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|------------------|" >> $GITHUB_STEP_SUMMARY
-          NODE="${NODE_CHANGES:-false}"
-          DOTNET="${DOTNET_CHANGES:-false}"
-          NODE="${NODE//[[:space:]]/}"
-          DOTNET="${DOTNET//[[:space:]]/}"
-          echo "| Node (frontend) | $([ \"$NODE\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
-          echo "| Dotnet (backend) | $([ \"$DOTNET\" = 'true' ] && echo '✅ Yes' || echo 'No') |" >> $GITHUB_STEP_SUMMARY
-
+          
   node-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.node_changes == 'true'
