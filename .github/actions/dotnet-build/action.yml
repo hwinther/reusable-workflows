@@ -160,7 +160,7 @@ runs:
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
-      dotnet test ${{ inputs.solution_file }} --no-restore --collect:"XPlat Code Coverage" --logger "trx;LogFileName=test-results.trx" /p:CollectCoverage=true /p:CoverletOutput="TestResults/" /p:CoverletOutputFormat=cobertura
+      dotnet test ${{ inputs.solution_file }} --no-restore --logger "trx;LogFileName=test-results.trx" -- --coverage --coverage-output-format cobertura --coverage-output coverage.cobertura.xml
     continue-on-error: true
 
   - name: Generate test report
