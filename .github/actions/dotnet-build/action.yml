@@ -1,57 +1,64 @@
 name: "Dotnet Build"
-description: "Backend (.NET) build og linting"
+description: "Backend (.NET) build and linting"
 
 inputs:
   dotnet_version:
     required: true
-    description: ".NET versjon"
-  source_path:
+    description: ".NET version"
+  working_directory:
     required: true
-    description: "Mappen der .NET koden ligger, f.eks. backend"
+    description: "Working directory for the build, the solution file is expected to be in this directory"
   solution_file:
     required: true
-    description: "Løsningsfilen som skal bygges, f.eks. backend/ProsjektNavn.slnx"
+    description: "Solution file to build, e.g. backend/ProjectName.slnx"
   github_token:
     required: true
-    description: "GitHub token for å få tilgang til private NuGet pakker"
+    description: "GitHub token for access to private NuGet packages"
   primary_nuget_source:
     required: false
-    description: "Primær NuGet kilde for offentlige pakker, f.eks. https://pkgs.dev.azure.com/organisasjon/_packaging/organisasjon/nuget/v3/index.json"
+    description: "Primary NuGet source for public packages, e.g. https://pkgs.dev.azure.com/org/_packaging/feed/nuget/v3/index.json"
     default: ""
   extra_nuget_source:
     required: false
-    description: "Ekstra NuGet kilde for private pakker, f.eks. https://pkgs.dev.azure.com/organisasjon/samling/_packaging/samling/nuget/v3/index.json"
+    description: "Extra NuGet source for private packages, e.g. https://pkgs.dev.azure.com/org/collection/_packaging/feed/nuget/v3/index.json"
   extra_nuget_source_name:
     required: false
-    description: "Navn på den ekstra NuGet kilden, f.eks. 'samling'"
+    description: "Name of the extra NuGet source, e.g. 'feed'"
+  cache:
+    required: false
+    description: "Enable NuGet package caching"
+    default: "true"
 
 outputs:
   pr-comment:
-    description: "Kombinert PR kommentar med byggstatus"
+    description: "Combined PR comment with build status"
     value: ${{ steps.pr-comment-combiner.outputs.result }}
 
 runs:
   using: "composite"
   steps:
-  - name: Installer .NET
+  - name: Install .NET
     uses: actions/setup-dotnet@v5
     with:
       dotnet-version: ${{ inputs.dotnet_version }}
       source-url: ${{ inputs.primary_nuget_source }}
-      cache: true
-      cache-dependency-path: "${{ inputs.source_path }}/**/packages.lock.json"
+      cache: ${{ inputs.cache }}
+      cache-dependency-path: "${{ inputs.working_directory }}/**/packages.lock.json"
+
     env:
       NUGET_AUTH_TOKEN: ${{ inputs.github_token }}
 
-  - name: Add ekstra nuget source
+  - name: Add extra NuGet source
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     if: ${{ inputs.extra_nuget_source != '' }}
     run: |
       dotnet nuget remove source ${{ inputs.extra_nuget_source_name }} || true
       dotnet nuget add source ${{ inputs.extra_nuget_source }} --name ${{ inputs.extra_nuget_source_name }} --username az --password ${{ inputs.github_token }} --store-password-in-clear-text
 
-  - name: Kjør dotnet restore
+  - name: Run dotnet restore
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     run: |
       dotnet restore ${{ inputs.solution_file }} --locked-mode
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
@@ -60,16 +67,17 @@ runs:
         rm -f nuget.config || true
       fi
 
-  - name: Bygg
+  - name: Build
     id: dotnet-build
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     env:
       WORKFLOW_AGENT_PATH: "${{ github.workspace }}/"
     run: |
       TEMP_DIR=$(mktemp -d)
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
-      echo "::group::Bygg"
+      echo "::group::Build"
       dotnet build ${{ inputs.solution_file }} -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1 || (exit 0)
       grep "): error " $TEMP_DIR/build.out > $TEMP_DIR/build.err || (exit 0)
       grep "): warning " $TEMP_DIR/build.out > $TEMP_DIR/build.warn || (exit 0)
@@ -78,7 +86,7 @@ runs:
 
       if [ ! -s $TEMP_DIR/build.err ]
       then
-        echo "## ✅ Bygg vellykket" > $TEMP_DIR/build.md
+        echo "## ✅ Build succeeded" > $TEMP_DIR/build.md
       else
         # Reformat error output as github error annotations
         error_regex="(.+)\(([0-9]+),([0-9]+)\): error (.+) \[(.+)\]"
@@ -93,7 +101,7 @@ runs:
         cat $TEMP_DIR/build.err | sed "s|${{ env.WORKFLOW_AGENT_PATH }}|| ; s|${{ env.WORKFLOW_AGENT_PATH }}||" > $TEMP_DIR/build.md
         sed -i '/^$/d' $TEMP_DIR/build.md             # removes empty lines
         sed -i -e 's/^/- ❌ /' $TEMP_DIR/build.md     # prefix with markdown list item and cross mark emoji
-        echo "## ❌ Følgende byggefeil må fikses:" | cat - $TEMP_DIR/build.md > $TEMP_DIR/build.md.temp && mv $TEMP_DIR/build.md.temp $TEMP_DIR/build.md
+        echo "## ❌ The following build errors must be fixed:" | cat - $TEMP_DIR/build.md > $TEMP_DIR/build.md.temp && mv $TEMP_DIR/build.md.temp $TEMP_DIR/build.md
       fi
 
       # Process warnings
@@ -113,7 +121,7 @@ runs:
 
         # Create warnings markdown - show first 10 warnings
         echo "" >> $TEMP_DIR/build.md
-        echo "## ⚠️ Advarsler ($TOTAL_WARNINGS totalt)" >> $TEMP_DIR/build.md
+        echo "## ⚠️ Warnings ($TOTAL_WARNINGS total)" >> $TEMP_DIR/build.md
         
         if [ $TOTAL_WARNINGS -le 10 ]
         then
@@ -121,7 +129,7 @@ runs:
         else
           head -10 $TEMP_DIR/build.warn | sed "s|^Warning: ||; s|${{ env.WORKFLOW_AGENT_PATH }}||g" > $TEMP_DIR/build.warn.md
           echo "" >> $TEMP_DIR/build.warn.md
-          echo "... og $(($TOTAL_WARNINGS - 10)) flere advarsler" >> $TEMP_DIR/build.warn.md
+          echo "... and $(($TOTAL_WARNINGS - 10)) more warnings" >> $TEMP_DIR/build.warn.md
         fi
         
         sed -i '/^$/d' $TEMP_DIR/build.warn.md             # removes empty lines
@@ -136,7 +144,7 @@ runs:
         exit 1
       fi
 
-  # - name: Opprett Todo-kommentarer
+  # - name: Create TODO comments
   #   uses: gkampitakis/github-action-todo-commenter@v1
   #   if: ${{ github.event_name == 'pull_request' }}
   #   with:
@@ -144,14 +152,15 @@ runs:
   #     review-message: "Please take a look :eyes:"
   #     tags: "TODO:,FIXME:,BUG:"
 
-  - name: Kjør tester
+  - name: Run tests
     id: run-tests
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     run: |
       dotnet test ${{ inputs.solution_file }} --no-restore --collect:"XPlat Code Coverage" --logger "trx;LogFileName=test-results.trx" /p:CollectCoverage=true /p:CoverletOutput="TestResults/" /p:CoverletOutputFormat=cobertura
     continue-on-error: true
 
-  - name: Lag testrapport
+  - name: Generate test report
     uses: dorny/test-reporter@v2
     id: test-reporter
     with:
@@ -160,7 +169,7 @@ runs:
       reporter: dotnet-trx
       fail-on-error: false
 
-  - name: Kode dekningsrapport
+  - name: Code coverage report
     uses: irongut/CodeCoverageSummary@v1.3.0
     with:
       filename: "**/coverage.cobertura.xml"
@@ -172,62 +181,66 @@ runs:
       indicators: true
       output: both
       thresholds: "60 80"
-  - name: Flytter kode dekningsrapport til midlertidig mappe
+  - name: Move code coverage report to temp folder
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     run: |
-      echo "## 📊 Kode dekningsrapport" > $TEMP_DIR/code-coverage-results.md
+      echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
       echo "" >> $TEMP_DIR/code-coverage-results.md
       cat code-coverage-results.md >> $TEMP_DIR/code-coverage-results.md
       rm code-coverage-results.md
 
-  - name: Ser etter endringer som ikke er sjekket inn
+  - name: Check for uncommitted changes
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     run: |
-      echo "Ser etter endringer som ikke er sjekket inn..."
+      echo "Checking for uncommitted changes..."
       git config core.fileMode false
       git -c core.safecrlf=false status --porcelain
 
       if [ -n "$(git -c core.safecrlf=false status --porcelain)" ]; then
-        echo "Fant endringer, legger til filer for å se om de normaliseres bort..."
+        echo "Found changes, staging files to see if they are normalized away..."
         git add -A
         
         if [ -n "$(git diff --cached)" ]; then
-          echo "::error::Reelle innholdsendringer i filer etter restore og build:"
+          echo "::error::Actual content changes in files after restore and build:"
           git status
           git diff --cached
-          echo "## ❌ Endringer i filer etter restore og build" > $TEMP_DIR/git-status.md
+          echo "## ❌ Changes in files after restore and build" > $TEMP_DIR/git-status.md
           echo "" >> $TEMP_DIR/git-status.md
-          echo "Følgende filer har reelle endringer:" >> $TEMP_DIR/git-status.md
+          echo "The following files have actual changes:" >> $TEMP_DIR/git-status.md
           echo "\`\`\`" >> $TEMP_DIR/git-status.md
           git diff --cached --name-only >> $TEMP_DIR/git-status.md
           echo "\`\`\`" >> $TEMP_DIR/git-status.md
           git reset HEAD
           exit 1
         else
-          echo "Ingen reelle endringer - kun line endings eller file mode ble normalisert."
+          echo "No actual changes - only line endings or file mode were normalized."
           git reset HEAD
-          echo "## ✅ Ingen endringer i filer etter restore og build ble funnet" > $TEMP_DIR/git-status.md
+          echo "## ✅ No changes in files after restore and build were found" > $TEMP_DIR/git-status.md
         fi
       else
-        echo "Ingen endringer i filer etter restore og build ble funnet."
-        echo "## ✅ Ingen endringer i filer etter restore og build ble funnet" > $TEMP_DIR/git-status.md
+        echo "No changes in files after restore and build were found."
+        echo "## ✅ No changes in files after restore and build were found" > $TEMP_DIR/git-status.md
       fi
 
-  - name: Kombiner utdata til enkelt PR-kommentar
+  - name: Combine output into single PR comment
     id: pr-comment-combiner
     if: always()
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     run: |
-      echo "# Byggstatus dotnet (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
+      echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
       cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
 
-  - name: Gi workflowen status feilet dersom en eller flere tester feilet
+  - name: Fail workflow if one or more tests failed
     if: steps.run-tests.outcome == 'failure'
     shell: bash
+    working-directory: ${{ inputs.working_directory }}
     run: |
       echo "::error::Tests failed. Check test reports for details."
       exit 1
