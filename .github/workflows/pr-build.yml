@@ -50,11 +50,6 @@ on:
         type: string
         description: "Regulært uttrykk for filer som skal sjekkes for endringer"
         default: ""
-      dotnet_test_root_path:
-        required: false
-        type: string
-        description: "Mappen der testprosjektene ligger, f.eks. 'tests', relativ til dotnet_source_path"
-        default: "tests"
       dotnet_extra_nuget_source:
         required: false
         type: string
@@ -72,16 +67,6 @@ permissions:
   pull-requests: write
   packages: read
 
-env:
-  NODE_VERSION: ${{ inputs.node_version }}
-  NODE_SOURCE_PATH: ${{ inputs.node_source_path }}
-  NODE_CHANGES_REGEX: ${{ inputs.node_changes_regex }}
-  DOTNET_VERSION: ${{ inputs.dotnet_version }}
-  DOTNET_SOURCE_PATH: ${{ inputs.dotnet_source_path }}
-  DOTNET_CHANGES_REGEX: ${{ inputs.dotnet_changes_regex }}
-  DOTNET_SOLUTION_FILE: ${{ inputs.dotnet_source_path }}/${{ inputs.dotnet_solution_file }}
-  DOTNET_TEST_ROOT_PATH: ${{ inputs.dotnet_source_path }}/${{ inputs.dotnet_test_root_path }}
-
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
@@ -93,19 +78,18 @@ jobs:
       - name: Hent kode
         uses: actions/checkout@v6
         with:
-          fetch-depth: 2  # Fetch at least 2 commits to enable diff with HEAD^
+          fetch-depth: 0
 
       - name: Sjekk om frontend har endringer
         id: node-check
         run: |
-          # Use CHANGED_FILES_REGEX if provided, otherwise use NODE_SOURCE_PATH
-          if [ -z "${{ env.NODE_CHANGES_REGEX }}" ]; then
-            PATTERN="^${{ env.NODE_SOURCE_PATH }}/"
+          if [ -z "${{ inputs.node_changes_regex }}" ]; then
+            PATTERN="^${{ inputs.node_source_path }}/"
           else
-            PATTERN="${{ env.NODE_CHANGES_REGEX }}"
+            PATTERN="${{ inputs.node_changes_regex }}"
           fi
           
-          echo "Bruker det regulære uttrykker: $PATTERN"
+          echo "Bruker det regulære uttrykket: $PATTERN"
           echo "For å se om noen av disse filene passer:"
           git diff --name-only HEAD^ HEAD
           
@@ -120,14 +104,13 @@ jobs:
       - name: Sjekk om backend har endringer
         id: dotnet-check
         run: |
-          # Use CHANGED_FILES_REGEX if provided, otherwise use DOTNET_SOURCE_PATH
-          if [ -z "${{ env.DOTNET_CHANGES_REGEX }}" ]; then
-            PATTERN="^${{ env.DOTNET_SOURCE_PATH }}/"
+          if [ -z "${{ inputs.dotnet_changes_regex }}" ]; then
+            PATTERN="^${{ inputs.dotnet_source_path }}/"
           else
-            PATTERN="${{ env.DOTNET_CHANGES_REGEX }}"
+            PATTERN="${{ inputs.dotnet_changes_regex }}"
           fi
 
-          echo "Bruker det regulære uttrykker: $PATTERN"
+          echo "Bruker det regulære uttrykket: $PATTERN"
           echo "For å se om noen av disse filene passer:"
           git diff --name-only HEAD^ HEAD
 
@@ -147,14 +130,14 @@ jobs:
       - name: Hent kode
         uses: actions/checkout@v6
         with:
-          fetch-depth: 2  # Fetch at least 2 commits to enable diff with HEAD^
+          fetch-depth: 0
 
       - name: Bygg node
         id: node-build
-        uses: hwinther/reusable-workflows/.github/actions/node-build@main
+        uses: hwinther/reusable-workflows/.github/actions/node-build@refactor/matrix
         with:
-          node_version: ${{ env.NODE_VERSION }}
-          node_source_path: ${{ env.NODE_SOURCE_PATH }}
+          node_version: ${{ inputs.node_version }}
+          node_source_path: ${{ inputs.node_source_path }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           scope: ${{ inputs.node_scope }}
 
@@ -174,17 +157,16 @@ jobs:
       - name: Hent kode
         uses: actions/checkout@v6
         with:
-          fetch-depth: 2  # Fetch at least 2 commits to enable diff with HEAD^
+          fetch-depth: 0
 
       - name: Bygg dotnet
         id: dotnet-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@main
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@refactor/matrix
         with:
-          dotnet_version: ${{ env.DOTNET_VERSION }}
-          dotnet_source_path: ${{ env.DOTNET_SOURCE_PATH }}
-          dotnet_solution_file: ${{ env.DOTNET_SOLUTION_FILE }}
-          github_token: ${{ secrets.ADO_PACKAGES_READ }} # TODO, senere: ${{ secrets.GITHUB_TOKEN }}
-          dotnet_test_root_path: ${{ env.DOTNET_TEST_ROOT_PATH }}
+          dotnet_version: ${{ inputs.dotnet_version }}
+          source_path: ${{ inputs.dotnet_source_path }}
+          solution_file: ${{ inputs.dotnet_solution_file }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
 

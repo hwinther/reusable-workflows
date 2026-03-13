@@ -1,14 +1,11 @@
 name: "NPM Build"
 description: "Frontend (node/npm) typesjekk, build og linting"
-branding:
-  icon: 'table'
-  color: 'black'
 
 inputs:
   node_version:
     required: true
     description: "Node versjon"
-  node_source_path:
+  source_path:
     required: true
     description: "Mappen der node koden ligger"
   github_token:
@@ -32,18 +29,18 @@ runs:
     with:
       node-version: ${{ inputs.node_version }}
       cache: "npm"
-      cache-dependency-path: "${{ inputs.node_source_path }}/package-lock.json"
+      cache-dependency-path: "${{ inputs.source_path }}/package-lock.json"
       scope: ${{ inputs.scope }}
 
   - name: Legger til GitHub token i .npmrc
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     shell: bash
     run: touch ./.npmrc && echo -e "\n//npm.pkg.github.com/:_authToken=${{ inputs.github_token }}" >> ./.npmrc
 
   - name: Installer avhengigheter
     id: dependency-install
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     run: |
       # Create temporary directory for output files
       TEMP_DIR=$(mktemp -d)
@@ -72,7 +69,7 @@ runs:
       echo "::endgroup::"
 
   - name: Tilbakestiller .npmrc
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     shell: bash
     run: |
       if git ls-files --error-unmatch .npmrc > /dev/null 2>&1; then
@@ -85,7 +82,7 @@ runs:
     id: node-typecheck
     if: steps.dependency-install.outcome == 'success'
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     env:
       NODE_DISABLE_COLORS: 1
     run: |
@@ -168,7 +165,7 @@ runs:
     id: node-build
     if: steps.dependency-install.outcome == 'success'
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     env:
       NODE_DISABLE_COLORS: 1
     run: |
@@ -263,7 +260,7 @@ runs:
     if: steps.dependency-install.outcome == 'success'
     id: node-lint
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     env:
       WORKFLOW_AGENT_PATH: "${{ github.workspace }}/"
     run: |
@@ -342,14 +339,14 @@ runs:
   - name: Kjør tester
     id: test-coverage
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     run: npm run coverage:ci
 
   - name: Lag rapport over testkjøringen
     id: test-markdown-report
     shell: bash
     env:
-      INPUT: "${{ inputs.node_source_path }}/coverage/json-report.json"
+      INPUT: "${{ inputs.source_path }}/coverage/json-report.json"
       OUTPUT: "${{ env.TEMP_DIR }}/test-results.md"
     run: |
       echo "::group::Test rapport"
@@ -404,14 +401,14 @@ runs:
     if: ${{ !cancelled() }}
     with:
       name: coverage
-      path: ${{ inputs.node_source_path }}/coverage
+      path: ${{ inputs.source_path }}/coverage
 
   - name: Test reporter
     uses: dorny/test-reporter@v2
     id: test-reporter
     with:
       name: "Node tester"
-      path: "${{ inputs.node_source_path }}/coverage/junit-report.xml"
+      path: "${{ inputs.source_path }}/coverage/junit-report.xml"
       reporter: jest-junit
       fail-on-error: false
 
@@ -419,12 +416,12 @@ runs:
   #   if: always() 
   #   uses: davelosert/vitest-coverage-report-action@v2
   #   with:
-  #     json-summary-path: "${{ inputs.node_source_path }}/coverage/coverage-final.json"
+  #     json-summary-path: "${{ inputs.source_path }}/coverage/coverage-final.json"
 
   - name: Code Coverage Report
     uses: irongut/CodeCoverageSummary@v1.3.0
     with:
-      filename: "${{ inputs.node_source_path }}/coverage/cobertura-coverage.xml"
+      filename: "${{ inputs.source_path }}/coverage/cobertura-coverage.xml"
       badge: true
       fail_below_min: false
       format: markdown
@@ -451,7 +448,7 @@ runs:
 
   - name: Ser etter endringer som ikke er sjekket inn
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     run: |
       echo "Ser etter endringer som ikke er sjekket inn..."
       git status --porcelain
@@ -475,9 +472,9 @@ runs:
     id: pr-comment-combiner
     if: always()
     shell: bash
-    working-directory: ${{ inputs.node_source_path }}
+    working-directory: ${{ inputs.source_path }}
     run: |
-      echo "# Byggstatus node (${{ inputs.node_source_path }})" > $TEMP_DIR/combined.md
+      echo "# Byggstatus node (${{ inputs.source_path }})" > $TEMP_DIR/combined.md
       cat $TEMP_DIR/dependency.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md

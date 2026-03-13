@@ -1,25 +1,19 @@
 name: "Dotnet Build"
 description: "Backend (.NET) build og linting"
-branding:
-  icon: 'table'
-  color: 'black'
 
 inputs:
   dotnet_version:
     required: true
     description: ".NET versjon"
-  dotnet_source_path:
+  source_path:
     required: true
     description: "Mappen der .NET koden ligger, f.eks. backend"
-  dotnet_solution_file:
+  solution_file:
     required: true
     description: "Løsningsfilen som skal bygges, f.eks. backend/ProsjektNavn.slnx"
   github_token:
     required: true
     description: "GitHub token for å få tilgang til private NuGet pakker"
-  dotnet_test_root_path:
-    required: true
-    description: "Mappen der testprosjektene ligger, f.eks. 'backend/src/Tests'"
   primary_nuget_source:
     required: false
     description: "Primær NuGet kilde for offentlige pakker, f.eks. https://pkgs.dev.azure.com/organisasjon/_packaging/organisasjon/nuget/v3/index.json"
@@ -45,7 +39,7 @@ runs:
       dotnet-version: ${{ inputs.dotnet_version }}
       source-url: ${{ inputs.primary_nuget_source }}
       cache: true
-      cache-dependency-path: "${{ inputs.dotnet_source_path }}/**/packages.lock.json"
+      cache-dependency-path: "${{ inputs.source_path }}/**/packages.lock.json"
     env:
       NUGET_AUTH_TOKEN: ${{ inputs.github_token }}
 
@@ -59,7 +53,7 @@ runs:
   - name: Kjør dotnet restore
     shell: bash
     run: |
-      dotnet restore ${{ inputs.dotnet_solution_file }} --locked-mode
+      dotnet restore ${{ inputs.solution_file }} --locked-mode
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
         git checkout HEAD -- nuget.config
       else
@@ -76,7 +70,7 @@ runs:
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
       echo "::group::Bygg"
-      dotnet build ${{ inputs.dotnet_solution_file }} -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1 || (exit 0)
+      dotnet build ${{ inputs.solution_file }} -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1 || (exit 0)
       grep "): error " $TEMP_DIR/build.out > $TEMP_DIR/build.err || (exit 0)
       grep "): warning " $TEMP_DIR/build.out > $TEMP_DIR/build.warn || (exit 0)
       cat $TEMP_DIR/build.out
@@ -154,22 +148,22 @@ runs:
     id: run-tests
     shell: bash
     run: |
-      dotnet test ${{ inputs.dotnet_solution_file }} --no-restore --collect:"XPlat Code Coverage" --logger "trx;LogFileName=test-results.trx" /p:CollectCoverage=true /p:CoverletOutput="TestResults/" /p:CoverletOutputFormat=cobertura
+      dotnet test ${{ inputs.solution_file }} --no-restore --collect:"XPlat Code Coverage" --logger "trx;LogFileName=test-results.trx" /p:CollectCoverage=true /p:CoverletOutput="TestResults/" /p:CoverletOutputFormat=cobertura
     continue-on-error: true
 
   - name: Lag testrapport
     uses: dorny/test-reporter@v2
     id: test-reporter
     with:
-      name: "Dokumentmottak Tests"
-      path: "${{ inputs.dotnet_test_root_path }}/**/TestResults/test-results.trx"
+      name: "Testreport"
+      path: "**/TestResults/test-results.trx"
       reporter: dotnet-trx
       fail-on-error: false
 
   - name: Kode dekningsrapport
     uses: irongut/CodeCoverageSummary@v1.3.0
     with:
-      filename: "${{ inputs.dotnet_test_root_path }}/**/coverage.cobertura.xml"
+      filename: "**/coverage.cobertura.xml"
       badge: true
       fail_below_min: false
       format: markdown
@@ -224,7 +218,7 @@ runs:
     if: always()
     shell: bash
     run: |
-      echo "# Byggstatus dotnet (${{ inputs.dotnet_solution_file }})" > $TEMP_DIR/combined.md
+      echo "# Byggstatus dotnet (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
       cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
