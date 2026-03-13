@@ -19,10 +19,10 @@ on:
         type: string
         description: "Node version, e.g. 24.x"
         default: "24.x"
-      node_source_path:
+      node_working_directory:
         required: false
         type: string
-        description: "Path to frontend code, e.g. 'frontend'"
+        description: "Working directory for the build, the package.json and package-lock.json files are expected to be in this directory"
         default: "."
       node_changes_regex:
         required: false
@@ -44,10 +44,10 @@ on:
         type: string
         description: ".NET version, e.g. 10.0.x"
         default: "10.0.x"
-      dotnet_source_path:
+      dotnet_working_directory:
         required: false
         type: string
-        description: "Path to backend code"
+        description: Working directory for the build, the solution file is expected to be in this directory"
         default: "./"
       dotnet_solution_file:
         required: false
@@ -105,7 +105,7 @@ jobs:
         if: ${{ inputs.node_enabled }}
         run: |
           if [ -z "${{ inputs.node_changes_regex }}" ]; then
-            PATTERN="^${{ inputs.node_source_path }}/"
+            PATTERN="^${{ inputs.node_working_directory }}/"
           else
             PATTERN="${{ inputs.node_changes_regex }}"
           fi
@@ -127,7 +127,7 @@ jobs:
         if: ${{ inputs.dotnet_enabled }}
         run: |
           if [ -z "${{ inputs.dotnet_changes_regex }}" ]; then
-            PATTERN="^${{ inputs.dotnet_source_path }}/"
+            PATTERN="^${{ inputs.dotnet_working_directory }}/"
           else
             PATTERN="${{ inputs.dotnet_changes_regex }}"
           fi
@@ -159,7 +159,7 @@ jobs:
         uses: hwinther/reusable-workflows/.github/actions/node-build@refactor/matrix
         with:
           node_version: ${{ inputs.node_version }}
-          source_path: ${{ inputs.node_source_path }}
+          working_directory: ${{ inputs.node_working_directory }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           scope: ${{ inputs.node_scope }}
 
@@ -186,7 +186,7 @@ jobs:
         uses: hwinther/reusable-workflows/.github/actions/dotnet-build@refactor/matrix
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
-          source_path: ${{ inputs.dotnet_source_path }}
+          working_directory: ${{ inputs.dotnet_working_directory }}
           solution_file: ${{ inputs.dotnet_solution_file }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
