@@ -254,7 +254,6 @@ runs:
     id: reportgenerator
     shell: bash
     if: steps.dotnet-restore.outcome == 'success'
-    working-directory: ${{ inputs.working_directory }}
     continue-on-error: true
     run: |
       dotnet reportgenerator "-reports:**/coverage.cobertura.xml" "-targetdir:coverage-report" "-reporttypes:MarkdownSummaryGithub;Html"
