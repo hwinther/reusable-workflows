@@ -271,6 +271,12 @@ runs:
       name: coverage-report
       path: ${{ inputs.working_directory }}/coverage-report
 
+  - name: Delete coverage report
+    shell: bash
+    if: steps.dotnet-restore.outcome == 'success'
+    run: |
+      rm -rf ${{ inputs.working_directory }}/coverage-report
+
   - name: Move code coverage report to temp folder
     shell: bash
     if: steps.dotnet-restore.outcome == 'success'
