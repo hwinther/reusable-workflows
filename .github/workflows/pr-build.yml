@@ -219,14 +219,23 @@ jobs:
             NODE_BUILD="— (skipped)"
           else
             NODE_STATUS="✅ Yes"
-            NODE_BUILD="$([ \"$NODE_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $NODE_RESULT\")"
+            if [ "$NODE_RESULT" = "success" ]; then
+              NODE_BUILD="✅ Success"
+            else
+              NODE_BUILD="❌ $NODE_RESULT"
+            fi
           fi
+
           if [ "$DOTNET_RESULT" = "skipped" ]; then
             DOTNET_STATUS="No"
             DOTNET_BUILD="— (skipped)"
           else
             DOTNET_STATUS="✅ Yes"
-            DOTNET_BUILD="$([ \"$DOTNET_RESULT\" = 'success' ] && echo '✅ Success' || echo \"❌ $DOTNET_RESULT\")"
+            if [ "$DOTNET_RESULT" = "success" ]; then
+              DOTNET_BUILD="✅ Success"
+            else
+              DOTNET_BUILD="❌ $DOTNET_RESULT"
+            fi
           fi
           echo "| Node (frontend) | $NODE_STATUS | $NODE_BUILD |" >> $GITHUB_STEP_SUMMARY
           echo "| Dotnet (backend) | $DOTNET_STATUS | $DOTNET_BUILD |" >> $GITHUB_STEP_SUMMARY
