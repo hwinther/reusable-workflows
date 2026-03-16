@@ -69,7 +69,7 @@ runs:
     continue-on-error: true
     run: |
       echo "::group::Restore"
-      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
+      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out || true
       RESTORE_EXIT=${PIPESTATUS[0]}
       echo "Restore output:"
       cat $TEMP_DIR/restore.out
