@@ -271,10 +271,10 @@ runs:
     shell: bash
     if: steps.dotnet-restore.outcome == 'success'
     run: |
-      if [ -f "$TEMP_DIR/coverage-report/Summary.md" ]; then
+      if [ -f "$TEMP_DIR/coverage-report/SummaryGithub.md" ]; then
         echo "## 📊 Coverage report (ReportGenerator)" > $TEMP_DIR/reportgenerator-summary.md
         echo "" >> $TEMP_DIR/reportgenerator-summary.md
-        cat "$TEMP_DIR/coverage-report/Summary.md" >> $TEMP_DIR/reportgenerator-summary.md
+        cat "$TEMP_DIR/coverage-report/SummaryGithub.md" >> $TEMP_DIR/reportgenerator-summary.md
       fi
 
   - name: Upload coverage reports
