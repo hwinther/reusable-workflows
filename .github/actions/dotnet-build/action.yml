@@ -245,18 +245,14 @@ runs:
       output: both
       thresholds: "60 80"
 
-  - name: Install ReportGenerator
-    shell: bash
-    if: steps.dotnet-restore.outcome == 'success'
-    run: dotnet tool install -g dotnet-reportgenerator-globaltool
-
   - name: Generate ReportGenerator coverage report
     id: reportgenerator
     shell: bash
     if: steps.dotnet-restore.outcome == 'success'
     continue-on-error: true
     run: |
-      dotnet reportgenerator "-reports:**/coverage.cobertura.xml" "-targetdir:coverage-report" "-reporttypes:MarkdownSummaryGithub;Html"
+      dotnet tool install -g dotnet-reportgenerator-globaltool
+      reportgenerator "-reports:**/coverage.cobertura.xml" "-targetdir:coverage-report" "-reporttypes:MarkdownSummaryGithub;Html"
 
   - name: Move ReportGenerator summary to temp folder
     shell: bash
