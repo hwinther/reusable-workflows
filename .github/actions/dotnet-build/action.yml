@@ -262,7 +262,7 @@ runs:
     run: |
       echo "::group::ReportGenerator"
       dotnet tool install -g dotnet-reportgenerator-globaltool
-      reportgenerator "-reports:**/coverage.cobertura.xml" "-targetdir:$TEMP_DIR/coverage-report" "-reporttypes:MarkdownSummaryGithub;Html"
+      reportgenerator -reports:**/coverage.cobertura.xml -targetdir:$TEMP_DIR/coverage-report "-reporttypes:MarkdownSummaryGithub;Html"
       echo "::endgroup::"
 
   - name: Move ReportGenerator summary to temp folder
