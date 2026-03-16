@@ -70,10 +70,8 @@ runs:
     run: |
       echo "::group::Restore"
       dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out || true
-      RESTORE_EXIT=${PIPESTATUS[0]}
       echo "Restore output:"
       cat $TEMP_DIR/restore.out
-      echo "Restore exit code: $RESTORE_EXIT"
       echo "::endgroup::"
 
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
@@ -82,20 +80,53 @@ runs:
         rm -f nuget.config || true
       fi
 
-      if [ $RESTORE_EXIT -ne 0 ]; then
+      RESTORE_FAILED=0
+
+      # Extract restore errors and 'Failed to restore' lines (if any)
+      grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
+      grep "Failed to restore " $TEMP_DIR/restore.out > $TEMP_DIR/restore.failed || true
+
+      # If we found any error / failed-restore lines, treat restore as failed
+      if [ -s $TEMP_DIR/restore.err ] || [ -s $TEMP_DIR/restore.failed ]; then
+        RESTORE_FAILED=1
+
+        # Emit GitHub error annotations for each restore error line
+        if [ -s $TEMP_DIR/restore.err ]; then
+          while IFS= read -r line
+          do
+            # Match "<path> : error <CODE>: <message>"
+            if [[ "$line" =~ ^(.+)\ :\ error\ ([A-Za-z0-9]+):\ (.*)$ ]]; then
+              FILE_PATH="${BASH_REMATCH[1]}"
+              ERROR_CODE="${BASH_REMATCH[2]}"
+              ERROR_MSG="${BASH_REMATCH[3]}"
+              echo "::error file=$FILE_PATH,line=0::$ERROR_CODE: $ERROR_MSG"
+            fi
+          done < $TEMP_DIR/restore.err
+        fi
+
+        # Emit generic annotations for any 'Failed to restore' lines
+        if [ -s $TEMP_DIR/restore.failed ]; then
+          while IFS= read -r line
+          do
+            echo "::error line=0::$line"
+          done < $TEMP_DIR/restore.failed
+        fi
+      fi
+
+      if [ $RESTORE_FAILED -ne 0 ]; then
         echo "::error::Restore failed. Check the PR comment or job summary for details."
         echo "## ❌ Restore failed" > $TEMP_DIR/restore.md
         echo "" >> $TEMP_DIR/restore.md
-        grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
-        if [ -s $TEMP_DIR/restore.err ]; then
-          sed "s|$GITHUB_WORKSPACE/||g" $TEMP_DIR/restore.err | sed '/^$/d' | sed 's/^/- ❌ /' >> $TEMP_DIR/restore.md
+        if [ -s $TEMP_DIR/restore.err ] || [ -s $TEMP_DIR/restore.failed ]; then
+          # Combine both error sources for markdown output
+          cat $TEMP_DIR/restore.err $TEMP_DIR/restore.failed 2>/dev/null | sed "s|$GITHUB_WORKSPACE/||g" | sed '/^$/d' | sed 's/^/- ❌ /' >> $TEMP_DIR/restore.md
         else
           echo '```' >> $TEMP_DIR/restore.md
           tail -100 $TEMP_DIR/restore.out >> $TEMP_DIR/restore.md
           echo '```' >> $TEMP_DIR/restore.md
         fi
       fi
-      exit $RESTORE_EXIT
+      exit $RESTORE_FAILED
 
   - name: Build
     id: dotnet-build
