@@ -68,17 +68,22 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     continue-on-error: true
     run: |
+      echo "::group::Restore"
       dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
       RESTORE_EXIT=${PIPESTATUS[0]}
+      echo "Restore output:"
+      cat $TEMP_DIR/restore.out
+      echo "Restore exit code: $RESTORE_EXIT"
+      echo "::endgroup::"
+
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
         git checkout HEAD -- nuget.config
       else
         rm -f nuget.config || true
       fi
+
       if [ $RESTORE_EXIT -ne 0 ]; then
-        echo "Restore failed:"
-        cat $TEMP_DIR/restore.out
-        
+        echo "::error::Restore failed. Check the output above for details."
         echo "## ❌ Restore failed" > $TEMP_DIR/restore.md
         echo "" >> $TEMP_DIR/restore.md
         grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
