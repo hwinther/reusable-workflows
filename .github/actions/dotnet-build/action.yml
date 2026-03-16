@@ -99,7 +99,7 @@ runs:
               FILE_PATH="${BASH_REMATCH[1]}"
               ERROR_CODE="${BASH_REMATCH[2]}"
               ERROR_MSG="${BASH_REMATCH[3]}"
-              echo "::error file=$FILE_PATH,line=0::$ERROR_CODE: $ERROR_MSG"
+              echo "::error file=$FILE_PATH::$ERROR_CODE: $ERROR_MSG"
             fi
           done < $TEMP_DIR/restore.err
         fi
@@ -108,7 +108,7 @@ runs:
         if [ -s $TEMP_DIR/restore.failed ]; then
           while IFS= read -r line
           do
-            echo "::error line=0::$line"
+            echo "::error ::$line"
           done < $TEMP_DIR/restore.failed
         fi
       fi
