@@ -217,7 +217,7 @@ runs:
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
-      dotnet test ${{ inputs.solution_file }} --no-restore -- --report-trx --report-trx-filename test-results.trx --coverage --coverage-output-format cobertura --coverage-output coverage.cobertura.xml
+      dotnet test ${{ inputs.solution_file }} --no-restore -- --coverage --coverage-output-format cobertura --coverage-output coverage.cobertura.xml
     continue-on-error: true
 
   # - name: Generate test report
