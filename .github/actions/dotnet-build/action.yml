@@ -76,6 +76,9 @@ runs:
         rm -f nuget.config || true
       fi
       if [ $RESTORE_EXIT -ne 0 ]; then
+        echo "Restore failed:"
+        cat $TEMP_DIR/restore.out
+        
         echo "## ❌ Restore failed" > $TEMP_DIR/restore.md
         echo "" >> $TEMP_DIR/restore.md
         grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
@@ -86,7 +89,6 @@ runs:
           tail -100 $TEMP_DIR/restore.out >> $TEMP_DIR/restore.md
           echo '```' >> $TEMP_DIR/restore.md
         fi
-        cp $TEMP_DIR/restore.md $GITHUB_WORKSPACE/.dotnet-build-restore.md
       fi
       exit $RESTORE_EXIT
 
@@ -193,6 +195,7 @@ runs:
 
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@v1.3.0
+    if: steps.dotnet-restore.outcome == 'success'
     with:
       filename: "**/coverage.cobertura.xml"
       badge: true
@@ -281,11 +284,7 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
-      if [ -f $TEMP_DIR/restore.md ]; then
-        cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
-      elif [ -f $GITHUB_WORKSPACE/.dotnet-build-restore.md ]; then
-        cat $GITHUB_WORKSPACE/.dotnet-build-restore.md >> $TEMP_DIR/combined.md
-      fi
+          [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
