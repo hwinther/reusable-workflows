@@ -143,7 +143,7 @@ jobs:
             echo "changes_detected=false" >> $GITHUB_OUTPUT
             echo "No changes detected in pattern."
           fi
-          
+
   node-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.node_changes == 'true'
@@ -156,7 +156,7 @@ jobs:
 
       - name: Build node
         id: node-build
-        uses: hwinther/reusable-workflows/.github/actions/node-build@refactor/matrix
+        uses: hwinther/reusable-workflows/.github/actions/node-build@main
         with:
           node_version: ${{ inputs.node_version }}
           working_directory: ${{ inputs.node_working_directory }}
@@ -183,7 +183,7 @@ jobs:
 
       - name: Build dotnet
         id: dotnet-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@refactor/matrix
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@main
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}
