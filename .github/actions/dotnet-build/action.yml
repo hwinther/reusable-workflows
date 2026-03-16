@@ -68,27 +68,65 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     continue-on-error: true
     run: |
-      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
-      RESTORE_EXIT=${PIPESTATUS[0]}
+      echo "::group::Restore"
+      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out || true
+      echo "Restore output:"
+      cat $TEMP_DIR/restore.out
+      echo "::endgroup::"
+
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
         git checkout HEAD -- nuget.config
       else
         rm -f nuget.config || true
       fi
-      if [ $RESTORE_EXIT -ne 0 ]; then
+
+      RESTORE_FAILED=0
+
+      # Extract restore errors and 'Failed to restore' lines (if any)
+      grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
+      grep "Failed to restore " $TEMP_DIR/restore.out > $TEMP_DIR/restore.failed || true
+
+      # If we found any error / failed-restore lines, treat restore as failed
+      if [ -s $TEMP_DIR/restore.err ] || [ -s $TEMP_DIR/restore.failed ]; then
+        RESTORE_FAILED=1
+
+        # Emit GitHub error annotations for each restore error line
+        if [ -s $TEMP_DIR/restore.err ]; then
+          while IFS= read -r line
+          do
+            # Match "<path> : error <CODE>: <message>"
+            if [[ "$line" =~ ^(.+)\ :\ error\ ([A-Za-z0-9]+):\ (.*)$ ]]; then
+              FILE_PATH="${BASH_REMATCH[1]}"
+              ERROR_CODE="${BASH_REMATCH[2]}"
+              ERROR_MSG="${BASH_REMATCH[3]}"
+              echo "::error file=$FILE_PATH::$ERROR_CODE: $ERROR_MSG"
+            fi
+          done < $TEMP_DIR/restore.err
+        fi
+
+        # Emit generic annotations for any 'Failed to restore' lines
+        if [ -s $TEMP_DIR/restore.failed ]; then
+          while IFS= read -r line
+          do
+            echo "::error ::$line"
+          done < $TEMP_DIR/restore.failed
+        fi
+      fi
+
+      if [ $RESTORE_FAILED -ne 0 ]; then
+        echo "::error::Restore failed. Check the PR comment or job summary for details."
         echo "## ❌ Restore failed" > $TEMP_DIR/restore.md
         echo "" >> $TEMP_DIR/restore.md
-        grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
-        if [ -s $TEMP_DIR/restore.err ]; then
-          sed "s|$GITHUB_WORKSPACE/||g" $TEMP_DIR/restore.err | sed '/^$/d' | sed 's/^/- ❌ /' >> $TEMP_DIR/restore.md
+        if [ -s $TEMP_DIR/restore.err ] || [ -s $TEMP_DIR/restore.failed ]; then
+          # Combine both error sources for markdown output
+          cat $TEMP_DIR/restore.err $TEMP_DIR/restore.failed 2>/dev/null | sed "s|$GITHUB_WORKSPACE/||g" | sed '/^$/d' | sed 's/^/- ❌ /' >> $TEMP_DIR/restore.md
         else
           echo '```' >> $TEMP_DIR/restore.md
           tail -100 $TEMP_DIR/restore.out >> $TEMP_DIR/restore.md
           echo '```' >> $TEMP_DIR/restore.md
         fi
-        cp $TEMP_DIR/restore.md $GITHUB_WORKSPACE/.dotnet-build-restore.md
       fi
-      exit $RESTORE_EXIT
+      exit $RESTORE_FAILED
 
   - name: Build
     id: dotnet-build
@@ -179,7 +217,9 @@ runs:
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
-      dotnet test ${{ inputs.solution_file }} --no-restore -- --report-trx --report-trx-filename test-results.trx --coverage --coverage-output-format cobertura --coverage-output coverage.cobertura.xml
+      echo "::group::Test"
+      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura
+      echo "::endgroup::"
     continue-on-error: true
 
   # - name: Generate test report
@@ -193,6 +233,7 @@ runs:
 
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@v1.3.0
+    if: steps.dotnet-restore.outcome == 'success'
     with:
       filename: "**/coverage.cobertura.xml"
       badge: true
@@ -204,41 +245,44 @@ runs:
       output: both
       thresholds: "60 80"
 
-  - name: Install ReportGenerator
-    shell: bash
-    run: dotnet tool install -g dotnet-reportgenerator-globaltool
-
-  - name: Generate ReportGenerator coverage report
-    id: reportgenerator
-    shell: bash
-    working-directory: ${{ inputs.working_directory }}
-    continue-on-error: true
-    run: |
-      dotnet reportgenerator "-reports:**/coverage.cobertura.xml" "-targetdir:coverage-report" "-reporttypes:MarkdownSummaryGithub;Html"
-
-  - name: Move ReportGenerator summary to temp folder
-    shell: bash
-    run: |
-      if [ -f "${{ inputs.working_directory }}/coverage-report/Summary.md" ]; then
-        echo "## 📊 Coverage report (ReportGenerator)" > $TEMP_DIR/reportgenerator-summary.md
-        echo "" >> $TEMP_DIR/reportgenerator-summary.md
-        cat "${{ inputs.working_directory }}/coverage-report/Summary.md" >> $TEMP_DIR/reportgenerator-summary.md
-      fi
-
-  - name: Upload coverage reports
-    uses: actions/upload-artifact@v4
-    if: steps.reportgenerator.outcome == 'success'
-    with:
-      name: coverage-report
-      path: ${{ inputs.working_directory }}/coverage-report
-
   - name: Move code coverage report to temp folder
     shell: bash
+    if: steps.dotnet-restore.outcome == 'success'
     run: |
       echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
       echo "" >> $TEMP_DIR/code-coverage-results.md
       cat code-coverage-results.md >> $TEMP_DIR/code-coverage-results.md
       rm code-coverage-results.md
+
+  - name: Generate ReportGenerator coverage report
+    id: reportgenerator
+    shell: bash
+    if: steps.dotnet-restore.outcome == 'success'
+    continue-on-error: true
+    run: |
+      COVERAGE_REPORT_DIR="$TEMP_DIR/coverage-report"
+      echo "::group::ReportGenerator"
+      dotnet tool install -g dotnet-reportgenerator-globaltool
+      reportgenerator -reports:**/coverage.cobertura.xml -targetdir:"$COVERAGE_REPORT_DIR" "-reporttypes:MarkdownSummaryGithub;Html"
+      echo "report-path=$COVERAGE_REPORT_DIR" >> $GITHUB_OUTPUT
+      echo "::endgroup::"
+
+  - name: Copy ReportGenerator summary to temp folder
+    shell: bash
+    if: steps.dotnet-restore.outcome == 'success'
+    run: |
+      if [ -f "$TEMP_DIR/coverage-report/SummaryGithub.md" ]; then
+        echo "## 📊 Coverage report (ReportGenerator)" > $TEMP_DIR/reportgenerator-summary.md
+        echo "" >> $TEMP_DIR/reportgenerator-summary.md
+        cat "$TEMP_DIR/coverage-report/SummaryGithub.md" >> $TEMP_DIR/reportgenerator-summary.md
+      fi
+
+  - name: Upload coverage reports
+    uses: actions/upload-artifact@v4
+    if: steps.dotnet-restore.outcome == 'success' && steps.reportgenerator.outcome == 'success'
+    with:
+      name: coverage-report
+      path: ${{ steps.reportgenerator.outputs.report-path }}
 
   - name: Check for uncommitted changes
     shell: bash
@@ -281,11 +325,7 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
-      if [ -f $TEMP_DIR/restore.md ]; then
-        cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
-      elif [ -f $GITHUB_WORKSPACE/.dotnet-build-restore.md ]; then
-        cat $GITHUB_WORKSPACE/.dotnet-build-restore.md >> $TEMP_DIR/combined.md
-      fi
+          [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
