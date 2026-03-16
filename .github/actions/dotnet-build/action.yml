@@ -83,7 +83,7 @@ runs:
       fi
 
       if [ $RESTORE_EXIT -ne 0 ]; then
-        echo "::error::Restore failed. Check the output above for details."
+        echo "::error::Restore failed. Check the PR comment or job summary for details."
         echo "## ❌ Restore failed" > $TEMP_DIR/restore.md
         echo "" >> $TEMP_DIR/restore.md
         grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
