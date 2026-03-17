@@ -55,7 +55,7 @@ jobs:
       - name: Avgjør pakkeversjon og docker tag
         id: gitversion
         if: ${{ github.event.inputs.tag_name == 'auto' }}
-        uses: hwinther/reusable-workflows/.github/actions/gitversion@main
+        uses: ./.github/actions/gitversion
 
       - name: Bestem tag navn
         id: determine_tag

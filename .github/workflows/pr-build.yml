@@ -156,7 +156,7 @@ jobs:
 
       - name: Build node
         id: node-build
-        uses: hwinther/reusable-workflows/.github/actions/node-build@main
+        uses: ./.github/actions/node-build
         with:
           node_version: ${{ inputs.node_version }}
           working_directory: ${{ inputs.node_working_directory }}
@@ -183,7 +183,7 @@ jobs:
 
       - name: Build dotnet
         id: dotnet-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@main
+        uses: ./.github/actions/dotnet-build
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}
