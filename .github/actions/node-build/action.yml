@@ -367,12 +367,15 @@ runs:
     run: |
       if ! node -e "const s=require('./package.json').scripts; process.exit(s && s['coverage:ci'] ? 0 : 1)"; then
         echo "Script 'coverage:ci' not found in package.json, skipping"
+        echo "tests_ran=false" >> $GITHUB_OUTPUT
         exit 0
       fi
+      echo "tests_ran=true" >> $GITHUB_OUTPUT
       npm run coverage:ci
 
   - name: Generate test run report
     id: test-markdown-report
+    if: steps.test-coverage.outputs.tests_ran == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -433,7 +436,7 @@ runs:
 
   - name: Upload test results
     uses: actions/upload-artifact@v7
-    if: ${{ !cancelled() }}
+    if: steps.test-coverage.outputs.tests_ran == 'true' && !cancelled()
     with:
       name: coverage
       path: ${{ inputs.working_directory }}/coverage
@@ -441,6 +444,7 @@ runs:
   - name: Test reporter
     uses: dorny/test-reporter@v2
     id: test-reporter
+    if: steps.test-coverage.outputs.tests_ran == 'true'
     with:
       name: "Node tests"
       path: "${{ inputs.working_directory }}/coverage/junit-report.xml"
@@ -455,6 +459,7 @@ runs:
 
   - name: Code Coverage Report
     uses: irongut/CodeCoverageSummary@v1.3.0
+    if: steps.test-coverage.outputs.tests_ran == 'true'
     with:
       filename: "${{ inputs.working_directory }}/coverage/cobertura-coverage.xml"
       badge: true
@@ -468,6 +473,7 @@ runs:
   - name: Move code coverage report to temp folder
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    if: steps.test-coverage.outputs.tests_ran == 'true'
     run: |
       echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
       echo "" >> $TEMP_DIR/code-coverage-results.md
