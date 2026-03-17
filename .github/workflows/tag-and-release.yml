@@ -71,22 +71,46 @@ jobs:
             MINOR=$((MINOR + 1))
             PATCH=0
             
-            NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+            FULL_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+            MINOR_TAG="v${MAJOR}.${MINOR}"
+            MAJOR_TAG="v${MAJOR}"
 
-            echo "tag_name=$NEW_TAG" >> $GITHUB_OUTPUT
-            echo "Ny tag: $NEW_TAG"
+            echo "tag_name=$FULL_TAG" >> $GITHUB_OUTPUT
+            echo "tag_name_full=$FULL_TAG" >> $GITHUB_OUTPUT
+            echo "tag_name_minor=$MINOR_TAG" >> $GITHUB_OUTPUT
+            echo "tag_name_major=$MAJOR_TAG" >> $GITHUB_OUTPUT
+
+            echo "Ny tag (full): $FULL_TAG"
+            echo "Ny tag (minor): $MINOR_TAG"
+            echo "Ny tag (major): $MAJOR_TAG"
           else
             echo "tag_name=$TAG_INPUT" >> $GITHUB_OUTPUT
+            echo "tag_name_full=$TAG_INPUT" >> $GITHUB_OUTPUT
             echo "Bruker angitt tag: $TAG_INPUT"
           fi
 
-      - name: Opprett tag ${{ steps.determine_tag.outputs.tag_name }}
+      - name: Opprett tag(er) ${{ steps.determine_tag.outputs.tag_name_full }}
         id: create_tag
         run: |
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor }}@users.noreply.github.com"
-          git tag ${{ steps.determine_tag.outputs.tag_name }}
-          git push origin ${{ steps.determine_tag.outputs.tag_name }}
+          FULL_TAG="${{ steps.determine_tag.outputs.tag_name_full }}"
+          MINOR_TAG="${{ steps.determine_tag.outputs.tag_name_minor }}"
+          MAJOR_TAG="${{ steps.determine_tag.outputs.tag_name_major }}"
+
+          # Always create the full tag
+          git tag "$FULL_TAG"
+          git push origin "$FULL_TAG"
+
+          # If shorter tags are available (auto mode), create or move them to this commit
+          if [ -n "$MINOR_TAG" ]; then
+            git tag -f "$MINOR_TAG"
+            git push -f origin "$MINOR_TAG"
+          fi
+          if [ -n "$MAJOR_TAG" ]; then
+            git tag -f "$MAJOR_TAG"
+            git push -f origin "$MAJOR_TAG"
+          fi
 
       - name: Opprett release ${{ steps.determine_tag.outputs.tag_name }}
         id: create_release
