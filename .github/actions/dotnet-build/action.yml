@@ -218,8 +218,43 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "::group::Test"
-      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura
+      TEST_EXIT_CODE=0
+      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
       echo "::endgroup::"
+
+      # Detect MSBuild "Unknown switch" errors that typically indicate
+      # either an incompatible .NET SDK version (< 10) or missing
+      # Microsoft.Testing.Platform configuration in global.json.
+      if [ -f "$TEMP_DIR/test.out" ] && grep -q "MSBUILD : error MSB1001: Unknown switch." "$TEMP_DIR/test.out"; then
+        echo "::error::dotnet test failed with 'MSB1001: Unknown switch.'. This usually means the project is not using .NET SDK 10 or higher, or global.json is missing the Microsoft.Testing.Platform test runner configuration (\"test\": { \"runner\": \"Microsoft.Testing.Platform\" })."
+
+        cat << 'EOF' > $TEMP_DIR/tests.md
+      ## ❌ Test configuration issue
+      dotnet test failed with:
+      MSBUILD : error MSB1001: Unknown switch.
+      This usually means one of the following:
+      - The build is not running on .NET SDK 10 or higher, or
+      - Your global.json is missing the Microsoft.Testing.Platform configuration, for example:
+      global.json:
+      { "sdk": { "version": "10.0.100" }, "test": { "runner": "Microsoft.Testing.Platform" } }
+      Update global.json accordingly and re-run the workflow.
+      EOF
+      else
+        # For other failures, create a generic tests markdown (if tests failed)
+        if [ "$TEST_EXIT_CODE" -ne 0 ]; then
+          echo "## ❌ Tests failed" > $TEMP_DIR/tests.md
+          echo "" >> $TEMP_DIR/tests.md
+          if [ -f "$TEMP_DIR/test.out" ]; then
+            echo '```' >> $TEMP_DIR/tests.md
+            tail -100 "$TEMP_DIR/test.out" >> $TEMP_DIR/tests.md
+            echo '```' >> $TEMP_DIR/tests.md
+          else
+            echo "Tests failed. See job logs for details." >> $TEMP_DIR/tests.md
+          fi
+        fi
+      fi
+
+      exit $TEST_EXIT_CODE
     continue-on-error: true
 
   # - name: Generate test report
@@ -327,6 +362,7 @@ runs:
       echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
           [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/tests.md ] && cat $TEMP_DIR/tests.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
