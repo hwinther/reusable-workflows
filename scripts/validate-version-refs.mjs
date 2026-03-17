@@ -54,6 +54,20 @@ function validate() {
   /** @type {Array<{file:string,line:number,message:string}>} */
   const problems = [];
 
+  console.log(
+    `🔍 Validating version references for ${REPO_SLUG} (expected major v${declaredMajor}).`
+  );
+  if (yamlFiles.length === 0) {
+    console.log("No workflow or action YAML files found under .github/ to scan.");
+  } else {
+    console.log(
+      `Scanning ${yamlFiles.length} workflow/action YAML file(s):`
+    );
+    for (const file of yamlFiles) {
+      console.log(`- ${file}`);
+    }
+  }
+
   const forbiddenRefs = ["@main", "@HEAD", "@head", "@master"];
 
   const escapedSlug = REPO_SLUG.replace("/", "\\/");
