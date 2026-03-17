@@ -183,7 +183,7 @@ jobs:
 
       - name: Build dotnet
         id: dotnet-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@feat/dotnet-mtp-hint-on-error
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v1
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}
