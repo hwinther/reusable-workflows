@@ -24,4 +24,3 @@ jobs:
 
       - name: Validate internal version references
         run: node ./scripts/validate-version-refs.mjs
-
