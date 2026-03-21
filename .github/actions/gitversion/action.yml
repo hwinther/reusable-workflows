@@ -44,13 +44,13 @@ runs:
       fetch-depth: 0
 
   - name: Installer GitVersion
-    uses: gittools/actions/gitversion/setup@v4.2.0
+    uses: gittools/actions/gitversion/setup@v4.4
     with:
-      versionSpec: '6.4.x'
+      versionSpec: '6.6.x'
 
   - name: Finn neste versjon
     id: determine_version_values
-    uses: gittools/actions/gitversion/execute@v4.2.0
+    uses: gittools/actions/gitversion/execute@v4.4
     with:
       overrideConfig: ${{ inputs.override_config }}
 
