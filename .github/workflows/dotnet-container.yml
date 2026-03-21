@@ -103,7 +103,7 @@ jobs:
         env:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
         run: |
-          echo "### Container image" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following tags were pushed to the registry:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
