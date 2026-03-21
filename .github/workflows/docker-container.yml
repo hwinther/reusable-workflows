@@ -1,0 +1,68 @@
+name: "Publish docker container to GHCR"
+
+on:
+  workflow_call:
+    inputs:
+      container_registry:
+        description: "Container registry, e.g. ghcr.io"
+        default: "ghcr.io"
+        type: string
+      container_image_name_postfix:
+        description: "Container image name postfix, e.g. frontend"
+        required: true
+        type: string
+      context:
+        description: "Docker context e.g. frontend or ."
+        required: true
+        type: string
+      file:
+        description: "Dockerfile path, e.g. frontend/Dockerfile"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare-repository-name:
+    runs-on: ubuntu-latest
+    outputs:
+      repository: ${{ steps.lower-repo.outputs.repository }}
+    steps:
+      - id: lower-repo
+        run: |
+          echo "repository=${GITHUB_REPOSITORY@L}" >> $GITHUB_OUTPUT
+
+  gitversion:
+    needs: prepare-repository-name
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v1
+    with:
+      container_registry: ${{ inputs.container_registry }}
+      container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+
+  build-and-push:
+    name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
+    needs: gitversion
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ inputs.container_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push container to GHCR
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.file }}
+          push: true
+          tags: ${{ needs.gitversion.outputs.container_image_tags }}

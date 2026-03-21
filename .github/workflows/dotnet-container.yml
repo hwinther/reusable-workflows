@@ -1,0 +1,100 @@
+name: "Publish backend container to GHCR"
+
+on:
+  workflow_call:
+    inputs:
+      dotnet_version:
+        description: ".NET version, e.g. 10.0.x"
+        required: true
+        type: string
+      solution_path:
+        description: "Solution path, e.g. backend"
+        required: true
+        type: string
+      solution_file:
+        description: "Solution file, e.g. ProjectName.slnx"
+        required: true
+        type: string
+      project_file:
+        description: "Project file, e.g. src/Api/Api.csproj"
+        required: true
+        type: string
+      cache_enabled:
+        description: "Enable NuGet package caching, requires dotnet lockfiles to be in use"
+        required: false
+        type: boolean
+        default: true
+      container_registry:
+        description: "Container registry, e.g. ghcr.io"
+        required: true
+        type: string
+      container_image_name_postfix:
+        description: "Container image name postfix, e.g. api"
+        required: true
+        type: string
+      override_config:
+        description: "Override config"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  prepare-repository-name:
+    runs-on: ubuntu-latest
+    outputs:
+      repository: ${{ steps.lower-repo.outputs.repository }}
+    steps:
+      - id: lower-repo
+        run: |
+          echo "repository=${GITHUB_REPOSITORY@L}" >> $GITHUB_OUTPUT
+
+  gitversion:
+    needs: prepare-repository-name
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v1
+    with:
+      container_registry: ${{ inputs.container_registry }}
+      container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+      override_config: ${{ inputs.override_config }}
+
+  build-and-push:
+    name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
+    needs: [prepare-repository-name, gitversion]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.solution_path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+          cache: ${{ inputs.cache_enabled }}
+          cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ inputs.container_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore
+        run: dotnet restore --locked-mode ${{ inputs.solution_file }}
+
+      - name: Publish container to GHCR
+        env:
+          ContainerImageTags: ${{ needs.gitversion.outputs.image_tags }}
+        run: |
+          dotnet publish ${{ inputs.project_file }} \
+            -c Release \
+            --no-restore \
+            -p:PublishProfile=DefaultContainer \
+            -p:ContainerRegistry=${{ inputs.container_registry }} \
+            -p:ContainerRepository=${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
