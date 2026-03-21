@@ -41,7 +41,7 @@ jobs:
 
   gitversion:
     needs: prepare-repository-name
-    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@feat/update-gitversion
     with:
       container_registry: ${{ inputs.container_registry }}
       container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
