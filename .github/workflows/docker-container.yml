@@ -11,14 +11,19 @@ on:
         description: "Container image name postfix, e.g. frontend"
         required: true
         type: string
-      context:
-        description: "Docker context e.g. frontend or ."
+      build_context:
+        description: "Docker build context, e.g. frontend or ."
         required: true
         type: string
-      file:
+      dockerfile:
         description: "Dockerfile path, e.g. frontend/Dockerfile"
         required: true
         type: string
+      override_config:
+        description: "Override config"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -40,6 +45,7 @@ jobs:
     with:
       container_registry: ${{ inputs.container_registry }}
       container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+      override_config: ${{ inputs.override_config }}
 
   build-and-push:
     name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
@@ -62,7 +68,7 @@ jobs:
       - name: Build and push container to GHCR
         uses: docker/build-push-action@v7
         with:
-          context: ${{ inputs.context }}
-          file: ${{ inputs.file }}
+          context: ${{ inputs.build_context }}
+          file: ${{ inputs.dockerfile }}
           push: true
           tags: ${{ needs.gitversion.outputs.container_image_tags }}
