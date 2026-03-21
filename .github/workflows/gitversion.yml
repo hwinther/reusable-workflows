@@ -1,14 +1,14 @@
-name: "Avgjør pakkeversjon og docker tag"
+name: "Avgjør pakkeversjon og container image tag"
 
 on:
   workflow_call:
     inputs:
-      docker_registry:
-        description: 'Docker registry, f.eks. egenacr.azurecr.io'
+      container_registry:
+        description: 'Container registry, f.eks. egenacr.azurecr.io'
         default: 'egenacr.azurecr.io'
         type: string
-      docker_image:
-        description: 'Docker image navn, f.eks. mappe/undermappe/frontend'
+      container_image_name:
+        description: 'Container image navn, f.eks. mappe/undermappe/frontend'
         default: ''
         type: string
       override_config:
@@ -16,24 +16,27 @@ on:
         default: ''
         type: string
     outputs:
-      deployTag:
-        description: "Deploy tag, docker repository og image navn med tag som skal deployes til miljø"
-        value: ${{ jobs.finn-versjon.outputs.deployTag }}
-      dockerTags:
-        description: "Docker repository og image navn med tags som skal deployes til container registry"
-        value: ${{ jobs.finn-versjon.outputs.dockerTags }}
+      deploy_tag:
+        description: "Deploy tag: registry, image navn og tag som skal deployes til miljø"
+        value: ${{ jobs.finn-versjon.outputs.deploy_tag }}
+      container_image_tags:
+        description: "Registry, image navn og tags som skal pushes til container registry"
+        value: ${{ jobs.finn-versjon.outputs.container_image_tags }}
+      image_tags:
+        description: "Kun image tags (uten registry og image navn)"
+        value: ${{ jobs.finn-versjon.outputs.image_tags }}
       version:
         description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
         value: ${{ jobs.finn-versjon.outputs.version }}
       is_alpha:
         description: "Boolsk verdi som indikerer om versjonen er en alpha/prerelease versjon"
         value: ${{ jobs.finn-versjon.outputs.is_alpha }}
-      gitVersionMajorMinorPatch:
+      git_version_major_minor_patch:
         description: "GitVersion Major.Minor.Patch versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
-        value: ${{ jobs.finn-versjon.outputs.gitVersionMajorMinorPatch }}
-      gitVersionSemVer:
+        value: ${{ jobs.finn-versjon.outputs.git_version_major_minor_patch }}
+      git_version_semver:
         description: "GitVersion SemVer versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
-        value: ${{ jobs.finn-versjon.outputs.gitVersionSemVer }}
+        value: ${{ jobs.finn-versjon.outputs.git_version_semver }}
 
 permissions:
   contents: read
@@ -42,17 +45,18 @@ jobs:
   finn-versjon:
     runs-on: ubuntu-latest
     outputs:
-      deployTag: ${{ steps.gitversion.outputs.deployTag }}
-      dockerTags: ${{ steps.gitversion.outputs.dockerTags }}
+      deploy_tag: ${{ steps.gitversion.outputs.deploy_tag }}
+      container_image_tags: ${{ steps.gitversion.outputs.container_image_tags }}
+      image_tags: ${{ steps.gitversion.outputs.image_tags }}
       version: ${{ steps.gitversion.outputs.version }}
       is_alpha: ${{ steps.gitversion.outputs.is_alpha }}
-      gitVersionMajorMinorPatch: ${{ steps.gitversion.outputs.gitVersionMajorMinorPatch }}
-      gitVersionSemVer: ${{ steps.gitversion.outputs.gitVersionSemVer }}
+      git_version_major_minor_patch: ${{ steps.gitversion.outputs.git_version_major_minor_patch }}
+      git_version_semver: ${{ steps.gitversion.outputs.git_version_semver }}
     steps:
-      - name: Avgjør pakkeversjon og docker tag
+      - name: Avgjør pakkeversjon og container image tag
         id: gitversion
         uses: hwinther/reusable-workflows/.github/actions/gitversion@v1
         with:
-          docker_registry: ${{ inputs.docker_registry }}
-          docker_image: ${{ inputs.docker_image }}
+          container_registry: ${{ inputs.container_registry }}
+          container_image_name: ${{ inputs.container_image_name }}
           override_config: ${{ inputs.override_config }}
