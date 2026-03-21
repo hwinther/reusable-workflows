@@ -22,8 +22,8 @@ on:
       container_image_tags:
         description: "Registry, image navn og tags som skal pushes til container registry"
         value: ${{ jobs.finn-versjon.outputs.container_image_tags }}
-      image_tag:
-        description: "Kun image tag (uten registry og image navn)"
+      image_tags:
+        description: "Kun image tags (uten registry og image navn)"
         value: ${{ jobs.finn-versjon.outputs.image_tag }}
       version:
         description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
@@ -47,7 +47,7 @@ jobs:
     outputs:
       deploy_tag: ${{ steps.gitversion.outputs.deploy_tag }}
       container_image_tags: ${{ steps.gitversion.outputs.container_image_tags }}
-      image_tag: ${{ steps.gitversion.outputs.image_tag }}
+      image_tags: ${{ steps.gitversion.outputs.image_tags }}
       version: ${{ steps.gitversion.outputs.version }}
       is_alpha: ${{ steps.gitversion.outputs.is_alpha }}
       git_version_major_minor_patch: ${{ steps.gitversion.outputs.git_version_major_minor_patch }}

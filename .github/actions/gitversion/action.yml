@@ -14,14 +14,14 @@ inputs:
 
 outputs:
   deploy_tag:
-    description: "Deploy tag: container registry, image navn og tag som skal deployes til miljø"
+    description: "Deploy tag: registry, image navn og tag som skal deployes til miljø"
     value: ${{ steps.determine_version_and_tag_values.outputs.deploy_tag }}
   container_image_tags:
-    description: "Container repository og image navn med tags som skal deployes til container registry"
+    description: "Registry, image navn og tags som skal pushes til container registry"
     value: ${{ steps.determine_version_and_tag_values.outputs.container_image_tags }}
-  image_tag:
-    description: "Kun container image tag (uten registry og image navn), samme som brukes i deploy_tag"
-    value: ${{ steps.determine_version_and_tag_values.outputs.image_tag }}
+  image_tags:
+    description: "Kun image tags (uten registry og image navn)"
+    value: ${{ steps.determine_version_and_tag_values.outputs.image_tags }}
   version:
     description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
     value: ${{ steps.determine_version_and_tag_values.outputs.version }}
@@ -65,12 +65,11 @@ runs:
       GITVERSION_MAJOR_MINOR_PATCH_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
       GITVERSION_SEMVER_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.semVer }}"
 
-      echo "image_tag=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-
       if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == "main" ]]; then
         if [ -n "${{ inputs.container_image_name }}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "image_tags=latest;${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
           echo "Bruker tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
@@ -82,6 +81,7 @@ runs:
         if [ -n "${{ inputs.container_image_name }}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
           echo "Bruker tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
@@ -94,6 +94,7 @@ runs:
           # I en feature/bugfiks branch - bruk neste versjon som tag
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
           echo "Bruker tag med prerelease label: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
