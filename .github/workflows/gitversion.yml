@@ -24,7 +24,7 @@ on:
         value: ${{ jobs.finn-versjon.outputs.container_image_tags }}
       image_tags:
         description: "Kun image tags (uten registry og image navn)"
-        value: ${{ jobs.finn-versjon.outputs.image_tag }}
+        value: ${{ jobs.finn-versjon.outputs.image_tags }}
       version:
         description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
         value: ${{ jobs.finn-versjon.outputs.version }}
