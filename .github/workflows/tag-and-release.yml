@@ -133,4 +133,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Tag:** ${{ steps.determine_tag.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [Gå til release (utkast) for gjennomgang og publisering](${{ steps.create_release.outputs.url }})" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 [Gå til release for gjennomgang](${{ steps.create_release.outputs.url }})" >> $GITHUB_STEP_SUMMARY
