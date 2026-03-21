@@ -1,42 +1,39 @@
-name: "Avgjør pakkeversjon og docker tag"
-description: "Avgjør pakkeversjon og docker tag basert på GitVersion"
-branding:
-  icon: 'tag'
-  color: 'black'
+name: "Avgjør pakkeversjon og container image tag"
+description: "Avgjør pakkeversjon og container image tag basert på GitVersion"
 
 inputs:
-  docker_registry:
-    description: 'Docker registry, f.eks. egenacr.azurecr.io'
+  container_registry:
+    description: 'Container registry, f.eks. egenacr.azurecr.io'
     default: 'egenacr.azurecr.io'
-    type: string
-  docker_image:
-    description: 'Docker image navn, f.eks. mappe/undermappe/frontend'
+  container_image_name:
+    description: 'Container image navn, f.eks. mappe/undermappe/frontend'
     default: ''
-    type: string
   override_config:
     description: 'Overstyring av GitVersion konfigurasjonselementer i YAML format'
     default: ''
-    type: string
 
 outputs:
-  deployTag:
-    description: "Deploy tag, docker repository og image navn med tag som skal deployes til miljø"
-    value: ${{ steps.avgjoer_versjon_og_tag.outputs.deploy_tag }}
-  dockerTags:
-    description: "Docker repository og image navn med tags som skal deployes til container registry"
-    value: ${{ steps.avgjoer_versjon_og_tag.outputs.docker_tags }}
+  deploy_tag:
+    description: "Deploy tag: container registry, image navn og tag som skal deployes til miljø"
+    value: ${{ steps.determine_version_and_tag_values.outputs.deploy_tag }}
+  container_image_tags:
+    description: "Container repository og image navn med tags som skal deployes til container registry"
+    value: ${{ steps.determine_version_and_tag_values.outputs.container_image_tags }}
+  image_tag:
+    description: "Kun container image tag (uten registry og image navn), samme som brukes i deploy_tag"
+    value: ${{ steps.determine_version_and_tag_values.outputs.image_tag }}
   version:
     description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
-    value: ${{ steps.avgjoer_versjon_og_tag.outputs.version }}
+    value: ${{ steps.determine_version_and_tag_values.outputs.version }}
   is_alpha:
     description: "Boolsk verdi som indikerer om versjonen er en alpha/prerelease versjon"
-    value: ${{ steps.avgjoer_versjon_og_tag.outputs.is_alpha }}
-  gitVersionMajorMinorPatch:
+    value: ${{ steps.determine_version_and_tag_values.outputs.is_alpha }}
+  git_version_major_minor_patch:
     description: "GitVersion Major.Minor.Patch versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
-    value: ${{ steps.version_step.outputs.majorMinorPatch }}
-  gitVersionSemVer:
+    value: ${{ steps.determine_version_values.outputs.majorMinorPatch }}
+  git_version_semver:
     description: "GitVersion SemVer versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
-    value: ${{ steps.version_step.outputs.semVer }}
+    value: ${{ steps.determine_version_values.outputs.semVer }}
 
 runs:
   using: "composite"
@@ -52,54 +49,56 @@ runs:
       versionSpec: '6.4.x'
 
   - name: Finn neste versjon
-    id: version_step
+    id: determine_version_values
     uses: gittools/actions/gitversion/execute@v4.2.0
     with:
-      overrideConfig: ${{ inputs.override_config}}
+      overrideConfig: ${{ inputs.override_config }}
 
   - name: Avgjør versjon og tag verdier
-    id: avgjoer_versjon_og_tag
+    id: determine_version_and_tag_values
     shell: bash
     run: |
-      echo "GitVersion MajorMinorPatch: ${{ steps.version_step.outputs.majorMinorPatch }}"
-      echo "GitVersion SemVer: ${{ steps.version_step.outputs.semVer }}"
+      echo "GitVersion MajorMinorPatch: ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+      echo "GitVersion SemVer: ${{ steps.determine_version_values.outputs.semVer }}"
 
-      LATEST_TAG="${{ inputs.docker_registry }}/${{ inputs.docker_image }}:latest"
-      GITVERSION_TAG="${{ inputs.docker_registry }}/${{ inputs.docker_image }}:${{ steps.version_step.outputs.majorMinorPatch }}"
-      GITVERSION_SEMVER_TAG="${{ inputs.docker_registry }}/${{ inputs.docker_image }}:${{ steps.version_step.outputs.semVer }}"
+      LATEST_CONTAINER_IMAGE_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:latest"
+      GITVERSION_MAJOR_MINOR_PATCH_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+      GITVERSION_SEMVER_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.semVer }}"
+
+      echo "image_tag=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
 
       if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == "main" ]]; then
-        if [ -n "${{ inputs.docker_image }}" ]; then
-          echo "deploy_tag=$GITVERSION_TAG" >> $GITHUB_OUTPUT
-          echo "docker_tags=$LATEST_TAG,$GITVERSION_TAG" >> $GITHUB_OUTPUT
-          echo "Bruker tags: $LATEST_TAG,$GITVERSION_TAG"
+        if [ -n "${{ inputs.container_image_name }}" ]; then
+          echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "Bruker tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
-        echo "version=${{ steps.version_step.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-        echo "Setter version til ${{ steps.version_step.outputs.majorMinorPatch }}"
+        echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+        echo "Setter version til ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setter is_alpha til false"
       elif [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
-        if [ -n "${{ inputs.docker_image }}" ]; then
-          echo "deploy_tag=$GITVERSION_TAG" >> $GITHUB_OUTPUT
-          echo "docker_tags=$GITVERSION_TAG" >> $GITHUB_OUTPUT
-          echo "Bruker tag: $GITVERSION_TAG"
+        if [ -n "${{ inputs.container_image_name }}" ]; then
+          echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "Bruker tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
-        echo "version=${{ steps.version_step.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-        echo "Setter version til ${{ steps.version_step.outputs.majorMinorPatch }}"
+        echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+        echo "Setter version til ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setter is_alpha til false"
       else
-        if [ -n "${{ inputs.docker_image }}" ]; then
+        if [ -n "${{ inputs.container_image_name }}" ]; then
           # I en feature/bugfiks branch - bruk neste versjon som tag
-          echo "deploy_tag=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
-          echo "docker_tags=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
-          echo "Bruker tag med prerelease label: $GITVERSION_SEMVER_TAG"
+          echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "Bruker tag med prerelease label: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
-        echo "version=${{ steps.version_step.outputs.semVer }}" >> $GITHUB_OUTPUT
-        echo "Setter version til ${{ steps.version_step.outputs.semVer }}"
+        echo "version=${{ steps.determine_version_values.outputs.semVer }}" >> $GITHUB_OUTPUT
+        echo "Setter version til ${{ steps.determine_version_values.outputs.semVer }}"
         echo "is_alpha=true" >> $GITHUB_OUTPUT
         echo "Setter is_alpha til true"
       fi
