@@ -1,7 +1,7 @@
 # Lager tag og release basert på brukerinput eller automatisk versjonsøkning
 # Hvis navnet settes til auto så blir den nyeste taggen funnet i repoet økt med 1 på minor versjonen
-# Floating tag kan brukes men er mest nyttig i reusable workflow scenarioer
-# Full tag kan brukes for å opprette en full tag (v1.2.0) i tillegg til en minor tag (v1.2)
+# Floating tags (vX og vX.Y) oppdateres med git push -f; nyttig i reusable workflow scenarioer.
+# Canonical release-tag er alltid full semver (vX.Y.Z) i auto-modus — det er mest optimalt for GitVersion og immutable releases.
 name: "Opprett tag og release"
 
 on:
@@ -18,14 +18,10 @@ on:
         description: "Opprett en GitHub Release for denne taggen"
         required: false
         default: "true"
-      floating_major_tag:
-        description: "Opprett floating major tag"
+      floating_tags:
+        description: "Opprett/oppdater floating tags (vX og vX.Y) på samme commit"
         required: false
         default: "true"
-      full_tag:
-        description: "Opprett full tag"
-        required: false
-        default: "false"
   workflow_call:
     inputs:
       tag_name:
@@ -42,13 +38,8 @@ on:
         type: string
         required: false
         default: "true"
-      floating_major_tag:
-        description: "Opprett floating major tag"
-        type: string
-        required: false
-        default: "false"
-      full_tag:
-        description: "Opprett full tag"
+      floating_tags:
+        description: "Opprett/oppdater floating tags (vX og vX.Y) på samme commit"
         type: string
         required: false
         default: "false"
@@ -64,8 +55,7 @@ jobs:
   tag:
     runs-on: ubuntu-latest
     env:
-      CREATE_FLOATING_MAJOR_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.floating_major_tag || inputs.floating_major_tag }}
-      CREATE_FULL_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_tag || inputs.full_tag }}
+      CREATE_FLOATING_TAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.floating_tags || inputs.floating_tags }}
     outputs:
       tag_name: ${{ steps.determine_tag.outputs.tag_name }}
 
@@ -98,26 +88,20 @@ jobs:
             MINOR_TAG="v${MAJOR}.${MINOR}"
             MAJOR_TAG="v${MAJOR}"
 
-            if [ "$CREATE_FULL_TAG" = "true" ]; then
-              echo "tag_name=$FULL_TAG" >> $GITHUB_OUTPUT
-              echo "tag_name_full=$FULL_TAG" >> $GITHUB_OUTPUT
-            else
-              echo "tag_name=$MINOR_TAG" >> $GITHUB_OUTPUT
-              echo "tag_name_full=" >> $GITHUB_OUTPUT
-            fi
-            echo "tag_name_minor=$MINOR_TAG" >> $GITHUB_OUTPUT
-            if [ "$CREATE_FLOATING_MAJOR_TAG" = "true" ]; then
+            echo "tag_name=$FULL_TAG" >> $GITHUB_OUTPUT
+            echo "tag_name_full=$FULL_TAG" >> $GITHUB_OUTPUT
+
+            if [ "$CREATE_FLOATING_TAGS" = "true" ]; then
+              echo "tag_name_minor=$MINOR_TAG" >> $GITHUB_OUTPUT
               echo "tag_name_major=$MAJOR_TAG" >> $GITHUB_OUTPUT
             else
+              echo "tag_name_minor=" >> $GITHUB_OUTPUT
               echo "tag_name_major=" >> $GITHUB_OUTPUT
             fi
 
-            if [ "$CREATE_FULL_TAG" = "true" ]; then
-              echo "Ny tag (full): $FULL_TAG"
-            fi
-            echo "Ny tag (minor): $MINOR_TAG"
-            if [ "$CREATE_FLOATING_MAJOR_TAG" = "true" ]; then
-              echo "Ny tag (major): $MAJOR_TAG"
+            echo "Ny tag (semver): $FULL_TAG"
+            if [ "$CREATE_FLOATING_TAGS" = "true" ]; then
+              echo "Floating tags: $MINOR_TAG, $MAJOR_TAG"
             fi
           else
             echo "tag_name=$TAG_INPUT" >> $GITHUB_OUTPUT
@@ -139,12 +123,12 @@ jobs:
             git push origin "$FULL_TAG"
           fi
 
-          # If shorter tags are available (auto mode), create or move them to this commit
-          if [ -n "$MINOR_TAG" ]; then
+          # Floating vX.Y og vX — kun når floating_tags er aktivert (krever push -f)
+          if [ -n "$MINOR_TAG" ] && [ "$CREATE_FLOATING_TAGS" = "true" ]; then
             git tag -f "$MINOR_TAG"
             git push -f origin "$MINOR_TAG"
           fi
-          if [ -n "$MAJOR_TAG" ] && [ "$CREATE_FLOATING_MAJOR_TAG" = "true" ]; then
+          if [ -n "$MAJOR_TAG" ] && [ "$CREATE_FLOATING_TAGS" = "true" ]; then
             git tag -f "$MAJOR_TAG"
             git push -f origin "$MAJOR_TAG"
           fi
