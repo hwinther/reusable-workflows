@@ -18,8 +18,8 @@ on:
         description: "Opprett en GitHub Release for denne taggen"
         required: false
         default: "true"
-      floating_tags:
-        description: "Opprett floating tags"
+      floating_major_tag:
+        description: "Opprett floating major tag"
         required: false
         default: "true"
       full_tag:
@@ -42,8 +42,8 @@ on:
         type: string
         required: false
         default: "true"
-      floating_tags:
-        description: "Opprett floating tags"
+      floating_major_tag:
+        description: "Opprett floating major tag"
         type: string
         required: false
         default: "false"
@@ -64,7 +64,7 @@ jobs:
   tag:
     runs-on: ubuntu-latest
     env:
-      FLOATING_TAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.floating_tags || inputs.floating_tags }}
+      CREATE_FLOATING_MAJOR_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.floating_major_tag || inputs.floating_major_tag }}
       CREATE_FULL_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_tag || inputs.full_tag }}
     outputs:
       tag_name: ${{ steps.determine_tag.outputs.tag_name }}
@@ -106,7 +106,7 @@ jobs:
               echo "tag_name_full=" >> $GITHUB_OUTPUT
             fi
             echo "tag_name_minor=$MINOR_TAG" >> $GITHUB_OUTPUT
-            if [ "$FLOATING_TAGS" = "true" ]; then
+            if [ "$CREATE_FLOATING_MAJOR_TAG" = "true" ]; then
               echo "tag_name_major=$MAJOR_TAG" >> $GITHUB_OUTPUT
             else
               echo "tag_name_major=" >> $GITHUB_OUTPUT
@@ -116,7 +116,7 @@ jobs:
               echo "Ny tag (full): $FULL_TAG"
             fi
             echo "Ny tag (minor): $MINOR_TAG"
-            if [ "$FLOATING_TAGS" = "true" ]; then
+            if [ "$CREATE_FLOATING_MAJOR_TAG" = "true" ]; then
               echo "Ny tag (major): $MAJOR_TAG"
             fi
           else
@@ -144,7 +144,7 @@ jobs:
             git tag -f "$MINOR_TAG"
             git push -f origin "$MINOR_TAG"
           fi
-          if [ -n "$MAJOR_TAG" ] && [ "$FLOATING_TAGS" = "true" ]; then
+          if [ -n "$MAJOR_TAG" ] && [ "$CREATE_FLOATING_MAJOR_TAG" = "true" ]; then
             git tag -f "$MAJOR_TAG"
             git push -f origin "$MAJOR_TAG"
           fi
