@@ -105,4 +105,3 @@ jobs:
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
           echo "Build args: \`APP_VERSION=${{ needs.gitversion.outputs.version }}\`, \`GIT_SHA=${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "OCI labels: \`org.opencontainers.image.revision\`, \`org.opencontainers.image.source\`, \`org.opencontainers.image.version\`, \`org.opencontainers.image.created\`, \`org.opencontainers.artifact.created\`" >> $GITHUB_STEP_SUMMARY
