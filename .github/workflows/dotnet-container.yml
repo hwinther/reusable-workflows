@@ -97,7 +97,12 @@ jobs:
             --no-restore \
             -p:PublishProfile=DefaultContainer \
             -p:ContainerRegistry=${{ inputs.container_registry }} \
-            -p:ContainerRepository=${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+            -p:ContainerRepository=${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }} \
+            -p:ContainerVersion=${{ needs.gitversion.outputs.version }} \
+            -p:InformationalVersion=${{ needs.gitversion.outputs.version }} \
+            -p:SourceRevisionId=${{ github.sha }} \
+            -p:PublishRepositoryUrl=true \
+            -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}.git
 
       - name: Job summary
         env:
@@ -112,3 +117,4 @@ jobs:
             [ -z "$tag" ] && continue
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
+          echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${{ needs.gitversion.outputs.version }}\`, \`SourceRevisionId\` = \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

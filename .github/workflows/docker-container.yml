@@ -72,6 +72,9 @@ jobs:
           file: ${{ inputs.dockerfile }}
           push: true
           tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          build-args: |
+            APP_VERSION=${{ needs.gitversion.outputs.version }}
+            GIT_SHA=${{ github.sha }}
 
       - name: Job summary
         env:
@@ -86,3 +89,4 @@ jobs:
             [ -z "$tag" ] && continue
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
+          echo "Build args: \`APP_VERSION=${{ needs.gitversion.outputs.version }}\`, \`GIT_SHA=${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
