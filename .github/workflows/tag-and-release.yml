@@ -1,5 +1,7 @@
 # Lager tag og release basert på brukerinput eller automatisk versjonsøkning
 # Hvis navnet settes til auto så blir den nyeste taggen funnet i repoet økt med 1 på minor versjonen
+# Floating tag kan brukes men er mest nyttig i reusable workflow scenarioer
+# Full tag kan brukes for å opprette en full tag (v1.2.0) i tillegg til en minor tag (v1.2)
 name: "Opprett tag og release"
 
 on:
@@ -16,6 +18,14 @@ on:
         description: "Opprett en GitHub Release for denne taggen"
         required: false
         default: "true"
+      floating_tags:
+        description: "Opprett floating tags"
+        required: false
+        default: "true"
+      full_tag:
+        description: "Opprett full tag"
+        required: false
+        default: "false"
   workflow_call:
     inputs:
       tag_name:
@@ -32,6 +42,16 @@ on:
         type: string
         required: false
         default: "true"
+      floating_tags:
+        description: "Opprett floating tags"
+        type: string
+        required: false
+        default: "false"
+      full_tag:
+        description: "Opprett full tag"
+        type: string
+        required: false
+        default: "false"
     outputs:
       tag_name:
         description: "Navn på den opprettede taggen"
@@ -43,6 +63,9 @@ permissions:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    env:
+      FLOATING_TAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.floating_tags || inputs.floating_tags }}
+      CREATE_FULL_TAG: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.full_tag || inputs.full_tag }}
     outputs:
       tag_name: ${{ steps.determine_tag.outputs.tag_name }}
 
@@ -75,21 +98,34 @@ jobs:
             MINOR_TAG="v${MAJOR}.${MINOR}"
             MAJOR_TAG="v${MAJOR}"
 
-            echo "tag_name=$FULL_TAG" >> $GITHUB_OUTPUT
-            echo "tag_name_full=$FULL_TAG" >> $GITHUB_OUTPUT
+            if [ "$CREATE_FULL_TAG" = "true" ]; then
+              echo "tag_name=$FULL_TAG" >> $GITHUB_OUTPUT
+              echo "tag_name_full=$FULL_TAG" >> $GITHUB_OUTPUT
+            else
+              echo "tag_name=$MINOR_TAG" >> $GITHUB_OUTPUT
+              echo "tag_name_full=" >> $GITHUB_OUTPUT
+            fi
             echo "tag_name_minor=$MINOR_TAG" >> $GITHUB_OUTPUT
-            echo "tag_name_major=$MAJOR_TAG" >> $GITHUB_OUTPUT
+            if [ "$FLOATING_TAGS" = "true" ]; then
+              echo "tag_name_major=$MAJOR_TAG" >> $GITHUB_OUTPUT
+            else
+              echo "tag_name_major=" >> $GITHUB_OUTPUT
+            fi
 
-            echo "Ny tag (full): $FULL_TAG"
+            if [ "$CREATE_FULL_TAG" = "true" ]; then
+              echo "Ny tag (full): $FULL_TAG"
+            fi
             echo "Ny tag (minor): $MINOR_TAG"
-            echo "Ny tag (major): $MAJOR_TAG"
+            if [ "$FLOATING_TAGS" = "true" ]; then
+              echo "Ny tag (major): $MAJOR_TAG"
+            fi
           else
             echo "tag_name=$TAG_INPUT" >> $GITHUB_OUTPUT
             echo "tag_name_full=$TAG_INPUT" >> $GITHUB_OUTPUT
             echo "Bruker angitt tag: $TAG_INPUT"
           fi
 
-      - name: Opprett tag(er) ${{ steps.determine_tag.outputs.tag_name_full }}
+      - name: Opprett tag(er) ${{ steps.determine_tag.outputs.tag_name }}
         id: create_tag
         run: |
           git config user.name "${{ github.actor }}"
@@ -98,16 +134,17 @@ jobs:
           MINOR_TAG="${{ steps.determine_tag.outputs.tag_name_minor }}"
           MAJOR_TAG="${{ steps.determine_tag.outputs.tag_name_major }}"
 
-          # Always create the full tag
-          git tag "$FULL_TAG"
-          git push origin "$FULL_TAG"
+          if [ -n "$FULL_TAG" ]; then
+            git tag "$FULL_TAG"
+            git push origin "$FULL_TAG"
+          fi
 
           # If shorter tags are available (auto mode), create or move them to this commit
           if [ -n "$MINOR_TAG" ]; then
             git tag -f "$MINOR_TAG"
             git push -f origin "$MINOR_TAG"
           fi
-          if [ -n "$MAJOR_TAG" ]; then
+          if [ -n "$MAJOR_TAG" ] && [ "$FLOATING_TAGS" = "true" ]; then
             git tag -f "$MAJOR_TAG"
             git push -f origin "$MAJOR_TAG"
           fi
