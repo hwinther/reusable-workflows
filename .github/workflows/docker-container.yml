@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         default: ""
+      ref:
+        description: "Git reference, e.g. refs/heads/main or refs/tags/v1.0.0"
+        required: false
+        type: string
+        default: ${{ github.ref }}
 
 permissions:
   contents: read
@@ -54,6 +59,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

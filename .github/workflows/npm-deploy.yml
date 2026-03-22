@@ -27,6 +27,11 @@ on:
         type: string
         description: "Scope for pakken, f.eks. '@organisasjon'"
         default: ''
+      ref:
+        description: "Git reference, e.g. refs/heads/main or refs/tags/v1.0.0"
+        required: false
+        type: string
+        default: ${{ github.ref }}
 
 permissions:
   contents: read
@@ -41,6 +46,8 @@ jobs:
     steps:
       - name: Hent kode
         uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
 
       - uses: actions/setup-node@v6
         name: Sett opp Node
