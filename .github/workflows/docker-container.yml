@@ -65,6 +65,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - id: oci-labels
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
+
       - name: Build and push container to GHCR
         uses: docker/build-push-action@v7
         with:
@@ -75,6 +78,12 @@ jobs:
           build-args: |
             APP_VERSION=${{ needs.gitversion.outputs.version }}
             GIT_SHA=${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.gitversion.outputs.version }}
+            org.opencontainers.image.created=${{ steps.oci-labels.outputs.created }}
+            org.opencontainers.artifact.created=${{ steps.oci-labels.outputs.created }}
 
       - name: Job summary
         env:
@@ -90,3 +99,4 @@ jobs:
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
           echo "Build args: \`APP_VERSION=${{ needs.gitversion.outputs.version }}\`, \`GIT_SHA=${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "OCI labels: \`org.opencontainers.image.revision\`, \`org.opencontainers.image.source\`, \`org.opencontainers.image.version\`, \`org.opencontainers.image.created\`, \`org.opencontainers.artifact.created\`" >> $GITHUB_STEP_SUMMARY
