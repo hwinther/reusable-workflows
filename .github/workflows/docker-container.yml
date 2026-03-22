@@ -65,13 +65,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - id: docker-metadata
+      - name: Create docker metadata
+        id: docker-metadata
         uses: docker/metadata-action@v6
         with:
           images: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
-
-      - id: oci-labels
-        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_OUTPUT
 
       - name: Build and push container to GHCR
         uses: docker/build-push-action@v7
@@ -84,12 +82,7 @@ jobs:
           build-args: |
             APP_VERSION=${{ needs.gitversion.outputs.version }}
             GIT_SHA=${{ github.sha }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.version=${{ needs.gitversion.outputs.version }}
-            org.opencontainers.image.created=${{ steps.oci-labels.outputs.created }}
-            org.opencontainers.artifact.created=${{ steps.oci-labels.outputs.created }}
+          labels: ${{ steps.docker-metadata.outputs.labels }}
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@v4
