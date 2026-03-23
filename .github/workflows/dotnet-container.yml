@@ -95,7 +95,7 @@ jobs:
           dotnet publish ${{ inputs.project_file }} \
             -c Release \
             --no-restore \
-            -p:PublishProfile=DefaultContainer \
+            -t:PublishContainer \
             -p:ContainerRegistry=${{ inputs.container_registry }} \
             -p:ContainerRepository=${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }} \
             -p:ContainerVersion=${{ needs.gitversion.outputs.version }} \
