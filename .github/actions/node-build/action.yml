@@ -371,7 +371,36 @@ runs:
         exit 0
       fi
       echo "tests_ran=true" >> $GITHUB_OUTPUT
-      npm run coverage:ci
+
+      echo "::group::Tests (npm run coverage:ci)"
+      set +e
+      npm run coverage:ci > "$TEMP_DIR/tests.out" 2>&1
+      TEST_EXIT_CODE=$?
+      set -e
+      echo "Tests exit code: $TEST_EXIT_CODE"
+      echo "::endgroup::"
+
+      # Always expose failures in the PR comment (later steps may be skipped on failure).
+      if [ "$TEST_EXIT_CODE" -ne 0 ]; then
+        echo -e "\n::group::coverage:ci raw output (exit $TEST_EXIT_CODE)\n"
+        cat "$TEMP_DIR/tests.out"
+        echo "::endgroup::"
+
+        sed 's/\x1b\[[0-9;]*m//g' "$TEMP_DIR/tests.out" > "$TEMP_DIR/tests.out.nocolor" || true
+
+        echo "## ❌ coverage:ci failed (exit code: $TEST_EXIT_CODE)" > "$TEMP_DIR/test-output.md"
+        echo "" >> "$TEMP_DIR/test-output.md"
+        echo "First 200 lines of output:" >> "$TEMP_DIR/test-output.md"
+        echo "" >> "$TEMP_DIR/test-output.md"
+        echo "\`\`\`" >> "$TEMP_DIR/test-output.md"
+        sed -n '1,200p' "$TEMP_DIR/tests.out.nocolor" >> "$TEMP_DIR/test-output.md"
+        echo "\`\`\`" >> "$TEMP_DIR/test-output.md"
+      fi
+
+      # Fail the step (and thus the PR build) if tests failed.
+      if [ "$TEST_EXIT_CODE" -ne 0 ]; then
+        exit "$TEST_EXIT_CODE"
+      fi
 
   - name: Generate test run report
     id: test-markdown-report
@@ -521,6 +550,7 @@ runs:
       [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/lint.md ] && cat $TEMP_DIR/lint.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/test-output.md ] && cat $TEMP_DIR/test-output.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/test-results.md ] && cat $TEMP_DIR/test-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
