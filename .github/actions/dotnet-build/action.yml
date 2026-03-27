@@ -28,6 +28,10 @@ inputs:
     required: false
     description: "Enable NuGet package caching"
     default: "true"
+  extra_command:
+    required: false
+    description: "Extra command to run after dotnet build"
+    default: ""
 
 outputs:
   pr-comment:
@@ -200,6 +204,19 @@ runs:
 
       if [ -s $TEMP_DIR/build.err ]
       then
+        exit 1
+      fi
+
+  - name: Run extra command
+    if: steps.dotnet-restore.outcome == 'success' && inputs.extra_command != ''
+    shell: bash
+    working-directory: ${{ inputs.working_directory }}
+    run: |
+      echo "::group::Extra command"
+      ${{ inputs.extra_command }}
+      echo "::endgroup::"
+      if [ $? -ne 0 ]; then
+        echo "::error::Extra command failed. Check the PR comment or job summary for details."
         exit 1
       fi
 

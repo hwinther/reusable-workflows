@@ -34,6 +34,11 @@ on:
         type: string
         description: "Package scope, e.g. '@org'"
         default: ''
+      node_extra_command:
+        required: false
+        type: string
+        description: "Extra command to run after node build"
+        default: ""
       dotnet_enabled:
         required: false
         type: boolean
@@ -67,6 +72,11 @@ on:
         required: false
         type: string
         description: "Name of the extra NuGet source, e.g. 'feed'"
+        default: ""
+      dotnet_extra_command:
+        required: false
+        type: string
+        description: "Extra command to run after dotnet build"
         default: ""
 
 permissions:
@@ -162,6 +172,7 @@ jobs:
           working_directory: ${{ inputs.node_working_directory }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           scope: ${{ inputs.node_scope }}
+          extra_command: ${{ inputs.node_extra_command }}
 
       - name: "Create or update PR comment for node"
         uses: im-open/update-pr-comment@v1.2.2
@@ -191,6 +202,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
+          extra_command: ${{ inputs.dotnet_extra_command }}
 
       - name: "Create or update PR comment for dotnet"
         uses: im-open/update-pr-comment@v1.2.2

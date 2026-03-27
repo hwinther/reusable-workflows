@@ -15,6 +15,10 @@ inputs:
     required: false 
     description: "Package scope, e.g. '@org'"
     default: ''
+  extra_command:
+    required: false
+    description: "Extra command to run after node build"
+    default: ""
 
 outputs:
   pr-comment:
@@ -272,6 +276,19 @@ runs:
       fi
       echo "::endgroup::"
       echo "✅ Build succeeded"
+
+  - name: Run extra command
+    if: steps.dependency-install.outcome == 'success' && inputs.extra_command != ''
+    shell: bash
+    working-directory: ${{ inputs.working_directory }}
+    run: |
+      echo "::group::Extra command"
+      ${{ inputs.extra_command }}
+      echo "::endgroup::"
+      if [ $? -ne 0 ]; then
+        echo "::error::Extra command failed. Check the PR comment or job summary for details."
+        exit 1
+      fi
 
   - name: Lint
     if: steps.dependency-install.outcome == 'success'
