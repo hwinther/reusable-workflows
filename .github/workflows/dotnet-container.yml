@@ -37,6 +37,13 @@ on:
         required: false
         type: string
         default: ""
+    outputs:
+      container_image_tags:
+        description: "Full image refs pushed (registry/name:tag, comma-separated)"
+        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+      image_digest:
+        description: "OCI manifest digest for the pushed image (sha256:...)"
+        value: ${{ jobs['build-and-push'].outputs.image_digest }}
 
 permissions:
   contents: read
@@ -66,6 +73,8 @@ jobs:
     name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
     needs: [prepare-repository-name, gitversion]
     runs-on: ubuntu-latest
+    outputs:
+      image_digest: ${{ steps.image-digest.outputs.digest }}
     defaults:
       run:
         working-directory: ${{ inputs.solution_path }}
@@ -112,7 +121,9 @@ jobs:
       - name: Resolve pushed image digest
         id: image-digest
         run: |
-          DIGEST=$(docker buildx imagetools inspect "${{ needs.gitversion.outputs.deploy_tag }}" --format '{{printf "%s" .Manifest.Digest}}')
+          REF="${{ needs.gitversion.outputs.deploy_tag }}"
+          DIGEST=$(docker buildx imagetools inspect "$REF" | awk '/^Digest:[[:space:]]+/ {print $2; exit}')
+          [ -n "$DIGEST" ] || { echo "::error::Failed to resolve image digest for $REF"; exit 1; }
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
       - name: Generate artifact attestation
