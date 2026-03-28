@@ -37,10 +37,19 @@ on:
         required: false
         type: string
         default: ""
+    outputs:
+      container_image_tags:
+        description: "Full image refs pushed (registry/name:tag, comma-separated)"
+        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+      image_digest:
+        description: "OCI manifest digest for the pushed image (sha256:...)"
+        value: ${{ jobs['build-and-push'].outputs.image_digest }}
 
 permissions:
   contents: read
   packages: write
+  id-token: write
+  attestations: write
 
 jobs:
   prepare-repository-name:
@@ -64,6 +73,8 @@ jobs:
     name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
     needs: [prepare-repository-name, gitversion]
     runs-on: ubuntu-latest
+    outputs:
+      image_digest: ${{ steps.image-digest.outputs.digest }}
     defaults:
       run:
         working-directory: ${{ inputs.solution_path }}
@@ -85,6 +96,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
       - name: Restore
         run: dotnet restore --locked-mode ${{ inputs.solution_file }}
 
@@ -104,6 +118,21 @@ jobs:
             -p:PublishRepositoryUrl=true \
             -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}.git
 
+      - name: Resolve pushed image digest
+        id: image-digest
+        run: |
+          REF="${{ needs.gitversion.outputs.deploy_tag }}"
+          DIGEST=$(docker buildx imagetools inspect "$REF" | awk '/^Digest:[[:space:]]+/ {print $2; exit}')
+          [ -n "$DIGEST" ] || { echo "::error::Failed to resolve image digest for $REF"; exit 1; }
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Generate artifact attestation
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+          subject-digest: ${{ steps.image-digest.outputs.digest }}
+          push-to-registry: true
+
       - name: Job summary
         env:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
@@ -117,4 +146,6 @@ jobs:
             [ -z "$tag" ] && continue
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image digest: \`${{ steps.image-digest.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${{ needs.gitversion.outputs.version }}\`, \`SourceRevisionId\` = \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
