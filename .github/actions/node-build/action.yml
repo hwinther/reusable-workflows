@@ -39,7 +39,7 @@ runs:
       TEMP_DIR=$(mktemp -d)
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
-  - uses: actions/setup-node@v4
+  - uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
     name: Set up Node
     with:
       node-version: ${{ inputs.node_version }}
@@ -486,14 +486,14 @@ runs:
       echo "::endgroup::"
 
   - name: Upload test results
-    uses: actions/upload-artifact@v7
+    uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
     if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true' && !cancelled()
     with:
       name: coverage
       path: ${{ inputs.working_directory }}/coverage
 
   - name: Test reporter
-    uses: dorny/test-reporter@v2
+    uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
     id: test-reporter
     if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true'
     with:
@@ -504,12 +504,12 @@ runs:
 
   # - name: 'Report Coverage'
   #   if: always() 
-  #   uses: davelosert/vitest-coverage-report-action@v2
+  #   uses: davelosert/vitest-coverage-report-action@2500dafcee7dd64f85ab689c0b83798a8359770e # v2.9.3
   #   with:
   #     json-summary-path: "${{ inputs.working_directory }}/coverage/coverage-final.json"
 
   - name: Code Coverage Report
-    uses: irongut/CodeCoverageSummary@v1.3.0
+    uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0
     if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true'
     with:
       filename: "${{ inputs.working_directory }}/coverage/cobertura-coverage.xml"
