@@ -39,6 +39,11 @@ on:
         type: string
         description: "Extra command to run after node build"
         default: ""
+      node_test_enabled:
+        required: false
+        type: boolean
+        description: "Run tests and generate coverage report"
+        default: true
       dotnet_enabled:
         required: false
         type: boolean
@@ -81,7 +86,7 @@ on:
       dotnet_test_enabled:
         required: false
         type: boolean
-        description: "Run tests"
+        description: "Run tests and generate coverage report"
         default: true
       dotnet_inspect_code_enabled:
         required: false
@@ -188,6 +193,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           scope: ${{ inputs.node_scope }}
           extra_command: ${{ inputs.node_extra_command }}
+          test: ${{ inputs.node_test_enabled }}
 
       - name: "Create or update PR comment for node"
         uses: im-open/update-pr-comment@v1.2.2

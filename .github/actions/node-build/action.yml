@@ -19,6 +19,10 @@ inputs:
     required: false
     description: "Extra command to run after node build"
     default: ""
+  test:
+    required: false
+    description: "Run tests"
+    default: "true"
 
 outputs:
   pr-comment:
@@ -379,6 +383,7 @@ runs:
 
   - name: Run tests
     id: test-coverage
+    if: steps.dependency-install.outcome == 'success' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
@@ -421,7 +426,7 @@ runs:
 
   - name: Generate test run report
     id: test-markdown-report
-    if: steps.test-coverage.outputs.tests_ran == 'true'
+    if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -482,7 +487,7 @@ runs:
 
   - name: Upload test results
     uses: actions/upload-artifact@v7
-    if: steps.test-coverage.outputs.tests_ran == 'true' && !cancelled()
+    if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true' && !cancelled()
     with:
       name: coverage
       path: ${{ inputs.working_directory }}/coverage
@@ -490,7 +495,7 @@ runs:
   - name: Test reporter
     uses: dorny/test-reporter@v2
     id: test-reporter
-    if: steps.test-coverage.outputs.tests_ran == 'true'
+    if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true'
     with:
       name: "Node tests"
       path: "${{ inputs.working_directory }}/coverage/junit-report.xml"
@@ -505,7 +510,7 @@ runs:
 
   - name: Code Coverage Report
     uses: irongut/CodeCoverageSummary@v1.3.0
-    if: steps.test-coverage.outputs.tests_ran == 'true'
+    if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true'
     with:
       filename: "${{ inputs.working_directory }}/coverage/cobertura-coverage.xml"
       badge: true
@@ -519,7 +524,7 @@ runs:
   - name: Move code coverage report to temp folder
     shell: bash
     working-directory: ${{ inputs.working_directory }}
-    if: steps.test-coverage.outputs.tests_ran == 'true'
+    if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true'
     run: |
       echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
       echo "" >> $TEMP_DIR/code-coverage-results.md
@@ -567,7 +572,7 @@ runs:
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
 
   - name: Fail workflow if one or more tests failed
-    if: steps.test-reporter.conclusion == 'failure'
+    if: steps.test-reporter.conclusion == 'failure' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |

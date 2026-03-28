@@ -395,7 +395,7 @@ runs:
       exit 1
 
   - name: Fail workflow if one or more tests failed
-    if: inputs.test == 'true' && steps.run-tests.outcome == 'failure'
+    if: steps.run-tests.outcome == 'failure' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
