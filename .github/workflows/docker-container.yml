@@ -115,4 +115,6 @@ jobs:
             [ -z "$tag" ] && continue
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image digest: \`${{ steps.docker-push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Build args: \`APP_VERSION=${{ needs.gitversion.outputs.version }}\`, \`GIT_SHA=${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

@@ -146,4 +146,6 @@ jobs:
             [ -z "$tag" ] && continue
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image digest: \`${{ steps.image-digest.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${{ needs.gitversion.outputs.version }}\`, \`SourceRevisionId\` = \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
