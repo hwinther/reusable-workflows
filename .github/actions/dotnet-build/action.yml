@@ -232,7 +232,7 @@ runs:
     run: |
       echo "::group::Test"
       TEST_EXIT_CODE=0
-      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
+      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-trx 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
       echo "::endgroup::"
 
       # Detect MSBuild "Unknown switch" errors that typically indicate
@@ -278,9 +278,10 @@ runs:
   - name: Generate test report
     uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
     id: test-reporter
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     with:
       name: "Testreport"
-      path: "**/TestResults/test-results.trx"
+      path: "**/TestResults/*.trx"
       reporter: dotnet-trx
       fail-on-error: false
 
