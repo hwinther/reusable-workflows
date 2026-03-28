@@ -53,7 +53,7 @@ runs:
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
   - name: Install .NET
-    uses: actions/setup-dotnet@v5
+    uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
     with:
       dotnet-version: ${{ inputs.dotnet_version }}
       source-url: ${{ inputs.primary_nuget_source }}
@@ -275,17 +275,17 @@ runs:
       exit $TEST_EXIT_CODE
     continue-on-error: true
 
-  # - name: Generate test report
-  #   uses: dorny/test-reporter@v2
-  #   id: test-reporter
-  #   with:
-  #     name: "Testreport"
-  #     path: "**/TestResults/test-results.trx"
-  #     reporter: dotnet-trx
-  #     fail-on-error: false
+  - name: Generate test report
+    uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
+    id: test-reporter
+    with:
+      name: "Testreport"
+      path: "**/TestResults/test-results.trx"
+      reporter: dotnet-trx
+      fail-on-error: false
 
   - name: Code coverage report
-    uses: irongut/CodeCoverageSummary@v1.3.0
+    uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     with:
       filename: "**/coverage.cobertura.xml"
@@ -331,7 +331,7 @@ runs:
       fi
 
   - name: Upload coverage reports
-    uses: actions/upload-artifact@v4
+    uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true' && steps.reportgenerator.outcome == 'success'
     with:
       name: coverage-report
