@@ -526,14 +526,6 @@ runs:
       cat "${GITHUB_WORKSPACE}/code-coverage-results.md" >> $TEMP_DIR/code-coverage-results.md
       rm -f "${GITHUB_WORKSPACE}/code-coverage-results.md"
 
-  - name: Create Todo Comments
-    uses: gkampitakis/github-action-todo-commenter@v1
-    if: always()
-    with:
-      github-token: ${{ inputs.github_token }}
-      review-message: "Please take a look :eyes:"
-      tags: "TODO:,FIXME:,BUG:"
-
   - name: Check for uncommitted changes
     shell: bash
     working-directory: ${{ inputs.working_directory }}
