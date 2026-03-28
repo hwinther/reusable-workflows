@@ -67,7 +67,7 @@ jobs:
 
       - name: Avgjør pakkeversjon og container image tag
         id: gitversion
-        if: ${{ github.event.inputs.tag_name == 'auto' }}
+        if: github.event.inputs.tag_name == 'auto'
         uses: hwinther/reusable-workflows/.github/actions/gitversion@v1
 
       - name: Bestem tag navn
@@ -136,7 +136,7 @@ jobs:
       - name: Opprett release ${{ steps.determine_tag.outputs.tag_name }}
         id: create_release
         uses: softprops/action-gh-release@v2
-        if: ${{ github.event.inputs.create_release == 'true' }}
+        if: github.event.inputs.create_release == 'true'
         with:
           tag_name: ${{ steps.determine_tag.outputs.tag_name }}
           draft: false
@@ -148,7 +148,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Vis lenke til release ${{ steps.determine_tag.outputs.tag_name }}
-        if: ${{ github.event.inputs.create_release == 'true' }}
+        if: github.event.inputs.create_release == 'true'
         run: |
           echo "## ✅ Release opprettet" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

@@ -32,6 +32,10 @@ inputs:
     required: false
     description: "Extra command to run after dotnet build"
     default: ""
+  test:
+    required: false
+    description: "Run tests"
+    default: "true"
 
 outputs:
   pr-comment:
@@ -61,7 +65,7 @@ runs:
   - name: Add extra NuGet source
     shell: bash
     working-directory: ${{ inputs.working_directory }}
-    if: ${{ inputs.extra_nuget_source != '' }}
+    if: inputs.extra_nuget_source != ''
     run: |
       dotnet nuget remove source ${{ inputs.extra_nuget_source_name }} || true
       dotnet nuget add source ${{ inputs.extra_nuget_source }} --name ${{ inputs.extra_nuget_source_name }} --username az --password ${{ inputs.github_token }} --store-password-in-clear-text
@@ -220,17 +224,9 @@ runs:
         exit 1
       fi
 
-  # - name: Create TODO comments
-  #   uses: gkampitakis/github-action-todo-commenter@v1
-  #   if: ${{ github.event_name == 'pull_request' }}
-  #   with:
-  #     github-token: ${{ secrets.GITHUB_TOKEN }}
-  #     review-message: "Please take a look :eyes:"
-  #     tags: "TODO:,FIXME:,BUG:"
-
   - name: Run tests
     id: run-tests
-    if: steps.dotnet-restore.outcome == 'success'
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
@@ -290,7 +286,7 @@ runs:
 
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@v1.3.0
-    if: steps.dotnet-restore.outcome == 'success'
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     with:
       filename: "**/coverage.cobertura.xml"
       badge: true
@@ -304,7 +300,7 @@ runs:
 
   - name: Move code coverage report to temp folder
     shell: bash
-    if: steps.dotnet-restore.outcome == 'success'
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     run: |
       echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
       echo "" >> $TEMP_DIR/code-coverage-results.md
@@ -314,7 +310,7 @@ runs:
   - name: Generate ReportGenerator coverage report
     id: reportgenerator
     shell: bash
-    if: steps.dotnet-restore.outcome == 'success'
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     continue-on-error: true
     run: |
       COVERAGE_REPORT_DIR="$TEMP_DIR/coverage-report"
@@ -326,7 +322,7 @@ runs:
 
   - name: Copy ReportGenerator summary to temp folder
     shell: bash
-    if: steps.dotnet-restore.outcome == 'success'
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     run: |
       if [ -f "$TEMP_DIR/coverage-report/SummaryGithub.md" ]; then
         echo "## 📊 Coverage report (ReportGenerator)" > $TEMP_DIR/reportgenerator-summary.md
@@ -336,7 +332,7 @@ runs:
 
   - name: Upload coverage reports
     uses: actions/upload-artifact@v4
-    if: steps.dotnet-restore.outcome == 'success' && steps.reportgenerator.outcome == 'success'
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true' && steps.reportgenerator.outcome == 'success'
     with:
       name: coverage-report
       path: ${{ steps.reportgenerator.outputs.report-path }}
@@ -399,7 +395,7 @@ runs:
       exit 1
 
   - name: Fail workflow if one or more tests failed
-    if: steps.run-tests.outcome == 'failure'
+    if: steps.run-tests.outcome == 'failure' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |

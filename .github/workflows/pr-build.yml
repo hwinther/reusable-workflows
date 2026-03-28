@@ -39,6 +39,11 @@ on:
         type: string
         description: "Extra command to run after node build"
         default: ""
+      node_test_enabled:
+        required: false
+        type: boolean
+        description: "Run tests and generate coverage report"
+        default: true
       dotnet_enabled:
         required: false
         type: boolean
@@ -78,6 +83,21 @@ on:
         type: string
         description: "Extra command to run after dotnet build"
         default: ""
+      dotnet_test_enabled:
+        required: false
+        type: boolean
+        description: "Run tests and generate coverage report"
+        default: true
+      dotnet_inspect_code_enabled:
+        required: false
+        type: boolean
+        description: "Run jetbrains inspect code"
+        default: true
+      todo_comment_enabled:
+        required: false
+        type: boolean
+        description: "Create TODO PR comment"
+        default: true
 
 permissions:
   contents: read
@@ -88,7 +108,7 @@ permissions:
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     outputs:
       node_changes: ${{ steps.node-check.outputs.changes_detected || 'false' }}
       dotnet_changes: ${{ steps.dotnet-check.outputs.changes_detected || 'false' }}
@@ -112,7 +132,7 @@ jobs:
 
       - name: Check for frontend changes
         id: node-check
-        if: ${{ inputs.node_enabled }}
+        if: inputs.node_enabled
         run: |
           if [ -z "${{ inputs.node_changes_regex }}" ]; then
             PATTERN="^${{ inputs.node_working_directory }}/"
@@ -134,7 +154,7 @@ jobs:
 
       - name: Check for backend changes
         id: dotnet-check
-        if: ${{ inputs.dotnet_enabled }}
+        if: inputs.dotnet_enabled
         run: |
           if [ -z "${{ inputs.dotnet_changes_regex }}" ]; then
             PATTERN="^${{ inputs.dotnet_working_directory }}/"
@@ -173,6 +193,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           scope: ${{ inputs.node_scope }}
           extra_command: ${{ inputs.node_extra_command }}
+          test: ${{ inputs.node_test_enabled }}
 
       - name: "Create or update PR comment for node"
         uses: im-open/update-pr-comment@v1.2.2
@@ -203,6 +224,7 @@ jobs:
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
           extra_command: ${{ inputs.dotnet_extra_command }}
+          test: ${{ inputs.dotnet_test_enabled }}
 
       - name: "Create or update PR comment for dotnet"
         uses: im-open/update-pr-comment@v1.2.2
@@ -285,3 +307,57 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: "build-results"
           comment-content: "## ✅ No relevant changes found for build or lint."
+
+  dotnet-inspect-code:
+    needs: detect-changes
+    if: inputs.dotnet_inspect_code_enabled && needs.detect-changes.outputs.dotnet_changes == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Restore and build
+        id: dotnet-restore-build
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v1
+        with:
+          dotnet_version: ${{ inputs.dotnet_version }}
+          working_directory: ${{ inputs.dotnet_working_directory }}
+          solution_file: ${{ inputs.dotnet_solution_file }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
+          extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
+          test: "false"
+
+      - name: Inspect code
+        uses: muno92/resharper_inspectcode@3a8a8fc8fc48c0ca9eb1c7e69f887a5068bdaba8 # v1.16.0
+        with:
+          workingDirectory: ${{ inputs.dotnet_working_directory }}
+          solutionPath: ${{ inputs.dotnet_solution_file }}
+          dotnetVersion: ${{ inputs.dotnet_version }}
+          solutionWideAnalysis: true
+          minimumReportSeverity: warning
+          failOnIssue: false
+          minimumSeverity: error
+          include: |
+            **.cs
+          ignoreIssueType: NotAccessedPositionalProperty.Global,RedundantNameQualifier
+
+  todo-comments:
+    needs: detect-changes
+    if: inputs.todo_comment_enabled && (needs.detect-changes.outputs.dotnet_changes == 'true' || needs.detect-changes.outputs.node_changes == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Create TODO comments
+        uses: gkampitakis/github-action-todo-commenter@06c49183cf11bc8d6e78ace915dce20649cf1ce7 # v1.3.0
+        if: github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          review-message: "Please take a look :eyes:"
+          tags: "TODO:,FIXME:,BUG:"
