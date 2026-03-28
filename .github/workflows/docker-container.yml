@@ -24,6 +24,13 @@ on:
         required: false
         type: string
         default: ""
+    outputs:
+      container_image_tags:
+        description: "Full image refs pushed (registry/name:tag, comma-separated)"
+        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+      image_digest:
+        description: "OCI manifest digest for the pushed image (sha256:...)"
+        value: ${{ jobs['build-and-push'].outputs.image_digest }}
 
 permissions:
   contents: read
@@ -53,6 +60,8 @@ jobs:
     name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
     needs: [prepare-repository-name, gitversion]
     runs-on: ubuntu-latest
+    outputs:
+      image_digest: ${{ steps.docker-push.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
