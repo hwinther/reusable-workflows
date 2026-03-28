@@ -109,6 +109,25 @@ jobs:
             echo "Bruker angitt tag: $TAG_INPUT"
           fi
 
+      # I auto-modus: unngå ny tag/release på samme commit som siste semver-tag (ingen nye commits).
+      - name: Sjekk nye commits siden siste tag (auto)
+        if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name == 'auto') || (github.event_name == 'workflow_call' && inputs.tag_name == 'auto')
+        shell: bash
+        run: |
+          set -euo pipefail
+          LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)
+          if [ -z "$LATEST" ]; then
+            echo "Ingen eksisterende semver-tag (vX.Y.Z) — fortsetter."
+            exit 0
+          fi
+          HEAD_SHA=$(git rev-parse HEAD)
+          TAG_SHA=$(git rev-parse "$LATEST^{commit}")
+          if [ "$HEAD_SHA" = "$TAG_SHA" ]; then
+            echo "::error::Ingen nye commits siden siste tag ($LATEST). HEAD og taggen peker på samme commit. Avbryter for å unngå duplikat-tag og -release."
+            exit 1
+          fi
+          echo "OK: Det finnes commits etter $LATEST (HEAD er ikke lik taggens commit)."
+
       - name: Opprett tag(er) ${{ steps.determine_tag.outputs.tag_name }}
         id: create_tag
         run: |
