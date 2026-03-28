@@ -65,7 +65,7 @@ runs:
   - name: Add extra NuGet source
     shell: bash
     working-directory: ${{ inputs.working_directory }}
-    if: ${{ inputs.extra_nuget_source != '' }}
+    if: inputs.extra_nuget_source != ''
     run: |
       dotnet nuget remove source ${{ inputs.extra_nuget_source_name }} || true
       dotnet nuget add source ${{ inputs.extra_nuget_source }} --name ${{ inputs.extra_nuget_source_name }} --username az --password ${{ inputs.github_token }} --store-password-in-clear-text
