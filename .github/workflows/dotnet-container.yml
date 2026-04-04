@@ -103,7 +103,7 @@ jobs:
       - name: Restore
         run: dotnet restore --locked-mode ${{ inputs.solution_file }}
 
-      - name: Publish container to GHCR
+      - name: Publish container to archive (scan gate, no registry push)
         env:
           ContainerImageTags: ${{ needs.gitversion.outputs.image_tags }}
         run: |
@@ -111,13 +111,49 @@ jobs:
             -c Release \
             --no-restore \
             -t:PublishContainer \
-            -p:ContainerRegistry=${{ inputs.container_registry }} \
+            -p:ContainerArchiveOutputPath=${{ runner.temp }}/container-image.tar.gz \
             -p:ContainerRepository=${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }} \
             -p:ContainerVersion=${{ needs.gitversion.outputs.version }} \
             -p:InformationalVersion=${{ needs.gitversion.outputs.version }} \
             -p:SourceRevisionId=${{ github.sha }} \
             -p:PublishRepositoryUrl=true \
             -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}.git
+
+      - name: Load image from archive (local only until scan passes)
+        id: load-image
+        env:
+          ARCHIVE: ${{ runner.temp }}/container-image.tar.gz
+        run: |
+          set -euo pipefail
+          mapfile -t loaded < <(docker load -i "$ARCHIVE" | sed -n 's/^Loaded image: //p')
+          [ "${#loaded[@]}" -ge 1 ] || { echo "::error::docker load produced no image lines"; exit 1; }
+          echo "ref=${loaded[0]}" >> $GITHUB_OUTPUT
+
+      - name: Generate SBOM for container image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.load-image.outputs.ref }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/container-image.spdx.json
+          artifact-name: container-image.spdx.json
+
+      - name: Vulnerability scan (Grype)
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: ${{ runner.temp }}/container-image.spdx.json
+
+      - name: Tag for GHCR and push
+        env:
+          CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          SRC: ${{ steps.load-image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          echo "$CONTAINER_TAGS" | tr ',' '\n' | while read -r dest; do
+            dest=$(echo "$dest" | xargs)
+            [ -z "$dest" ] && continue
+            docker tag "$SRC" "$dest"
+            docker push "$dest"
+          done
 
       - name: Resolve pushed image digest
         id: image-digest
@@ -133,21 +169,6 @@ jobs:
           subject-name: ghcr.io/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
           subject-digest: ${{ steps.image-digest.outputs.digest }}
           push-to-registry: true
-
-      - name: Generate SBOM for container image
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          image: ghcr.io/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.image-digest.outputs.digest }}
-          registry-username: ${{ github.actor }}
-          registry-password: ${{ secrets.GITHUB_TOKEN }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/container-image.spdx.json
-          artifact-name: container-image.spdx.json
-
-      - name: Vulnerability scan (Grype)
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
-        with:
-          sbom: ${{ runner.temp }}/container-image.spdx.json
 
       - name: Job summary
         env:
