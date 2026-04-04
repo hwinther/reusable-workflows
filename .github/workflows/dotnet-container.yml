@@ -37,6 +37,31 @@ on:
         required: false
         type: string
         default: ""
+      grype_scan_enabled:
+        description: "Run Anchore Grype vulnerability scan before push (SBOM is still generated)"
+        required: false
+        type: boolean
+        default: true
+      grype_severity_cutoff:
+        description: "Grype severity-cutoff (fail on this level and above): negligible, low, medium, high, critical"
+        required: false
+        type: string
+        default: high
+      grype_only_fixed:
+        description: "Grype only-fixed: only report (and fail on) vulnerabilities that have a fix available"
+        required: false
+        type: boolean
+        default: true
+      grype_fail_build:
+        description: "Grype fail-build: fail the job when vulnerabilities meet severity-cutoff (false = report/SARIF only)"
+        required: false
+        type: boolean
+        default: true
+      cosign_sign_enabled:
+        description: "Sign the pushed image digest with cosign (keyless / GitHub OIDC); signatures are stored in the registry"
+        required: false
+        type: boolean
+        default: true
     outputs:
       container_image_tags:
         description: "Full image refs pushed (registry/name:tag, comma-separated)"
@@ -50,6 +75,8 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  actions: write
+  security-events: write
 
 jobs:
   prepare-repository-name:
@@ -102,7 +129,7 @@ jobs:
       - name: Restore
         run: dotnet restore --locked-mode ${{ inputs.solution_file }}
 
-      - name: Publish container to GHCR
+      - name: Publish container to archive (scan gate, no registry push)
         env:
           ContainerImageTags: ${{ needs.gitversion.outputs.image_tags }}
         run: |
@@ -110,13 +137,89 @@ jobs:
             -c Release \
             --no-restore \
             -t:PublishContainer \
-            -p:ContainerRegistry=${{ inputs.container_registry }} \
+            -p:ContainerArchiveOutputPath=${{ runner.temp }}/container-image.tar.gz \
             -p:ContainerRepository=${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }} \
             -p:ContainerVersion=${{ needs.gitversion.outputs.version }} \
             -p:InformationalVersion=${{ needs.gitversion.outputs.version }} \
             -p:SourceRevisionId=${{ github.sha }} \
             -p:PublishRepositoryUrl=true \
             -p:RepositoryUrl=${{ github.server_url }}/${{ github.repository }}.git
+
+      - name: Load image from archive (local only until scan passes)
+        id: load-image
+        env:
+          ARCHIVE: ${{ runner.temp }}/container-image.tar.gz
+        run: |
+          set -euo pipefail
+          mapfile -t loaded < <(docker load -i "$ARCHIVE" | sed -n 's/^Loaded image: //p')
+          [ "${#loaded[@]}" -ge 1 ] || { echo "::error::docker load produced no image lines"; exit 1; }
+          echo "ref=${loaded[0]}" >> $GITHUB_OUTPUT
+
+      - name: Generate SBOM for container image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ steps.load-image.outputs.ref }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/container-image.spdx.json
+          artifact-name: container-image.spdx.json
+
+      - name: Vulnerability scan (Grype)
+        id: grype-scan
+        if: ${{ inputs.grype_scan_enabled }}
+        continue-on-error: true
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: ${{ runner.temp }}/container-image.spdx.json
+          output-format: sarif
+          output-file: ${{ runner.temp }}/grype-results.sarif
+          severity-cutoff: ${{ inputs.grype_severity_cutoff }}
+          only-fixed: ${{ inputs.grype_only_fixed }}
+          fail-build: ${{ inputs.grype_fail_build }}
+
+      - name: Upload Grype SARIF to Code Scanning
+        if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
+        uses: github/codeql-action/upload-sarif@c10b8064de6f491fea524254123dbe5e09572f13 # v4.35.1
+        with:
+          sarif_file: ${{ runner.temp }}/grype-results.sarif
+          category: grype-container-${{ inputs.container_image_name_postfix }}
+          wait-for-processing: false
+
+      - name: Grype Code Scanning link (job summary)
+        if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
+        run: |
+          ENC=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote_plus('is:open branch:' + os.environ['BRANCH'] + ' '))")
+          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning?query=${ENC}"
+          {
+            echo "### Grype / Code scanning"
+            echo ""
+            echo "[View open code scanning alerts for branch \`${BRANCH}\`](${URL})"
+            echo ""
+            echo "Uploaded SARIF category: \`grype-container-${IMAGE_POSTFIX}\`. Alerts can take a short time to appear after upload."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce Grype vulnerability gate
+        if: ${{ inputs.grype_scan_enabled && inputs.grype_fail_build && steps.grype-scan.outcome == 'failure' }}
+        env:
+          IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
+        run: |
+          echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${IMAGE_POSTFIX}) or the Grype step log."
+          exit 1
+
+      - name: Tag for GHCR and push
+        env:
+          CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          SRC: ${{ steps.load-image.outputs.ref }}
+        run: |
+          set -euo pipefail
+          echo "$CONTAINER_TAGS" | tr ',' '\n' | while read -r dest; do
+            dest=$(echo "$dest" | xargs)
+            [ -z "$dest" ] && continue
+            docker tag "$SRC" "$dest"
+            docker push "$dest"
+          done
 
       - name: Resolve pushed image digest
         id: image-digest
@@ -133,9 +236,40 @@ jobs:
           subject-digest: ${{ steps.image-digest.outputs.digest }}
           push-to-registry: true
 
+      - name: Install Cosign
+        if: ${{ inputs.cosign_sign_enabled }}
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Sign container image (cosign, keyless)
+        if: ${{ inputs.cosign_sign_enabled }}
+        env:
+          DIGEST: ${{ steps.image-digest.outputs.digest }}
+          CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+        run: |
+          set -euo pipefail
+          images=""
+          while IFS= read -r tag; do
+            tag=$(echo "$tag" | xargs)
+            [ -z "$tag" ] && continue
+            if [ -z "$images" ]; then
+              images="${tag}@${DIGEST}"
+            else
+              images="${images} ${tag}@${DIGEST}"
+            fi
+          done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
+          [ -n "$images" ] || { echo "::error::No image refs to sign"; exit 1; }
+          echo "Signing images: ${images}"
+          cosign sign --yes ${images}
+
       - name: Job summary
         env:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.image-digest.outputs.digest }}
+          COSIGN_CERT_IDENTITY: https://github.com/${{ github.workflow_ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          IMAGE_DIGEST: ${{ steps.image-digest.outputs.digest }}
+          APP_VERSION: ${{ needs.gitversion.outputs.version }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -147,5 +281,37 @@ jobs:
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Image digest: \`${{ steps.image-digest.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${{ needs.gitversion.outputs.version }}\`, \`SourceRevisionId\` = \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Image digest: \`${IMAGE_DIGEST}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${APP_VERSION}\`, \`SourceRevisionId\` = \`${GIT_SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Verify digest, signature, and attestation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "GHCR may list several manifests in one package (image, cosign \`sha256-…\` signature tags, build attestations). They refer to the **same** image identity via digest:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Immutable reference: \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**cosign** (keyless: the certificate identifies **this reusable workflow**, not the consumer repo. Pin consumers with \`uses: …/dotnet-container.yml@v1\` so verification can target \`@refs/tags/v1\`.):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- This run: \`${WORKFLOW_REF}\` → identity \`${COSIGN_CERT_IDENTITY}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verify **this exact run** (authenticate to GHCR if prompted):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity \"${COSIGN_CERT_IDENTITY}\" \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Policy-style verify when consumers use the floating **v1** tag (any org/repo hosting this workflow):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp '^https://github.com/[^/]+/[^/]+/\\.github/workflows/dotnet-container\\.yml@refs/tags/v1\$' \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If verification fails, add \`--verbose\` and align \`--certificate-identity\` / \`-regexp\` with the \`Issued certificate\` line." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**GitHub artifact attestation** (subject is this digest):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "gh attestation verify oci://${IMAGE_REF} --repo ${GITHUB_REPOSITORY}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If \`gh\` errors with \`PKIX_ED25519\` / trusted root / Sigstore, upgrade the GitHub CLI to the latest release (older \`gh\` builds cannot load the current Sigstore trust bundle)." >> "$GITHUB_STEP_SUMMARY"
