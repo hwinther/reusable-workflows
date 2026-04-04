@@ -188,6 +188,7 @@ jobs:
         if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
+          IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
         run: |
           ENC=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote_plus('is:open branch:' + os.environ['BRANCH'] + ' '))")
           URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning?query=${ENC}"
@@ -196,13 +197,15 @@ jobs:
             echo ""
             echo "[View open code scanning alerts for branch \`${BRANCH}\`](${URL})"
             echo ""
-            echo "Uploaded SARIF category: \`grype-container-${{ inputs.container_image_name_postfix }}\`. Alerts can take a short time to appear after upload."
+            echo "Uploaded SARIF category: \`grype-container-${IMAGE_POSTFIX}\`. Alerts can take a short time to appear after upload."
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce Grype vulnerability gate
         if: ${{ inputs.grype_scan_enabled && inputs.grype_fail_build && steps.grype-scan.outcome == 'failure' }}
+        env:
+          IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
         run: |
-          echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${{ inputs.container_image_name_postfix }}) or the Grype step log."
+          echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${IMAGE_POSTFIX}) or the Grype step log."
           exit 1
 
       - name: Tag for GHCR and push
@@ -263,6 +266,10 @@ jobs:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
           IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.image-digest.outputs.digest }}
           COSIGN_CERT_IDENTITY: https://github.com/${{ github.workflow_ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          IMAGE_DIGEST: ${{ steps.image-digest.outputs.digest }}
+          APP_VERSION: ${{ needs.gitversion.outputs.version }}
+          GIT_SHA: ${{ github.sha }}
         run: |
           echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -274,8 +281,8 @@ jobs:
             echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
           done
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Image digest: \`${{ steps.image-digest.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${{ needs.gitversion.outputs.version }}\`, \`SourceRevisionId\` = \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Image digest: \`${IMAGE_DIGEST}\`" >> $GITHUB_STEP_SUMMARY
+          echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${APP_VERSION}\`, \`SourceRevisionId\` = \`${GIT_SHA}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Verify digest, signature, and attestation" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -285,7 +292,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**cosign** (keyless: the certificate identifies **this reusable workflow**, not the consumer repo. Pin consumers with \`uses: …/dotnet-container.yml@v1\` so verification can target \`@refs/tags/v1\`.):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- This run: \`${{ github.workflow_ref }}\` → identity \`${COSIGN_CERT_IDENTITY}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- This run: \`${WORKFLOW_REF}\` → identity \`${COSIGN_CERT_IDENTITY}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Verify **this exact run** (authenticate to GHCR if prompted):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
