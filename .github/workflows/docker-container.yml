@@ -214,6 +214,7 @@ jobs:
             fi
           done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
           [ -n "$images" ] || { echo "::error::No image refs to sign"; exit 1; }
+          echo "Signing images: ${images}"
           cosign sign --yes ${images}
 
       - name: Job summary
