@@ -39,6 +39,11 @@ on:
         required: false
         type: boolean
         default: true
+      grype_fail_build:
+        description: "Grype fail-build: fail the job when vulnerabilities meet severity-cutoff (false = report/SARIF only)"
+        required: false
+        type: boolean
+        default: true
       cosign_sign_enabled:
         description: "Sign the pushed image digest with cosign (keyless / GitHub OIDC); signatures are stored in the registry"
         required: false
@@ -136,6 +141,7 @@ jobs:
           output-file: ${{ runner.temp }}/grype-results.sarif
           severity-cutoff: ${{ inputs.grype_severity_cutoff }}
           only-fixed: ${{ inputs.grype_only_fixed }}
+          fail-build: ${{ inputs.grype_fail_build }}
 
       - name: Upload Grype SARIF to Code Scanning
         if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
@@ -161,7 +167,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Enforce Grype vulnerability gate
-        if: ${{ inputs.grype_scan_enabled && steps.grype-scan.outcome == 'failure' }}
+        if: ${{ inputs.grype_scan_enabled && inputs.grype_fail_build && steps.grype-scan.outcome == 'failure' }}
         run: |
           echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${{ inputs.container_image_name_postfix }}) or the Grype step log."
           exit 1
