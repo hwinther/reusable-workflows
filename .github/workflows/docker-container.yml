@@ -39,6 +39,11 @@ on:
         required: false
         type: boolean
         default: true
+      cosign_sign_enabled:
+        description: "Sign the pushed image digest with cosign (keyless / GitHub OIDC); signatures are stored in the registry"
+        required: false
+        type: boolean
+        default: true
     outputs:
       container_image_tags:
         description: "Full image refs pushed (registry/name:tag, comma-separated)"
@@ -180,6 +185,30 @@ jobs:
           subject-name: ghcr.io/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
           subject-digest: ${{ steps.docker-push.outputs.digest }}
           push-to-registry: true
+
+      - name: Install Cosign
+        if: ${{ inputs.cosign_sign_enabled }}
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+
+      - name: Sign container image (cosign, keyless)
+        if: ${{ inputs.cosign_sign_enabled }}
+        env:
+          DIGEST: ${{ steps.docker-push.outputs.digest }}
+          CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+        run: |
+          set -euo pipefail
+          images=""
+          while IFS= read -r tag; do
+            tag=$(echo "$tag" | xargs)
+            [ -z "$tag" ] && continue
+            if [ -z "$images" ]; then
+              images="${tag}@${DIGEST}"
+            else
+              images="${images} ${tag}@${DIGEST}"
+            fi
+          done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
+          [ -n "$images" ] || { echo "::error::No image refs to sign"; exit 1; }
+          cosign sign --yes ${images}
 
       - name: Job summary
         env:
