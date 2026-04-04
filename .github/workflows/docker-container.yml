@@ -37,6 +37,7 @@ permissions:
   packages: write
   id-token: write
   attestations: write
+  actions: write
 
 jobs:
   prepare-repository-name:
@@ -101,6 +102,21 @@ jobs:
           subject-name: ghcr.io/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
           subject-digest: ${{ steps.docker-push.outputs.digest }}
           push-to-registry: true
+
+      - name: Generate SBOM for container image
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ghcr.io/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.docker-push.outputs.digest }}
+          registry-username: ${{ github.actor }}
+          registry-password: ${{ secrets.GITHUB_TOKEN }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/container-image.spdx.json
+          artifact-name: container-image.spdx.json
+
+      - name: Vulnerability scan (Grype)
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: ${{ runner.temp }}/container-image.spdx.json
 
       - name: Job summary
         env:
