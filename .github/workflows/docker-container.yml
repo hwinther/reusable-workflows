@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         default: ""
+      grype_scan_enabled:
+        description: "Run Anchore Grype vulnerability scan before push (SBOM is still generated)"
+        required: false
+        type: boolean
+        default: true
     outputs:
       container_image_tags:
         description: "Full image refs pushed (registry/name:tag, comma-separated)"
@@ -105,6 +110,7 @@ jobs:
           artifact-name: container-image.spdx.json
 
       - name: Vulnerability scan (Grype)
+        if: ${{ inputs.grype_scan_enabled }}
         uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
         with:
           sbom: ${{ runner.temp }}/container-image.spdx.json
