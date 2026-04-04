@@ -34,6 +34,11 @@ on:
         required: false
         type: string
         default: high
+      grype_only_fixed:
+        description: "Grype only-fixed: only report (and fail on) vulnerabilities that have a fix available"
+        required: false
+        type: boolean
+        default: true
     outputs:
       container_image_tags:
         description: "Full image refs pushed (registry/name:tag, comma-separated)"
@@ -125,6 +130,7 @@ jobs:
           output-format: sarif
           output-file: ${{ runner.temp }}/grype-results.sarif
           severity-cutoff: ${{ inputs.grype_severity_cutoff }}
+          only-fixed: ${{ inputs.grype_only_fixed }}
 
       - name: Upload Grype SARIF to Code Scanning
         if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
