@@ -221,6 +221,7 @@ jobs:
         env:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
           IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.docker-push.outputs.digest }}
+          COSIGN_CERT_IDENTITY: https://github.com/${{ github.workflow_ref }}
         run: |
           echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -241,13 +242,23 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Immutable reference: \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**cosign** (keyless / GitHub Actions: Cosign 2.x needs identity + issuer. Authenticate to GHCR if prompted.):" >> "$GITHUB_STEP_SUMMARY"
+          echo "**cosign** (keyless: the certificate identifies **this reusable workflow**, not the consumer repo. Pin consumers with \`uses: …/docker-container.yml@v1\` so verification can target \`@refs/tags/v1\`.):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- This run: \`${{ github.workflow_ref }}\` → identity \`${COSIGN_CERT_IDENTITY}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verify **this exact run** (authenticate to GHCR if prompted):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
-          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp \"^https://github.com/${GITHUB_REPOSITORY}/\" \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity \"${COSIGN_CERT_IDENTITY}\" \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "If that fails, run the same command with \`--verbose\` and match \`--certificate-identity-regexp\` to the \`Issued certificate\` identity (reusable workflows still use the **caller** repo in the URL)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Policy-style verify when consumers use the floating **v1** tag (any org/repo hosting this workflow):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp '^https://github.com/[^/]+/[^/]+/\\.github/workflows/docker-container\\.yml@refs/tags/v1\$' \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "If verification fails, add \`--verbose\` and align \`--certificate-identity\` / \`-regexp\` with the \`Issued certificate\` line." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**GitHub artifact attestation** (subject is this digest):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
