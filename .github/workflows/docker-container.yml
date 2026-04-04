@@ -220,6 +220,7 @@ jobs:
       - name: Job summary
         env:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.docker-push.outputs.digest }}
         run: |
           echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -233,3 +234,21 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Image digest: \`${{ steps.docker-push.outputs.digest }}\`" >> $GITHUB_STEP_SUMMARY
           echo "Build args: \`APP_VERSION=${{ needs.gitversion.outputs.version }}\`, \`GIT_SHA=${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Verify digest, signature, and attestation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "GHCR may list several manifests in one package (image, cosign \`sha256-…\` signature tags, build attestations). They refer to the **same** image identity via digest:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Immutable reference: \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**cosign** (authenticate to the registry if prompted):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**GitHub artifact attestation** (subject is this digest; configure \`--repo\` if verifying from another clone):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "gh attestation verify oci://${IMAGE_REF} --repo ${GITHUB_REPOSITORY}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
