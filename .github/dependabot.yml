@@ -6,6 +6,7 @@ updates:
 - package-ecosystem: "github-actions"
   directories:
     - "/"
+    - "/.github/actions/*"
   open-pull-requests-limit: 20
   target-branch: "main"
   schedule:
