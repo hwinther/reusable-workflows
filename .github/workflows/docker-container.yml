@@ -49,6 +49,11 @@ on:
         required: false
         type: boolean
         default: true
+      cosign_supply_chain_attest_enabled:
+        description: "After signing, attach Cosign keyless attestations (CycloneDX SBOM + Grype vuln) to the pushed digest for policy engines (e.g. Kyverno). Requires cosign_sign_enabled."
+        required: false
+        type: boolean
+        default: true
     outputs:
       container_image_tags:
         description: "Full image refs pushed (registry/name:tag, comma-separated)"
@@ -130,6 +135,15 @@ jobs:
           output-file: ${{ runner.temp }}/container-image.spdx.json
           artifact-name: container-image.spdx.json
 
+      - name: Generate CycloneDX SBOM for cosign attestation
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ needs.gitversion.outputs.deploy_tag }}
+          format: cyclonedx-json
+          output-file: ${{ runner.temp }}/container-image.cyclonedx.json
+          artifact-name: container-image.cyclonedx.json
+
       - name: Vulnerability scan (Grype)
         id: grype-scan
         if: ${{ inputs.grype_scan_enabled }}
@@ -174,6 +188,28 @@ jobs:
         run: |
           echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${IMAGE_POSTFIX}) or the Grype step log."
           exit 1
+
+      - name: Download Grype (JSON report for cosign vuln attestation)
+        id: grype-for-attest
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled && inputs.grype_scan_enabled }}
+        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0 (same ref as scan-action)
+
+      - name: Grype JSON for cosign vuln attestation
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled && inputs.grype_scan_enabled }}
+        run: |
+          set -euo pipefail
+          "${{ steps.grype-for-attest.outputs.cmd }}" "sbom:${{ runner.temp }}/container-image.spdx.json" -o json > "${{ runner.temp }}/grype-cosign-vuln.json"
+
+      - name: Grype JSON only (supply chain attestation, no SARIF gate)
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled && !inputs.grype_scan_enabled }}
+        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+        with:
+          sbom: ${{ runner.temp }}/container-image.spdx.json
+          output-format: json
+          output-file: ${{ runner.temp }}/grype-cosign-vuln.json
+          severity-cutoff: negligible
+          only-fixed: false
+          fail-build: false
 
       - name: Push container to GHCR
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
@@ -220,6 +256,50 @@ jobs:
           echo "Signing images: ${images}"
           cosign sign --yes ${images}
 
+      - name: Build cosign vuln attestation predicate
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+        env:
+          RUN_URI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          GRYPE_JSON="${{ runner.temp }}/grype-cosign-vuln.json"
+          [ -f "$GRYPE_JSON" ] || { echo "::error::Missing $GRYPE_JSON (Grype JSON for vuln attestation)"; exit 1; }
+          STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          FINISHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          jq -n \
+            --slurpfile result "$GRYPE_JSON" \
+            --arg run_uri "$RUN_URI" \
+            --arg run_id "${{ github.run_id }}" \
+            --arg started "$STARTED" \
+            --arg finished "$FINISHED" \
+            '{
+              invocation: {
+                parameters: ["sbom"],
+                uri: $run_uri,
+                event_id: $run_id,
+                "builder.id": "https://github.com/actions/runner"
+              },
+              scanner: {
+                uri: "https://github.com/anchore/grype",
+                version: "anchore/scan-action@v7",
+                db: {uri: "", version: ""},
+                result: $result[0]
+              },
+              metadata: {
+                scanStartedOn: $started,
+                scanFinishedOn: $finished
+              }
+            }' > "${{ runner.temp }}/cosign-vuln-predicate.json"
+
+      - name: Cosign attest CycloneDX and vulnerability scan (registry)
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+        env:
+          IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.docker-push.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign attest --yes --type cyclonedx --predicate "${{ runner.temp }}/container-image.cyclonedx.json" "$IMAGE_REF"
+          cosign attest --yes --type vuln --predicate "${{ runner.temp }}/cosign-vuln-predicate.json" "$IMAGE_REF"
+
       - name: Job summary
         env:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
@@ -229,6 +309,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.docker-push.outputs.digest }}
           APP_VERSION: ${{ needs.gitversion.outputs.version }}
           GIT_SHA: ${{ github.sha }}
+          COSIGN_SUPPLY_CHAIN_ATTEST: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
         run: |
           echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -267,6 +348,25 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "If verification fails, add \`--verbose\` and align \`--certificate-identity\` / \`-regexp\` with the \`Issued certificate\` line." >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${COSIGN_SUPPLY_CHAIN_ATTEST}" = "true" ]; then
+            echo "**Cosign supply-chain attestations** (CycloneDX SBOM + Grype vuln, e.g. for Kyverno \`verifyImages\` / \`validate\`):" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "List signature and attestation layers (authenticate to GHCR if prompted):" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+            echo "cosign tree \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Verify attestations with the **same** certificate identity as \`cosign verify\` above:" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+            echo "cosign verify-attestation --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity \"${COSIGN_CERT_IDENTITY}\" --type cyclonedx \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+            echo "cosign verify-attestation --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity \"${COSIGN_CERT_IDENTITY}\" --type vuln \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "With a floating **v1** workflow pin, use \`--certificate-identity-regexp\` the same way as for \`cosign verify\` (see \`.github/workflows/docker-container.yml\` job summary source for the pattern)." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
           echo "**GitHub artifact attestation** (subject is this digest):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
