@@ -58,12 +58,12 @@ on:
         type: boolean
         default: true
       cosign_sign_enabled:
-        description: "Sign the pushed image digest with cosign (keyless / GitHub OIDC); signatures are stored in the registry"
+        description: "Sign the pushed image digest with cosign (keyless / GitHub OIDC); signatures are stored in the registry. Installs Cosign CLI v2.4.3 (cosign-installer cosign-release) so attestations use legacy sha256-….att registry manifests compatible with Kyverno 1.17 verifyImages; Cosign v3+ prefers OCI referrers, which that fetch path does not resolve."
         required: false
         type: boolean
         default: true
       cosign_supply_chain_attest_enabled:
-        description: "After signing, attach Cosign keyless attestations (CycloneDX SBOM + Grype vuln) to the pushed digest for policy engines (e.g. Kyverno). Requires cosign_sign_enabled."
+        description: "After push, attach Cosign CycloneDX SBOM and Grype vuln attestations for Kyverno verifyImages (GitHub SLSA/build provenance is separate via attest-build-provenance). Requires cosign_sign_enabled and job permissions id-token:write and attestations:write. Relies on the Cosign v2.x pin so attestations publish as .att manifests, not referrers-only (Cosign v3+)."
         required: false
         type: boolean
         default: true
@@ -272,9 +272,12 @@ jobs:
           subject-digest: ${{ steps.image-digest.outputs.digest }}
           push-to-registry: true
 
+      # Kyverno 1.17 resolves Cosign attestations like Cosign v2 (sha256-….att manifest tags). Cosign v3+ often publishes via OCI referrers only → 404 on that path while local cosign v3 verify still works via /referrers/.
       - name: Install Cosign
         if: ${{ inputs.cosign_sign_enabled }}
         uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+        with:
+          cosign-release: v2.4.3
 
       - name: Sign container image (cosign, keyless)
         if: ${{ inputs.cosign_sign_enabled }}
