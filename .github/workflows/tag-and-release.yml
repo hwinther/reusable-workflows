@@ -48,12 +48,11 @@ on:
         description: "Navn på den opprettede taggen"
         value: ${{ jobs.tag.outputs.tag_name }}
 
-permissions:
-  contents: write
-
 jobs:
   tag:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     env:
       CREATE_FLOATING_TAGS: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.floating_tags || inputs.floating_tags }}
     outputs:
