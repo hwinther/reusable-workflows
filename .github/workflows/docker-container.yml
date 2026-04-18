@@ -62,17 +62,10 @@ on:
         description: "OCI manifest digest for the pushed image (sha256:...)"
         value: ${{ jobs['build-and-push'].outputs.image_digest }}
 
-permissions:
-  contents: read
-  packages: write
-  id-token: write
-  attestations: write
-  actions: write
-  security-events: write
-
 jobs:
   prepare-repository-name:
     runs-on: ubuntu-latest
+    permissions: {}
     outputs:
       repository: ${{ steps.lower-repo.outputs.repository }}
     steps:
@@ -82,6 +75,8 @@ jobs:
 
   gitversion:
     needs: prepare-repository-name
+    permissions:
+      contents: read
     uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v1
     with:
       container_registry: ${{ inputs.container_registry }}
@@ -92,6 +87,13 @@ jobs:
     name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
     needs: [prepare-repository-name, gitversion]
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      actions: write
+      security-events: write
     outputs:
       image_digest: ${{ steps.docker-push.outputs.digest }}
     steps:

@@ -99,16 +99,12 @@ on:
         description: "Create TODO PR comment"
         default: true
 
-permissions:
-  contents: read
-  checks: write
-  pull-requests: write
-  packages: read
-
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    permissions:
+      contents: read
     outputs:
       node_changes: ${{ steps.node-check.outputs.changes_detected || 'false' }}
       dotnet_changes: ${{ steps.dotnet-check.outputs.changes_detected || 'false' }}
@@ -178,6 +174,11 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.node_changes == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      checks: write
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -207,6 +208,11 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.dotnet_changes == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
+      checks: write
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -238,6 +244,8 @@ jobs:
     needs: [detect-changes, node-build, dotnet-build]
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - name: Write change check status to summary
         run: |
@@ -312,6 +320,10 @@ jobs:
     needs: detect-changes
     if: inputs.dotnet_inspect_code_enabled && needs.detect-changes.outputs.dotnet_changes == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      checks: write
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -348,6 +360,9 @@ jobs:
     needs: detect-changes
     if: inputs.todo_comment_enabled && (needs.detect-changes.outputs.dotnet_changes == 'true' || needs.detect-changes.outputs.node_changes == 'true')
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -28,16 +28,15 @@ on:
         description: "Scope for pakken, f.eks. '@organisasjon'"
         default: ''
 
-permissions:
-  contents: read
-  packages: write
-
 env:
   NODE_VERSION: ${{ inputs.node_version }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Hent kode
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

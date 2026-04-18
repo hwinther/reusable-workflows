@@ -38,12 +38,11 @@ on:
         description: "GitVersion SemVer versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
         value: ${{ jobs.finn-versjon.outputs.git_version_semver }}
 
-permissions:
-  contents: read
-
 jobs:
   finn-versjon:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       deploy_tag: ${{ steps.gitversion.outputs.deploy_tag }}
       container_image_tags: ${{ steps.gitversion.outputs.container_image_tags }}
