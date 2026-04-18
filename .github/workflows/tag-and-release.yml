@@ -68,6 +68,8 @@ jobs:
         id: gitversion
         if: github.event.inputs.tag_name == 'auto'
         uses: hwinther/reusable-workflows/.github/actions/gitversion@v1
+        with:
+          persist_checkout_credentials: 'true'
 
       - name: Bestem tag navn
         id: determine_tag
