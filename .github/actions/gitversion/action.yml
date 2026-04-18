@@ -11,6 +11,10 @@ inputs:
   override_config:
     description: 'Overstyring av GitVersion konfigurasjonselementer i YAML format'
     default: ''
+  persist_checkout_credentials:
+    description: 'actions/checkout persist-credentials; set true only if a later step in the same job runs git push using this clone.'
+    required: false
+    default: 'false'
 
 outputs:
   deploy_tag:
@@ -43,6 +47,7 @@ runs:
     with:
       fetch-depth: 0
       fetch-tags: true
+      persist-credentials: ${{ inputs.persist_checkout_credentials == 'true' }}
 
   - name: Installer GitVersion
     uses: gittools/actions/gitversion/setup@bc6623af8fc07d5a8903052dd46da33403eec8e8 # v4.5.0
