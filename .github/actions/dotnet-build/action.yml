@@ -325,7 +325,7 @@ runs:
       COVERAGE_REPORT_DIR="$TEMP_DIR/coverage-report"
       echo "::group::ReportGenerator"
       dotnet tool install -g dotnet-reportgenerator-globaltool
-      reportgenerator -reports:**/*coverage.cobertura.xml -targetdir:"$COVERAGE_REPORT_DIR" "-reporttypes:MarkdownSummaryGithub;Html"
+      reportgenerator -reports:**/coverage.cobertura.*.xml -targetdir:"$COVERAGE_REPORT_DIR" "-reporttypes:MarkdownSummaryGithub;Html"
       echo "report-path=$COVERAGE_REPORT_DIR" >> $GITHUB_OUTPUT
       echo "::endgroup::"
 
