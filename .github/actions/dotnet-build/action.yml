@@ -281,7 +281,7 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       find . -type f -name "*cobertura*"
-      ls -la $TEMP_DIR/test-results
+      #ls -la $TEMP_DIR/test-results
 
   - name: Generate test report
     uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
