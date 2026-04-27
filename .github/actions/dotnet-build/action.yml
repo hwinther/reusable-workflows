@@ -232,7 +232,7 @@ runs:
     run: |
       echo "::group::Test"
       TEST_EXIT_CODE=0
-      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx --results-directory $TEMP_DIR/test-results 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
+      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
       echo "::endgroup::"
       # --coverlet-exclude-assemblies-without-sources
 
@@ -289,7 +289,7 @@ runs:
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     with:
       name: "Testreport"
-      path: "$TEMP_DIR/test-results/*.trx"
+      path: "**/TestResults/*.trx"
       reporter: dotnet-trx
       fail-on-error: false
 
