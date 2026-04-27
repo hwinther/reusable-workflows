@@ -232,7 +232,7 @@ runs:
     run: |
       echo "::group::Test"
       TEST_EXIT_CODE=0
-      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx --report-xunit-trx-filename test-results.trx --results-directory $TEMP_DIR/test-results 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
+      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx --results-directory $TEMP_DIR/test-results 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
       echo "::endgroup::"
       # --coverlet-exclude-assemblies-without-sources
 
