@@ -289,7 +289,7 @@ runs:
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     with:
       name: "Testreport"
-      path: "**/TestResults/*.trx"
+      path: "$TEMP_DIR/test-results/*.trx"
       reporter: dotnet-trx
       fail-on-error: false
 
