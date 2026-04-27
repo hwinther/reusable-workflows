@@ -232,7 +232,7 @@ runs:
     run: |
       echo "::group::Test"
       TEST_EXIT_CODE=0
-      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-trx 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
+      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
       echo "::endgroup::"
 
       # Detect MSBuild "Unknown switch" errors that typically indicate
@@ -275,12 +275,6 @@ runs:
       exit $TEST_EXIT_CODE
     continue-on-error: true
 
-  - name: TEMP debug
-    shell: bash
-    working-directory: ${{ inputs.working_directory }}
-    run: |
-      find . -type f -name "*cobertura*"
-
   - name: Generate test report
     uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
     id: test-reporter
@@ -295,7 +289,7 @@ runs:
     uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     with:
-      filename: "**/*coverage.cobertura.xml"
+      filename: "**/coverage.cobertura.*.xml"
       badge: true
       fail_below_min: false
       format: markdown
@@ -323,7 +317,7 @@ runs:
       COVERAGE_REPORT_DIR="$TEMP_DIR/coverage-report"
       echo "::group::ReportGenerator"
       dotnet tool install -g dotnet-reportgenerator-globaltool
-      reportgenerator -reports:**/*coverage.cobertura.xml -targetdir:"$COVERAGE_REPORT_DIR" "-reporttypes:MarkdownSummaryGithub;Html"
+      reportgenerator -reports:**/coverage.cobertura.*.xml -targetdir:"$COVERAGE_REPORT_DIR" "-reporttypes:MarkdownSummaryGithub;Html"
       echo "report-path=$COVERAGE_REPORT_DIR" >> $GITHUB_OUTPUT
       echo "::endgroup::"
 
