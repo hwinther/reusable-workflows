@@ -39,6 +39,8 @@ runs:
       TEMP_DIR=$(mktemp -d)
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
+  # setup-node writes a runner-managed ~/.npmrc with `//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}`.
+  # The token reference is by env var name, so the secret never lands on disk in plaintext.
   - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
     name: Set up Node
     with:
@@ -46,16 +48,14 @@ runs:
       cache: "npm"
       cache-dependency-path: "${{ inputs.working_directory }}/package-lock.json"
       scope: ${{ inputs.scope }}
-
-  - name: Add GitHub token to .npmrc
-    working-directory: ${{ inputs.working_directory }}
-    shell: bash
-    run: touch ./.npmrc && echo -e "\n//npm.pkg.github.com/:_authToken=${{ inputs.github_token }}" >> ./.npmrc
+      registry-url: 'https://npm.pkg.github.com'
 
   - name: Install dependencies
     id: dependency-install
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      NODE_AUTH_TOKEN: ${{ inputs.github_token }}
     run: |
       echo "::group::Install dependencies"
       set +e
@@ -78,16 +78,6 @@ runs:
         cat $TEMP_DIR/dependency.out | grep "packages in" >> $TEMP_DIR/dependency.md
       fi
       echo "::endgroup::"
-
-  - name: Restore .npmrc
-    working-directory: ${{ inputs.working_directory }}
-    shell: bash
-    run: |
-      if git ls-files --error-unmatch .npmrc > /dev/null 2>&1; then
-        git checkout HEAD -- .npmrc
-      else
-        rm -f .npmrc || true
-      fi
 
   - name: Typecheck
     id: node-typecheck
@@ -572,21 +562,33 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "Checking for uncommitted changes..."
-      git status --porcelain
-      if [ -n "$(git status --porcelain)" ]; then
-        echo "::error::Changes in files after restore and build:"
-        git status
-        git diff
-        echo "## ❌ Changes in files after restore and build" > $TEMP_DIR/git-status.md
-        echo "" >> $TEMP_DIR/git-status.md
-        echo "The following files have changes:" >> $TEMP_DIR/git-status.md
-        echo "\`\`\`" >> $TEMP_DIR/git-status.md
-        git status --porcelain >> $TEMP_DIR/git-status.md
-        echo "\`\`\`" >> $TEMP_DIR/git-status.md
-        exit 1
+      git config core.fileMode false
+      git -c core.safecrlf=false status --porcelain
+
+      if [ -n "$(git -c core.safecrlf=false status --porcelain)" ]; then
+        echo "Found changes, staging files to see if they are normalized away..."
+        git add -A
+
+        if [ -n "$(git diff --cached)" ]; then
+          echo "::error::Actual content changes in files after install and build:"
+          git status
+          git diff --cached
+          echo "## ❌ Changes in files after install and build" > $TEMP_DIR/git-status.md
+          echo "" >> $TEMP_DIR/git-status.md
+          echo "The following files have actual changes:" >> $TEMP_DIR/git-status.md
+          echo "\`\`\`" >> $TEMP_DIR/git-status.md
+          git diff --cached --name-only >> $TEMP_DIR/git-status.md
+          echo "\`\`\`" >> $TEMP_DIR/git-status.md
+          git reset HEAD
+          exit 1
+        else
+          echo "No actual changes - only line endings or file mode were normalized."
+          git reset HEAD
+          echo "## ✅ No changes in files after install and build were found" > $TEMP_DIR/git-status.md
+        fi
       else
-        echo "No changes in files after restore and build were found."
-        echo "## ✅ No changes in files after restore and build were found" > $TEMP_DIR/git-status.md
+        echo "No changes in files after install and build were found."
+        echo "## ✅ No changes in files after install and build were found" > $TEMP_DIR/git-status.md
       fi
 
   - name: Combine output into PR comment
