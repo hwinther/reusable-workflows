@@ -526,9 +526,14 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     if: steps.test-coverage.outputs.tests_ran == 'true' && inputs.test == 'true'
     run: |
-      echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
-      echo "" >> $TEMP_DIR/code-coverage-results.md
-      cat "${GITHUB_WORKSPACE}/code-coverage-results.md" >> $TEMP_DIR/code-coverage-results.md
+      {
+        echo "<details>"
+        echo "<summary>📊 Code coverage report</summary>"
+        echo ""
+        cat "${GITHUB_WORKSPACE}/code-coverage-results.md"
+        echo ""
+        echo "</details>"
+      } > $TEMP_DIR/code-coverage-results.md
       rm -f "${GITHUB_WORKSPACE}/code-coverage-results.md"
 
   - name: Check for uncommitted changes
