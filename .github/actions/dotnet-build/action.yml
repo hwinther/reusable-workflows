@@ -74,12 +74,11 @@ runs:
     id: dotnet-restore
     shell: bash
     working-directory: ${{ inputs.working_directory }}
-    continue-on-error: true
     run: |
       echo "::group::Restore"
-      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out || true
-      echo "Restore output:"
-      cat $TEMP_DIR/restore.out
+      set +e
+      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
+      set -e
       echo "::endgroup::"
 
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
@@ -88,171 +87,55 @@ runs:
         rm -f nuget.config || true
       fi
 
-      RESTORE_FAILED=0
-
-      # Extract restore errors and 'Failed to restore' lines (if any)
-      grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
-      grep "Failed to restore " $TEMP_DIR/restore.out > $TEMP_DIR/restore.failed || true
-
-      # Extract restore warnings (e.g. NU1903 vulnerability advisories, NU1701 framework mismatches)
+      # Extract errors (NUxxxx codes + "Failed to restore") and warnings (NU1903 vulnerabilities, etc.)
+      : > $TEMP_DIR/restore.err
+      grep ": error " $TEMP_DIR/restore.out >> $TEMP_DIR/restore.err || true
+      grep "Failed to restore " $TEMP_DIR/restore.out >> $TEMP_DIR/restore.err || true
       grep ": warning " $TEMP_DIR/restore.out > $TEMP_DIR/restore.warn || true
 
-      # If we found any error / failed-restore lines, treat restore as failed
-      if [ -s $TEMP_DIR/restore.err ] || [ -s $TEMP_DIR/restore.failed ]; then
-        RESTORE_FAILED=1
-
-        # Emit GitHub error annotations for each restore error line
-        if [ -s $TEMP_DIR/restore.err ]; then
-          while IFS= read -r line
-          do
-            # Match "<path> : error <CODE>: <message>"
-            if [[ "$line" =~ ^(.+)\ :\ error\ ([A-Za-z0-9]+):\ (.*)$ ]]; then
-              FILE_PATH="${BASH_REMATCH[1]}"
-              ERROR_CODE="${BASH_REMATCH[2]}"
-              ERROR_MSG="${BASH_REMATCH[3]}"
-              echo "::error file=$FILE_PATH::$ERROR_CODE: $ERROR_MSG"
-            fi
-          done < $TEMP_DIR/restore.err
-        fi
-
-        # Emit generic annotations for any 'Failed to restore' lines
-        if [ -s $TEMP_DIR/restore.failed ]; then
-          while IFS= read -r line
-          do
-            echo "::error ::$line"
-          done < $TEMP_DIR/restore.failed
-        fi
-      fi
-
-      if [ $RESTORE_FAILED -ne 0 ]; then
-        echo "::error::Restore failed. Check the PR comment or job summary for details."
-        echo "## ❌ Restore failed" > $TEMP_DIR/restore.md
-        echo "" >> $TEMP_DIR/restore.md
-        if [ -s $TEMP_DIR/restore.err ] || [ -s $TEMP_DIR/restore.failed ]; then
-          # Combine both error sources for markdown output
-          cat $TEMP_DIR/restore.err $TEMP_DIR/restore.failed 2>/dev/null | sed "s|$GITHUB_WORKSPACE/||g" | sed '/^$/d' | sed 's/^/- ❌ /' >> $TEMP_DIR/restore.md
-        else
-          echo '```' >> $TEMP_DIR/restore.md
-          tail -100 $TEMP_DIR/restore.out >> $TEMP_DIR/restore.md
-          echo '```' >> $TEMP_DIR/restore.md
-        fi
-      fi
-
-      # Process restore warnings - emit annotations and append to restore.md (success or failure)
-      if [ -s $TEMP_DIR/restore.warn ]; then
-        TOTAL_RESTORE_WARNINGS=$(wc -l < $TEMP_DIR/restore.warn | tr -d ' ')
-
-        while IFS= read -r line
-        do
-          # Match "<path> : warning <CODE>: <message>"
-          if [[ "$line" =~ ^(.+)\ :\ warning\ ([A-Za-z0-9]+):\ (.*)$ ]]; then
-            FILE_PATH="${BASH_REMATCH[1]}"
-            WARN_CODE="${BASH_REMATCH[2]}"
-            WARN_MSG="${BASH_REMATCH[3]}"
-            echo "::warning file=$FILE_PATH::$WARN_CODE: $WARN_MSG"
-          else
-            echo "::warning::$line"
-          fi
-        done < $TEMP_DIR/restore.warn
-
-        if [ ! -f $TEMP_DIR/restore.md ]; then
-          : > $TEMP_DIR/restore.md
-        else
-          echo "" >> $TEMP_DIR/restore.md
-        fi
-        echo "## ⚠️ Restore warnings ($TOTAL_RESTORE_WARNINGS total)" >> $TEMP_DIR/restore.md
-
-        if [ $TOTAL_RESTORE_WARNINGS -le 10 ]; then
-          sed "s|$GITHUB_WORKSPACE/||g" $TEMP_DIR/restore.warn > $TEMP_DIR/restore.warn.md
-        else
-          head -10 $TEMP_DIR/restore.warn | sed "s|$GITHUB_WORKSPACE/||g" > $TEMP_DIR/restore.warn.md
-          echo "" >> $TEMP_DIR/restore.warn.md
-          echo "... and $(($TOTAL_RESTORE_WARNINGS - 10)) more warnings" >> $TEMP_DIR/restore.warn.md
-        fi
-        sed -i '/^$/d' $TEMP_DIR/restore.warn.md
-        sed -i -e 's/^/- ⚠️ /' $TEMP_DIR/restore.warn.md
-        cat $TEMP_DIR/restore.warn.md >> $TEMP_DIR/restore.md
-      fi
-
-      exit $RESTORE_FAILED
+  - name: Format restore output
+    id: format-restore
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    with:
+      format: nuget
+      errors_file: ${{ env.TEMP_DIR }}/restore.err
+      warnings_file: ${{ env.TEMP_DIR }}/restore.warn
+      out_md: ${{ env.TEMP_DIR }}/restore.md
+      error_header: "## ❌ Restore failed"
+      warning_header: "## ⚠️ Restore warnings (N total)"
 
   - name: Build
     id: dotnet-build
-    if: steps.dotnet-restore.outcome == 'success'
+    if: steps.format-restore.outputs.failed != 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
-    env:
-      WORKFLOW_AGENT_PATH: "${{ github.workspace }}/"
     run: |
       echo "::group::Build"
-      dotnet build ${{ inputs.solution_file }} -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1 || (exit 0)
-      grep "): error " $TEMP_DIR/build.out > $TEMP_DIR/build.err || (exit 0)
-      grep "): warning " $TEMP_DIR/build.out > $TEMP_DIR/build.warn || (exit 0)
+      set +e
+      dotnet build ${{ inputs.solution_file }} -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1
+      set -e
       cat $TEMP_DIR/build.out
       echo "::endgroup::"
 
-      if [ ! -s $TEMP_DIR/build.err ]
-      then
-        echo "## ✅ Build succeeded" > $TEMP_DIR/build.md
-      else
-        # Reformat error output as github error annotations
-        error_regex="(.+)\(([0-9]+),([0-9]+)\): error (.+) \[(.+)\]"
-        # Capture groups: 1=file path 2=line 3=character 4=warn: message 5=project path
-        cat $TEMP_DIR/build.err | while read line
-        do
-          if [[ $line =~ $error_regex ]]; then
-            echo "::error file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[4]}"
-          fi
-        done
+      grep "): error " $TEMP_DIR/build.out > $TEMP_DIR/build.err || true
+      grep "): warning " $TEMP_DIR/build.out > $TEMP_DIR/build.warn || true
 
-        cat $TEMP_DIR/build.err | sed "s|${{ env.WORKFLOW_AGENT_PATH }}|| ; s|${{ env.WORKFLOW_AGENT_PATH }}||" > $TEMP_DIR/build.md
-        sed -i '/^$/d' $TEMP_DIR/build.md             # removes empty lines
-        sed -i -e 's/^/- ❌ /' $TEMP_DIR/build.md     # prefix with markdown list item and cross mark emoji
-        echo "## ❌ The following build errors must be fixed:" | cat - $TEMP_DIR/build.md > $TEMP_DIR/build.md.temp && mv $TEMP_DIR/build.md.temp $TEMP_DIR/build.md
-      fi
-
-      # Process warnings
-      if [ -s $TEMP_DIR/build.warn ]
-      then
-        # Count total warnings
-        TOTAL_WARNINGS=$(wc -l < $TEMP_DIR/build.warn | tr -d ' ')
-        
-        # Reformat warning output as github warning annotations
-        warning_regex="(.+)\(([0-9]+),([0-9]+)\): warning (.+) \[(.+)\]"
-        cat $TEMP_DIR/build.warn | while read line
-        do
-          if [[ $line =~ $warning_regex ]]; then
-            echo "::warning file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[4]}"
-          fi
-        done
-
-        # Create warnings markdown - show first 10 warnings
-        echo "" >> $TEMP_DIR/build.md
-        echo "## ⚠️ Warnings ($TOTAL_WARNINGS total)" >> $TEMP_DIR/build.md
-        
-        if [ $TOTAL_WARNINGS -le 10 ]
-        then
-          cat $TEMP_DIR/build.warn | sed "s|^Warning: ||; s|${{ env.WORKFLOW_AGENT_PATH }}||g" > $TEMP_DIR/build.warn.md
-        else
-          head -10 $TEMP_DIR/build.warn | sed "s|^Warning: ||; s|${{ env.WORKFLOW_AGENT_PATH }}||g" > $TEMP_DIR/build.warn.md
-          echo "" >> $TEMP_DIR/build.warn.md
-          echo "... and $(($TOTAL_WARNINGS - 10)) more warnings" >> $TEMP_DIR/build.warn.md
-        fi
-        
-        sed -i '/^$/d' $TEMP_DIR/build.warn.md             # removes empty lines
-        sed -i -e 's/^/- ⚠️ /' $TEMP_DIR/build.warn.md     # prefix with markdown list item and warning emoji
-        cat $TEMP_DIR/build.warn.md >> $TEMP_DIR/build.md
-      fi
-
-      echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/build.md)"$'\n'EOF >> $GITHUB_OUTPUT
-
-      if [ -s $TEMP_DIR/build.err ]
-      then
-        exit 1
-      fi
+  - name: Format build output
+    id: format-build
+    if: steps.format-restore.outputs.failed != 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    with:
+      format: csc
+      errors_file: ${{ env.TEMP_DIR }}/build.err
+      warnings_file: ${{ env.TEMP_DIR }}/build.warn
+      out_md: ${{ env.TEMP_DIR }}/build.md
+      error_header: "## ❌ The following build errors must be fixed:"
+      warning_header: "## ⚠️ Warnings (N total)"
+      success_message: "## ✅ Build succeeded"
+      path_strip: "${{ github.workspace }}/"
 
   - name: Run extra command
-    if: steps.dotnet-restore.outcome == 'success' && inputs.extra_command != ''
+    if: steps.format-restore.outputs.failed != 'true' && inputs.extra_command != ''
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
@@ -266,18 +149,21 @@ runs:
 
   - name: Run tests
     id: run-tests
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "::group::Test"
       TEST_EXIT_CODE=0
-      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx 2>&1 | tee $TEMP_DIR/test.out || TEST_EXIT_CODE=$?
+      set +e
+      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx 2>&1 | tee $TEMP_DIR/test.out
+      TEST_EXIT_CODE=${PIPESTATUS[0]}
+      set -e
       echo "::endgroup::"
 
-      # Detect MSBuild "Unknown switch" errors that typically indicate
-      # either an incompatible .NET SDK version (< 10) or missing
-      # Microsoft.Testing.Platform configuration in global.json.
+      # MSB1001 indicates the project isn't on .NET SDK 10+ or global.json lacks the
+      # Microsoft.Testing.Platform runner configuration. Catch it explicitly so the
+      # reader gets actionable guidance, not a tail of the dotnet log.
       if [ -f "$TEMP_DIR/test.out" ] && grep -q "MSBUILD : error MSB1001: Unknown switch." "$TEMP_DIR/test.out"; then
         echo "::error::dotnet test failed with 'MSB1001: Unknown switch.'. This usually means the project is not using .NET SDK 10 or higher, or global.json is missing the Microsoft.Testing.Platform test runner configuration (\"test\": { \"runner\": \"Microsoft.Testing.Platform\" })."
 
@@ -297,27 +183,24 @@ runs:
       &lt;PackageReference Include="coverlet.MTP" Version="8.0.0" /&gt;
       &lt;PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.5" /&gt;
       EOF
-      else
-        # For other failures, create a generic tests markdown (if tests failed)
-        if [ "$TEST_EXIT_CODE" -ne 0 ]; then
-          echo "## ❌ Tests failed" > $TEMP_DIR/tests.md
-          echo "" >> $TEMP_DIR/tests.md
-          if [ -f "$TEMP_DIR/test.out" ]; then
-            echo '```' >> $TEMP_DIR/tests.md
-            tail -100 "$TEMP_DIR/test.out" >> $TEMP_DIR/tests.md
-            echo '```' >> $TEMP_DIR/tests.md
-          else
-            echo "Tests failed. See job logs for details." >> $TEMP_DIR/tests.md
-          fi
+      elif [ "$TEST_EXIT_CODE" -ne 0 ]; then
+        echo "## ❌ Tests failed" > $TEMP_DIR/tests.md
+        echo "" >> $TEMP_DIR/tests.md
+        if [ -f "$TEMP_DIR/test.out" ]; then
+          echo '```' >> $TEMP_DIR/tests.md
+          tail -100 "$TEMP_DIR/test.out" >> $TEMP_DIR/tests.md
+          echo '```' >> $TEMP_DIR/tests.md
+        else
+          echo "Tests failed. See job logs for details." >> $TEMP_DIR/tests.md
         fi
       fi
 
-      # Extract test warnings (covers test runtime + recompile during dotnet test).
-      # Dedupe against build.warn so we don't repeat what the build step already reported.
+      # Extract test warnings (deduped against build.warn so we don't double-report).
+      : > $TEMP_DIR/test.warn
       if [ -f "$TEMP_DIR/test.out" ]; then
         grep "): warning " $TEMP_DIR/test.out > $TEMP_DIR/test.warn.raw || true
         if [ -s $TEMP_DIR/test.warn.raw ]; then
-          if [ -f $TEMP_DIR/build.warn ]; then
+          if [ -s $TEMP_DIR/build.warn ]; then
             grep -vxFf $TEMP_DIR/build.warn $TEMP_DIR/test.warn.raw > $TEMP_DIR/test.warn || true
           else
             cp $TEMP_DIR/test.warn.raw $TEMP_DIR/test.warn
@@ -325,45 +208,24 @@ runs:
         fi
       fi
 
-      if [ -s $TEMP_DIR/test.warn ]; then
-        TOTAL_TEST_WARNINGS=$(wc -l < $TEMP_DIR/test.warn | tr -d ' ')
-
-        warning_regex="(.+)\(([0-9]+),([0-9]+)\): warning (.+) \[(.+)\]"
-        cat $TEMP_DIR/test.warn | while read line
-        do
-          if [[ $line =~ $warning_regex ]]; then
-            echo "::warning file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[4]}"
-          else
-            echo "::warning::$line"
-          fi
-        done
-
-        if [ ! -f $TEMP_DIR/tests.md ]; then
-          : > $TEMP_DIR/tests.md
-        else
-          echo "" >> $TEMP_DIR/tests.md
-        fi
-        echo "## ⚠️ Test warnings ($TOTAL_TEST_WARNINGS total)" >> $TEMP_DIR/tests.md
-
-        if [ $TOTAL_TEST_WARNINGS -le 10 ]; then
-          sed "s|$GITHUB_WORKSPACE/||g" $TEMP_DIR/test.warn > $TEMP_DIR/test.warn.md
-        else
-          head -10 $TEMP_DIR/test.warn | sed "s|$GITHUB_WORKSPACE/||g" > $TEMP_DIR/test.warn.md
-          echo "" >> $TEMP_DIR/test.warn.md
-          echo "... and $(($TOTAL_TEST_WARNINGS - 10)) more warnings" >> $TEMP_DIR/test.warn.md
-        fi
-        sed -i '/^$/d' $TEMP_DIR/test.warn.md
-        sed -i -e 's/^/- ⚠️ /' $TEMP_DIR/test.warn.md
-        cat $TEMP_DIR/test.warn.md >> $TEMP_DIR/tests.md
-      fi
-
       exit $TEST_EXIT_CODE
     continue-on-error: true
+
+  - name: Format test warnings
+    id: format-test-warn
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    with:
+      format: csc
+      warnings_file: ${{ env.TEMP_DIR }}/test.warn
+      out_md: ${{ env.TEMP_DIR }}/test-warn.md
+      warning_header: "## ⚠️ Test warnings (N total)"
+      path_strip: "${{ github.workspace }}/"
 
   - name: Generate test report
     uses: dorny/test-reporter@a43b3a5f7366b97d083190328d2c652e1a8b6aa2 # v3.0.0
     id: test-reporter
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     with:
       name: "Testreport"
       path: "**/TestResults/*.trx"
@@ -372,7 +234,7 @@ runs:
 
   - name: Generate test run report
     id: test-markdown-report
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -433,7 +295,7 @@ runs:
 
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     with:
       filename: "**/coverage.cobertura.*.xml"
       badge: true
@@ -447,7 +309,7 @@ runs:
 
   - name: Move code coverage report to temp folder
     shell: bash
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     run: |
       {
         echo "<details>"
@@ -462,7 +324,7 @@ runs:
 
   - name: Cache ReportGenerator tool
     id: cache-reportgenerator
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
     with:
       path: ~/.dotnet/tools
@@ -471,7 +333,7 @@ runs:
   - name: Generate ReportGenerator coverage report
     id: reportgenerator
     shell: bash
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     continue-on-error: true
     run: |
       COVERAGE_REPORT_DIR="$TEMP_DIR/coverage-report"
@@ -485,7 +347,7 @@ runs:
 
   - name: Copy ReportGenerator summary to temp folder
     shell: bash
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     run: |
       if [ -f "$TEMP_DIR/coverage-report/SummaryGithub.md" ]; then
         {
@@ -501,7 +363,7 @@ runs:
 
   - name: Upload coverage reports
     uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true' && steps.reportgenerator.outcome == 'success'
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true' && steps.reportgenerator.outcome == 'success'
     with:
       name: coverage-report
       path: ${{ steps.reportgenerator.outputs.report-path }}
@@ -550,6 +412,7 @@ runs:
       [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/tests.md ] && cat $TEMP_DIR/tests.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/test-warn.md ] && cat $TEMP_DIR/test-warn.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/test-results.md ] && cat $TEMP_DIR/test-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
@@ -557,11 +420,14 @@ runs:
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
 
-  - name: Fail workflow if restore failed
-    if: always() && steps.dotnet-restore.outcome == 'failure'
+  - name: Fail workflow on restore or build errors
+    if: |
+      always()
+      && (steps.format-restore.outputs.failed == 'true'
+          || steps.format-build.outputs.failed == 'true')
     shell: bash
     run: |
-      echo "::error::Restore failed. Check the PR comment or job summary for details."
+      echo "::error::Restore or build reported errors. See PR comment for details."
       exit 1
 
   - name: Fail workflow if one or more tests failed

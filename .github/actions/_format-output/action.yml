@@ -1,0 +1,78 @@
+name: "Format build output"
+description: |
+  Internal helper. Takes pre-extracted error and warning lines (plus a format hint) and
+  produces (a) the GitHub Actions ::error/::warning annotations and (b) the structured
+  markdown that the calling action concatenates into its PR comment.
+
+  Designed to be called from node-build and dotnet-build composite actions in this repo.
+  Not part of the public surface — leading underscore signals internal-only.
+
+inputs:
+  format:
+    required: true
+    description: |
+      Annotation/regex format for the error and warning lines. One of:
+      - ts: TypeScript output, supports `file:L:C - error/warning` and `file(L,C): error/warning` plus generic `Error:`/`Warning:`
+      - csc: MSBuild C# compiler output, `file(L,C): error CODE: msg [proj]`
+      - nuget: NuGet restore output, `path : error/warning CODE: msg`
+      - eslint-json: ESLint --format json output (errors_file is the JSON file, severity 2 = errors, severity 1 = warnings)
+      - plain: no file/line; emits `::error::message` / `::warning::message` per line
+  errors_file:
+    required: false
+    description: "Path to a file containing one error line per row (or the JSON file when format=eslint-json). Omit if no errors possible."
+    default: ""
+  warnings_file:
+    required: false
+    description: "Path to a file containing one warning line per row. Ignored for eslint-json (warnings are pulled from the same JSON)."
+    default: ""
+  out_md:
+    required: true
+    description: "Path to write the resulting markdown to."
+  error_header:
+    required: false
+    description: 'Markdown heading prefixed to the error list, e.g. "## ❌ The following typecheck errors should be fixed:".'
+    default: ""
+  warning_header:
+    required: false
+    description: 'Markdown heading for the warning list, e.g. "## ⚠️ Build warnings:".'
+    default: ""
+  success_message:
+    required: false
+    description: 'Markdown to write when no errors are present, e.g. "## ✅ Typecheck succeeded".'
+    default: ""
+  max_warnings_inline:
+    required: false
+    description: "Cap on warnings shown inline; remainder summarized as '… and N more warnings'."
+    default: "10"
+  path_strip:
+    required: false
+    description: "Prefix stripped from file paths in the markdown output. Defaults to GITHUB_WORKSPACE/."
+    default: ""
+
+outputs:
+  error_count:
+    description: "Number of error lines processed."
+    value: ${{ steps.run.outputs.error_count }}
+  warning_count:
+    description: "Number of warning lines processed."
+    value: ${{ steps.run.outputs.warning_count }}
+  failed:
+    description: "true when error_count > 0, false otherwise."
+    value: ${{ steps.run.outputs.failed }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: run
+      shell: bash
+      env:
+        FORMAT: ${{ inputs.format }}
+        ERRORS_FILE: ${{ inputs.errors_file }}
+        WARNINGS_FILE: ${{ inputs.warnings_file }}
+        OUT_MD: ${{ inputs.out_md }}
+        ERROR_HEADER: ${{ inputs.error_header }}
+        WARNING_HEADER: ${{ inputs.warning_header }}
+        SUCCESS_MESSAGE: ${{ inputs.success_message }}
+        MAX_WARNINGS_INLINE: ${{ inputs.max_warnings_inline }}
+        PATH_STRIP: ${{ inputs.path_strip }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/format.sh"
