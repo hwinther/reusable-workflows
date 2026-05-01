@@ -135,6 +135,15 @@ runs:
       echo -e "\nExtracted typecheck errors:\n"
       cat $TEMP_DIR/typecheck.err
 
+      # Extract warnings - mirror of error formats
+      grep -E ".+:[0-9]+:[0-9]+ - warning " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.warn.ts_new || (exit 0)
+      grep "): warning " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.warn.ts_old || (exit 0)
+      grep -E "^Warning: |\bWarning: " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.warn.generic || (exit 0)
+      cat $TEMP_DIR/typecheck.warn.ts_new $TEMP_DIR/typecheck.warn.ts_old $TEMP_DIR/typecheck.warn.generic > $TEMP_DIR/typecheck.warn 2>/dev/null || (exit 0)
+
+      echo -e "\nExtracted typecheck warnings:\n"
+      cat $TEMP_DIR/typecheck.warn
+
       if [ ! -s $TEMP_DIR/typecheck.err ]
       then
         echo "## ✅ Typecheck succeeded" > $TEMP_DIR/typecheck.md
@@ -144,13 +153,13 @@ runs:
         do
           # Format 1: TypeScript new format: file:line:column - error message
           ts_new_regex="(.+):([0-9]+):[0-9]+ - error (.+)"
-          
+
           # Format 2: TypeScript old format: file(line,column): error message
           ts_old_regex="(.+)\(([0-9]+),[0-9]+\): error (.+)"
-          
+
           # Format 3: Generic error: Error: ...
           generic_error_regex="Error: (.+)"
-          
+
           if [[ $line =~ $ts_new_regex ]]; then
             echo "::error file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
           elif [[ $line =~ $ts_old_regex ]]; then
@@ -166,6 +175,27 @@ runs:
         sed -i '/^$/d' $TEMP_DIR/typecheck.md             # removes empty lines
         sed -i -e 's/^/- ❌ /' $TEMP_DIR/typecheck.md     # prefix with markdown list item and cross mark emoji
         echo "## ❌ The following typecheck errors should be fixed:" | cat - $TEMP_DIR/typecheck.md > $TEMP_DIR/typecheck.md.temp && mv $TEMP_DIR/typecheck.md.temp $TEMP_DIR/typecheck.md
+      fi
+
+      # Process warnings - emit GitHub annotations and append to markdown
+      if [ -s $TEMP_DIR/typecheck.warn ]; then
+        cat $TEMP_DIR/typecheck.warn | while read line
+        do
+          ts_new_warn_regex="(.+):([0-9]+):[0-9]+ - warning (.+)"
+          ts_old_warn_regex="(.+)\(([0-9]+),[0-9]+\): warning (.+)"
+          if [[ $line =~ $ts_new_warn_regex ]]; then
+            echo "::warning file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
+          elif [[ $line =~ $ts_old_warn_regex ]]; then
+            echo "::warning file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
+          else
+            echo "::warning::$line"
+          fi
+        done
+
+        echo "" >> $TEMP_DIR/typecheck.md
+        echo "## ⚠️ Typecheck warnings:" >> $TEMP_DIR/typecheck.md
+        sed -i '/^$/d' $TEMP_DIR/typecheck.warn
+        sed -e 's/^/- ⚠️ /' $TEMP_DIR/typecheck.warn >> $TEMP_DIR/typecheck.md
       fi
 
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/typecheck.md)"$'\n'EOF >> $GITHUB_OUTPUT
