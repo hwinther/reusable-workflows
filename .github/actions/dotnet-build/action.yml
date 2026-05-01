@@ -303,9 +303,14 @@ runs:
     shell: bash
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     run: |
-      echo "## 📊 Code coverage report" > $TEMP_DIR/code-coverage-results.md
-      echo "" >> $TEMP_DIR/code-coverage-results.md
-      cat code-coverage-results.md >> $TEMP_DIR/code-coverage-results.md
+      {
+        echo "<details>"
+        echo "<summary>📊 Code coverage report</summary>"
+        echo ""
+        cat code-coverage-results.md
+        echo ""
+        echo "</details>"
+      } > $TEMP_DIR/code-coverage-results.md
       rm code-coverage-results.md
 
   - name: Generate ReportGenerator coverage report
@@ -326,9 +331,14 @@ runs:
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
     run: |
       if [ -f "$TEMP_DIR/coverage-report/SummaryGithub.md" ]; then
-        echo "## 📊 Coverage report (ReportGenerator)" > $TEMP_DIR/reportgenerator-summary.md
-        echo "" >> $TEMP_DIR/reportgenerator-summary.md
-        cat "$TEMP_DIR/coverage-report/SummaryGithub.md" >> $TEMP_DIR/reportgenerator-summary.md
+        {
+          echo "<details>"
+          echo "<summary>📊 Coverage report (ReportGenerator)</summary>"
+          echo ""
+          cat "$TEMP_DIR/coverage-report/SummaryGithub.md"
+          echo ""
+          echo "</details>"
+        } > $TEMP_DIR/reportgenerator-summary.md
       fi
 
   - name: Upload coverage reports
