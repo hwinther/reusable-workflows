@@ -94,6 +94,9 @@ runs:
       grep ": error " $TEMP_DIR/restore.out > $TEMP_DIR/restore.err || true
       grep "Failed to restore " $TEMP_DIR/restore.out > $TEMP_DIR/restore.failed || true
 
+      # Extract restore warnings (e.g. NU1903 vulnerability advisories, NU1701 framework mismatches)
+      grep ": warning " $TEMP_DIR/restore.out > $TEMP_DIR/restore.warn || true
+
       # If we found any error / failed-restore lines, treat restore as failed
       if [ -s $TEMP_DIR/restore.err ] || [ -s $TEMP_DIR/restore.failed ]; then
         RESTORE_FAILED=1
@@ -134,6 +137,43 @@ runs:
           echo '```' >> $TEMP_DIR/restore.md
         fi
       fi
+
+      # Process restore warnings - emit annotations and append to restore.md (success or failure)
+      if [ -s $TEMP_DIR/restore.warn ]; then
+        TOTAL_RESTORE_WARNINGS=$(wc -l < $TEMP_DIR/restore.warn | tr -d ' ')
+
+        while IFS= read -r line
+        do
+          # Match "<path> : warning <CODE>: <message>"
+          if [[ "$line" =~ ^(.+)\ :\ warning\ ([A-Za-z0-9]+):\ (.*)$ ]]; then
+            FILE_PATH="${BASH_REMATCH[1]}"
+            WARN_CODE="${BASH_REMATCH[2]}"
+            WARN_MSG="${BASH_REMATCH[3]}"
+            echo "::warning file=$FILE_PATH::$WARN_CODE: $WARN_MSG"
+          else
+            echo "::warning::$line"
+          fi
+        done < $TEMP_DIR/restore.warn
+
+        if [ ! -f $TEMP_DIR/restore.md ]; then
+          : > $TEMP_DIR/restore.md
+        else
+          echo "" >> $TEMP_DIR/restore.md
+        fi
+        echo "## ⚠️ Restore warnings ($TOTAL_RESTORE_WARNINGS total)" >> $TEMP_DIR/restore.md
+
+        if [ $TOTAL_RESTORE_WARNINGS -le 10 ]; then
+          sed "s|$GITHUB_WORKSPACE/||g" $TEMP_DIR/restore.warn > $TEMP_DIR/restore.warn.md
+        else
+          head -10 $TEMP_DIR/restore.warn | sed "s|$GITHUB_WORKSPACE/||g" > $TEMP_DIR/restore.warn.md
+          echo "" >> $TEMP_DIR/restore.warn.md
+          echo "... and $(($TOTAL_RESTORE_WARNINGS - 10)) more warnings" >> $TEMP_DIR/restore.warn.md
+        fi
+        sed -i '/^$/d' $TEMP_DIR/restore.warn.md
+        sed -i -e 's/^/- ⚠️ /' $TEMP_DIR/restore.warn.md
+        cat $TEMP_DIR/restore.warn.md >> $TEMP_DIR/restore.md
+      fi
+
       exit $RESTORE_FAILED
 
   - name: Build
@@ -270,6 +310,51 @@ runs:
             echo "Tests failed. See job logs for details." >> $TEMP_DIR/tests.md
           fi
         fi
+      fi
+
+      # Extract test warnings (covers test runtime + recompile during dotnet test).
+      # Dedupe against build.warn so we don't repeat what the build step already reported.
+      if [ -f "$TEMP_DIR/test.out" ]; then
+        grep "): warning " $TEMP_DIR/test.out > $TEMP_DIR/test.warn.raw || true
+        if [ -s $TEMP_DIR/test.warn.raw ]; then
+          if [ -f $TEMP_DIR/build.warn ]; then
+            grep -vxFf $TEMP_DIR/build.warn $TEMP_DIR/test.warn.raw > $TEMP_DIR/test.warn || true
+          else
+            cp $TEMP_DIR/test.warn.raw $TEMP_DIR/test.warn
+          fi
+        fi
+      fi
+
+      if [ -s $TEMP_DIR/test.warn ]; then
+        TOTAL_TEST_WARNINGS=$(wc -l < $TEMP_DIR/test.warn | tr -d ' ')
+
+        warning_regex="(.+)\(([0-9]+),([0-9]+)\): warning (.+) \[(.+)\]"
+        cat $TEMP_DIR/test.warn | while read line
+        do
+          if [[ $line =~ $warning_regex ]]; then
+            echo "::warning file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[4]}"
+          else
+            echo "::warning::$line"
+          fi
+        done
+
+        if [ ! -f $TEMP_DIR/tests.md ]; then
+          : > $TEMP_DIR/tests.md
+        else
+          echo "" >> $TEMP_DIR/tests.md
+        fi
+        echo "## ⚠️ Test warnings ($TOTAL_TEST_WARNINGS total)" >> $TEMP_DIR/tests.md
+
+        if [ $TOTAL_TEST_WARNINGS -le 10 ]; then
+          sed "s|$GITHUB_WORKSPACE/||g" $TEMP_DIR/test.warn > $TEMP_DIR/test.warn.md
+        else
+          head -10 $TEMP_DIR/test.warn | sed "s|$GITHUB_WORKSPACE/||g" > $TEMP_DIR/test.warn.md
+          echo "" >> $TEMP_DIR/test.warn.md
+          echo "... and $(($TOTAL_TEST_WARNINGS - 10)) more warnings" >> $TEMP_DIR/test.warn.md
+        fi
+        sed -i '/^$/d' $TEMP_DIR/test.warn.md
+        sed -i -e 's/^/- ⚠️ /' $TEMP_DIR/test.warn.md
+        cat $TEMP_DIR/test.warn.md >> $TEMP_DIR/tests.md
       fi
 
       exit $TEST_EXIT_CODE
