@@ -370,6 +370,67 @@ runs:
       reporter: dotnet-trx
       fail-on-error: false
 
+  - name: Generate test run report
+    id: test-markdown-report
+    if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
+    shell: bash
+    working-directory: ${{ inputs.working_directory }}
+    env:
+      OUTPUT: "${{ env.TEMP_DIR }}/test-results.md"
+    run: |
+      echo "::group::Test summary report"
+      mkdir -p "$(dirname "$OUTPUT")"
+
+      mapfile -t TRX_FILES < <(find . -path "*/TestResults/*.trx" 2>/dev/null)
+      if [ ${#TRX_FILES[@]} -eq 0 ]; then
+        echo "No TRX files found, skipping test summary"
+        {
+          echo "## 🧪 Test results"
+          echo ""
+          echo "No test report (no TRX files found)."
+        } > "$OUTPUT"
+        echo "::endgroup::"
+        exit 0
+      fi
+
+      total=0; passed=0; failed=0; skipped=0; errors=0
+      for f in "${TRX_FILES[@]}"; do
+        line=$(grep -oE '<Counters [^/]*/>' "$f" | head -1)
+        [ -z "$line" ] && continue
+        t=$(echo "$line" | grep -oE 'total="[0-9]+"' | grep -oE '[0-9]+')
+        p=$(echo "$line" | grep -oE 'passed="[0-9]+"' | grep -oE '[0-9]+')
+        fa=$(echo "$line" | grep -oE 'failed="[0-9]+"' | grep -oE '[0-9]+')
+        n=$(echo "$line" | grep -oE 'notExecuted="[0-9]+"' | grep -oE '[0-9]+')
+        inc=$(echo "$line" | grep -oE 'inconclusive="[0-9]+"' | grep -oE '[0-9]+')
+        err=$(echo "$line" | grep -oE 'error="[0-9]+"' | grep -oE '[0-9]+')
+        total=$((total + ${t:-0}))
+        passed=$((passed + ${p:-0}))
+        failed=$((failed + ${fa:-0}))
+        skipped=$((skipped + ${n:-0} + ${inc:-0}))
+        errors=$((errors + ${err:-0}))
+      done
+
+      if [ $failed -eq 0 ] && [ $errors -eq 0 ]; then
+        status="All tests passed"
+      elif [ $failed -gt 0 ]; then
+        status="${failed} test(s) failed"
+      else
+        status="${errors} test(s) errored"
+      fi
+
+      {
+        echo "## 🧪 Test results"
+        echo ""
+        echo "| Total | Passed | Failed | Skipped |"
+        echo "|-------|--------|--------|---------|"
+        echo "| $total | $passed | $failed | $skipped |"
+        echo ""
+        echo "**Status:** $status"
+      } > "$OUTPUT"
+
+      echo "Wrote test summary to $OUTPUT"
+      echo "::endgroup::"
+
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0
     if: steps.dotnet-restore.outcome == 'success' && inputs.test == 'true'
@@ -476,9 +537,10 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
-          [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/tests.md ] && cat $TEMP_DIR/tests.md >> $TEMP_DIR/combined.md
+      [ -f $TEMP_DIR/test-results.md ] && cat $TEMP_DIR/test-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
