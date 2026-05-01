@@ -563,6 +563,7 @@ runs:
         cat "${GITHUB_WORKSPACE}/code-coverage-results.md"
         echo ""
         echo "</details>"
+        echo ""
       } > $TEMP_DIR/code-coverage-results.md
       rm -f "${GITHUB_WORKSPACE}/code-coverage-results.md"
 
