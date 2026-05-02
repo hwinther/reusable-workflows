@@ -1,0 +1,68 @@
+name: "Grype SARIF summary"
+description: |
+  Parses a Grype SARIF file and renders a human-readable finding table into the
+  GitHub step summary, and (when running on a pull_request event with a token)
+  posts the same content as a sticky PR comment so reviewers don't have to chase
+  the alert through Code Scanning.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  sarif_file:
+    required: true
+    description: "Path to the Grype SARIF JSON file."
+  category:
+    required: false
+    description: |
+      Code Scanning category the SARIF was uploaded under. Used to build the
+      "Open in Code Scanning" link and to label the summary header.
+    default: ""
+  github_token:
+    required: false
+    description: "Token for posting the PR comment. Skip the comment if empty."
+    default: ""
+  pr_comment_enabled:
+    required: false
+    description: "Set to 'false' to skip the PR comment even on pull_request events."
+    default: "true"
+  pr_comment_identifier:
+    required: false
+    description: "Sticky comment id — set per category to avoid stomping when scanning multiple images."
+    default: "grype-summary"
+  top_n:
+    required: false
+    description: "Maximum findings rendered inline; remainder live in Code Scanning."
+    default: "20"
+
+runs:
+  using: "composite"
+  steps:
+    - id: parse
+      shell: bash
+      env:
+        SARIF_FILE: ${{ inputs.sarif_file }}
+        OUT_MD: ${{ runner.temp }}/grype-summary.md
+        CATEGORY: ${{ inputs.category }}
+        TOP_N: ${{ inputs.top_n }}
+        GITHUB_SERVER_URL: ${{ github.server_url }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        BRANCH: ${{ github.head_ref || github.ref_name }}
+      run: |
+        bash "$GITHUB_ACTION_PATH/scripts/parse.sh"
+        cat "$OUT_MD" >> "$GITHUB_STEP_SUMMARY"
+        {
+          echo 'markdown<<GRYPE_SUMMARY_EOF'
+          cat "$OUT_MD"
+          echo 'GRYPE_SUMMARY_EOF'
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Update PR comment with Grype findings
+      if: |
+        inputs.pr_comment_enabled == 'true'
+        && github.event_name == 'pull_request'
+        && inputs.github_token != ''
+      uses: im-open/update-pr-comment@b782531000dfcf02162c0bd9e78639d82a13c3b5 # v1.2.2
+      with:
+        github-token: ${{ inputs.github_token }}
+        comment-identifier: ${{ inputs.pr_comment_identifier }}
+        comment-content: ${{ steps.parse.outputs.markdown }}

@@ -94,6 +94,7 @@ jobs:
       attestations: write
       actions: write
       security-events: write
+      pull-requests: write  # for the Grype findings PR comment via _grype-summary
     outputs:
       image_digest: ${{ steps.docker-push.outputs.digest }}
     steps:
@@ -169,21 +170,14 @@ jobs:
           category: grype-container-${{ inputs.container_image_name_postfix }}
           wait-for-processing: false
 
-      - name: Grype Code Scanning link (job summary)
+      - name: Render Grype findings (job summary + PR comment)
         if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
-        env:
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-          IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
-        run: |
-          ENC=$(python3 -c "import urllib.parse, os; print(urllib.parse.quote_plus('is:open branch:' + os.environ['BRANCH'] + ' '))")
-          URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/security/code-scanning?query=${ENC}"
-          {
-            echo "### Grype / Code scanning"
-            echo ""
-            echo "[View open code scanning alerts for branch \`${BRANCH}\`](${URL})"
-            echo ""
-            echo "Uploaded SARIF category: \`grype-container-${IMAGE_POSTFIX}\`. Alerts can take a short time to appear after upload."
-          } >> "$GITHUB_STEP_SUMMARY"
+        uses: hwinther/reusable-workflows/.github/actions/_grype-summary@v1
+        with:
+          sarif_file: ${{ runner.temp }}/grype-results.sarif
+          category: grype-container-${{ inputs.container_image_name_postfix }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          pr_comment_identifier: grype-summary-${{ inputs.container_image_name_postfix }}
 
       - name: Enforce Grype vulnerability gate
         if: ${{ inputs.grype_scan_enabled && inputs.grype_fail_build && steps.grype-scan.outcome == 'failure' }}

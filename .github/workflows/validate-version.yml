@@ -39,3 +39,6 @@ jobs:
 
       - name: Run _format-output tests
         run: bash ./scripts/format.test.sh
+
+      - name: Run _grype-summary tests
+        run: bash ./scripts/grype-summary.test.sh

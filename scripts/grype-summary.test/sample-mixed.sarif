@@ -1,0 +1,68 @@
+{
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "Grype",
+          "version": "0.85.0",
+          "rules": [
+            {
+              "id": "CVE-2023-9999",
+              "shortDescription": {"text": "Remote code execution in libfoo"},
+              "properties": {"security-severity": "9.8"}
+            },
+            {
+              "id": "CVE-2024-1111",
+              "shortDescription": {"text": "Information leak in libbar"},
+              "properties": {"security-severity": "7.5"}
+            },
+            {
+              "id": "CVE-2024-2222",
+              "shortDescription": {"text": "Denial of service in libbaz"},
+              "properties": {"security-severity": "5.3"}
+            },
+            {
+              "id": "GHSA-AAAA-BBBB-CCCC",
+              "shortDescription": {"text": "Possible weakness, unscored"}
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "CVE-2023-9999",
+          "level": "error",
+          "message": {"text": "The vulnerability CVE-2023-9999 in libfoo@1.0.0 leads to RCE; fixed in 1.0.1"},
+          "locations": [
+            {"physicalLocation": {"artifactLocation": {"uri": "/usr/lib/x86_64-linux-gnu/libfoo.so.1.0.0"}}}
+          ]
+        },
+        {
+          "ruleId": "CVE-2024-1111",
+          "level": "warning",
+          "message": {"text": "CVE-2024-1111 in libbar@2.3.4 leaks heap memory; no fix available"},
+          "locations": [
+            {"physicalLocation": {"artifactLocation": {"uri": "/usr/lib/libbar.so.2"}}}
+          ]
+        },
+        {
+          "ruleId": "CVE-2024-2222",
+          "level": "warning",
+          "message": {"text": "CVE-2024-2222 in libbaz@3.0 causes service crash on malformed input | with pipe char"},
+          "locations": [
+            {"physicalLocation": {"artifactLocation": {"uri": "/opt/app/lib/libbaz"}}}
+          ]
+        },
+        {
+          "ruleId": "GHSA-AAAA-BBBB-CCCC",
+          "level": "note",
+          "message": {"text": "Unscored advisory in vendored module"},
+          "locations": [
+            {"physicalLocation": {"artifactLocation": {"uri": "/app/vendor/foo"}}}
+          ]
+        }
+      ]
+    }
+  ]
+}
