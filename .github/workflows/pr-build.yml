@@ -99,9 +99,17 @@ on:
         description: "Create TODO PR comment"
         default: true
 
+# Cancel superseded PR runs. Note: this only scopes the inner reusable-workflow runs;
+# consumers should also set `concurrency:` on their caller workflow for cancellation
+# to take effect at their level.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   detect-changes:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     permissions:
       contents: read
@@ -130,18 +138,24 @@ jobs:
       - name: Check for frontend changes
         id: node-check
         if: inputs.node_enabled
+        env:
+          WD: ${{ inputs.node_working_directory }}
+          REGEX: ${{ inputs.node_changes_regex }}
+          BASE_REF: ${{ steps.set-base.outputs.base_ref }}
         run: |
-          if [ -z "${{ inputs.node_changes_regex }}" ]; then
-            PATTERN="^${{ inputs.node_working_directory }}/"
+          if [ -z "$REGEX" ]; then
+            # Escape regex meta-chars so a directory like "src/(legacy)" is matched literally.
+            ESCAPED_WD=$(printf '%s' "$WD" | sed -e 's/[][\\.*^$+?(){}|]/\\&/g')
+            PATTERN="^${ESCAPED_WD}/"
           else
-            PATTERN="${{ inputs.node_changes_regex }}"
+            PATTERN="$REGEX"
           fi
-          
+
           echo "Using regex pattern: $PATTERN"
           echo "Files to check against:"
-          git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD
-          
-          if git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD | grep -qE "$PATTERN"; then
+          git diff --name-only "$BASE_REF"...HEAD
+
+          if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
             echo "changes_detected=true" >> $GITHUB_OUTPUT
             echo "Changes detected in pattern."
           else
@@ -152,18 +166,23 @@ jobs:
       - name: Check for backend changes
         id: dotnet-check
         if: inputs.dotnet_enabled
+        env:
+          WD: ${{ inputs.dotnet_working_directory }}
+          REGEX: ${{ inputs.dotnet_changes_regex }}
+          BASE_REF: ${{ steps.set-base.outputs.base_ref }}
         run: |
-          if [ -z "${{ inputs.dotnet_changes_regex }}" ]; then
-            PATTERN="^${{ inputs.dotnet_working_directory }}/"
+          if [ -z "$REGEX" ]; then
+            ESCAPED_WD=$(printf '%s' "$WD" | sed -e 's/[][\\.*^$+?(){}|]/\\&/g')
+            PATTERN="^${ESCAPED_WD}/"
           else
-            PATTERN="${{ inputs.dotnet_changes_regex }}"
+            PATTERN="$REGEX"
           fi
 
           echo "Using regex pattern: $PATTERN"
           echo "Files to check against:"
-          git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD
+          git diff --name-only "$BASE_REF"...HEAD
 
-          if git diff --name-only ${{ steps.set-base.outputs.base_ref }}...HEAD | grep -qE "$PATTERN"; then
+          if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
             echo "changes_detected=true" >> $GITHUB_OUTPUT
             echo "Changes detected in pattern."
           else
@@ -175,6 +194,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.node_changes == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       packages: read
@@ -210,6 +230,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.dotnet_changes == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       packages: read
@@ -247,6 +268,7 @@ jobs:
     needs: [detect-changes, node-build, dotnet-build]
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       pull-requests: write
     steps:
@@ -323,6 +345,7 @@ jobs:
     needs: detect-changes
     if: inputs.dotnet_inspect_code_enabled && needs.detect-changes.outputs.dotnet_changes == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: read
@@ -364,6 +387,7 @@ jobs:
     needs: detect-changes
     if: inputs.todo_comment_enabled && (needs.detect-changes.outputs.dotnet_changes == 'true' || needs.detect-changes.outputs.node_changes == 'true')
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: write

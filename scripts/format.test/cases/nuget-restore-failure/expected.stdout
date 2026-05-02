@@ -1,0 +1,2 @@
+::error file=/home/runner/work/repo/Project.csproj::NU1101: Unable to find package 'Foo'.
+::error::Failed to restore /home/runner/work/repo/Project.csproj (in 1.2 sec).

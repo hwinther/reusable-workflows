@@ -1,0 +1,3 @@
+::error file=/home/runner/work/repo/src/Foo.cs,line=42::CS1002: ; expected
+::warning file=/home/runner/work/repo/src/Bar.cs,line=15::CS0168: The variable 'x' is declared but never used
+::warning file=/home/runner/work/repo/src/Bar.cs,line=20::CS0219: The variable 'y' is assigned but its value is never used

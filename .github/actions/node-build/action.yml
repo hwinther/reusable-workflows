@@ -39,6 +39,8 @@ runs:
       TEMP_DIR=$(mktemp -d)
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
+  # setup-node writes a runner-managed ~/.npmrc with `//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}`.
+  # The token reference is by env var name, so the secret never lands on disk in plaintext.
   - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
     name: Set up Node
     with:
@@ -46,16 +48,14 @@ runs:
       cache: "npm"
       cache-dependency-path: "${{ inputs.working_directory }}/package-lock.json"
       scope: ${{ inputs.scope }}
-
-  - name: Add GitHub token to .npmrc
-    working-directory: ${{ inputs.working_directory }}
-    shell: bash
-    run: touch ./.npmrc && echo -e "\n//npm.pkg.github.com/:_authToken=${{ inputs.github_token }}" >> ./.npmrc
+      registry-url: 'https://npm.pkg.github.com'
 
   - name: Install dependencies
     id: dependency-install
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      NODE_AUTH_TOKEN: ${{ inputs.github_token }}
     run: |
       echo "::group::Install dependencies"
       set +e
@@ -79,16 +79,7 @@ runs:
       fi
       echo "::endgroup::"
 
-  - name: Restore .npmrc
-    working-directory: ${{ inputs.working_directory }}
-    shell: bash
-    run: |
-      if git ls-files --error-unmatch .npmrc > /dev/null 2>&1; then
-        git checkout HEAD -- .npmrc
-      else
-        rm -f .npmrc || true
-      fi
-
+  # Typecheck: run, then collect errors/warnings into per-tool files for the shared formatter.
   - name: Typecheck
     id: node-typecheck
     if: steps.dependency-install.outcome == 'success'
@@ -101,114 +92,44 @@ runs:
       if ! node -e "const s=require('./package.json').scripts; process.exit(s && s.typecheck ? 0 : 1)"; then
         echo "Script 'typecheck' not found in package.json, skipping"
         echo "## ⚠️ Script 'typecheck' not found in package.json, skipping" > $TEMP_DIR/typecheck.md
-        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/typecheck.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        echo "skipped=true" >> $GITHUB_OUTPUT
         echo "::endgroup::"
         exit 0
       fi
       set +e
-      npm run typecheck 1>$TEMP_DIR/typecheck.out 2>&1 || (exit 0)
+      npm run typecheck 1>$TEMP_DIR/typecheck.out 2>&1
       TYPECHECK_EXIT_CODE=$?
-      echo "Typecheck exit code: $TYPECHECK_EXIT_CODE"
       set -e
-
-      echo -e "\nTypecheck result:\n"
+      echo "Typecheck exit code: $TYPECHECK_EXIT_CODE"
       cat $TEMP_DIR/typecheck.out
+      echo "::endgroup::"
 
       sed 's/\x1b\[[0-9;]*m//g' $TEMP_DIR/typecheck.out > $TEMP_DIR/typecheck.out.nocolor
-      echo -e "\nTypecheck result without colors:\n"
-      cat $TEMP_DIR/typecheck.out.nocolor
 
-      # Extract errors from typecheck output - support multiple error formats
+      : > $TEMP_DIR/typecheck.err
+      grep -E ".+:[0-9]+:[0-9]+ - error " $TEMP_DIR/typecheck.out.nocolor >> $TEMP_DIR/typecheck.err || true
+      grep "): error " $TEMP_DIR/typecheck.out.nocolor >> $TEMP_DIR/typecheck.err || true
+      grep -E "Error: " $TEMP_DIR/typecheck.out.nocolor >> $TEMP_DIR/typecheck.err || true
 
-      # Format 1: TypeScript new format: file:line:column - error message
-      grep -E ".+:[0-9]+:[0-9]+ - error " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.err.ts_new || (exit 0)
+      : > $TEMP_DIR/typecheck.warn
+      grep -E ".+:[0-9]+:[0-9]+ - warning " $TEMP_DIR/typecheck.out.nocolor >> $TEMP_DIR/typecheck.warn || true
+      grep "): warning " $TEMP_DIR/typecheck.out.nocolor >> $TEMP_DIR/typecheck.warn || true
+      grep -E "^Warning: |\bWarning: " $TEMP_DIR/typecheck.out.nocolor >> $TEMP_DIR/typecheck.warn || true
 
-      # Format 2: TypeScript old format: file(line,column): error message
-      grep "): error " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.err.ts_old || (exit 0)
+  - name: Format typecheck output
+    id: format-typecheck
+    if: steps.dependency-install.outcome == 'success' && steps.node-typecheck.outputs.skipped != 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    with:
+      format: ts
+      errors_file: ${{ env.TEMP_DIR }}/typecheck.err
+      warnings_file: ${{ env.TEMP_DIR }}/typecheck.warn
+      out_md: ${{ env.TEMP_DIR }}/typecheck.md
+      error_header: "## ❌ The following typecheck errors should be fixed:"
+      warning_header: "## ⚠️ Typecheck warnings:"
+      success_message: "## ✅ Typecheck succeeded"
 
-      # Format 3: Generic errors: Error: ...
-      grep -E "Error: " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.err.generic || (exit 0)
-
-      # Combine all error formats
-      cat $TEMP_DIR/typecheck.err.ts_new $TEMP_DIR/typecheck.err.ts_old $TEMP_DIR/typecheck.err.generic > $TEMP_DIR/typecheck.err 2>/dev/null || (exit 0)
-
-      echo -e "\nExtracted typecheck errors:\n"
-      cat $TEMP_DIR/typecheck.err
-
-      # Extract warnings - mirror of error formats
-      grep -E ".+:[0-9]+:[0-9]+ - warning " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.warn.ts_new || (exit 0)
-      grep "): warning " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.warn.ts_old || (exit 0)
-      grep -E "^Warning: |\bWarning: " $TEMP_DIR/typecheck.out.nocolor > $TEMP_DIR/typecheck.warn.generic || (exit 0)
-      cat $TEMP_DIR/typecheck.warn.ts_new $TEMP_DIR/typecheck.warn.ts_old $TEMP_DIR/typecheck.warn.generic > $TEMP_DIR/typecheck.warn 2>/dev/null || (exit 0)
-
-      echo -e "\nExtracted typecheck warnings:\n"
-      cat $TEMP_DIR/typecheck.warn
-
-      if [ ! -s $TEMP_DIR/typecheck.err ]
-      then
-        echo "## ✅ Typecheck succeeded" > $TEMP_DIR/typecheck.md
-      else
-        # Process all error formats
-        cat $TEMP_DIR/typecheck.err | while read line
-        do
-          # Format 1: TypeScript new format: file:line:column - error message
-          ts_new_regex="(.+):([0-9]+):[0-9]+ - error (.+)"
-
-          # Format 2: TypeScript old format: file(line,column): error message
-          ts_old_regex="(.+)\(([0-9]+),[0-9]+\): error (.+)"
-
-          # Format 3: Generic error: Error: ...
-          generic_error_regex="Error: (.+)"
-
-          if [[ $line =~ $ts_new_regex ]]; then
-            echo "::error file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
-          elif [[ $line =~ $ts_old_regex ]]; then
-            echo "::error file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
-          elif [[ $line =~ $generic_error_regex ]]; then
-            # For generic errors, we don't create GitHub annotations since we don't have file/line info
-            # The error will still appear in the markdown output below
-            :
-          fi
-        done
-
-        cp $TEMP_DIR/typecheck.err $TEMP_DIR/typecheck.md
-        sed -i '/^$/d' $TEMP_DIR/typecheck.md             # removes empty lines
-        sed -i -e 's/^/- ❌ /' $TEMP_DIR/typecheck.md     # prefix with markdown list item and cross mark emoji
-        echo "## ❌ The following typecheck errors should be fixed:" | cat - $TEMP_DIR/typecheck.md > $TEMP_DIR/typecheck.md.temp && mv $TEMP_DIR/typecheck.md.temp $TEMP_DIR/typecheck.md
-      fi
-
-      # Process warnings - emit GitHub annotations and append to markdown
-      if [ -s $TEMP_DIR/typecheck.warn ]; then
-        cat $TEMP_DIR/typecheck.warn | while read line
-        do
-          ts_new_warn_regex="(.+):([0-9]+):[0-9]+ - warning (.+)"
-          ts_old_warn_regex="(.+)\(([0-9]+),[0-9]+\): warning (.+)"
-          if [[ $line =~ $ts_new_warn_regex ]]; then
-            echo "::warning file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
-          elif [[ $line =~ $ts_old_warn_regex ]]; then
-            echo "::warning file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
-          else
-            echo "::warning::$line"
-          fi
-        done
-
-        echo "" >> $TEMP_DIR/typecheck.md
-        echo "## ⚠️ Typecheck warnings:" >> $TEMP_DIR/typecheck.md
-        sed -i '/^$/d' $TEMP_DIR/typecheck.warn
-        sed -e 's/^/- ⚠️ /' $TEMP_DIR/typecheck.warn >> $TEMP_DIR/typecheck.md
-      fi
-
-      echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/typecheck.md)"$'\n'EOF >> $GITHUB_OUTPUT
-
-      if [ -s $TEMP_DIR/typecheck.err ]
-      then
-        echo "::endgroup::"
-        echo "❌ Typecheck failed"
-        exit 1
-      fi
-      echo "::endgroup::"
-      echo "✅ Typecheck succeeded"
-
+  # Build: same shape as typecheck. Build warnings include "Warning:" / "[…][Warning]" bundler output.
   - name: Build
     id: node-build
     if: steps.dependency-install.outcome == 'success'
@@ -221,95 +142,39 @@ runs:
       if ! node -e "const s=require('./package.json').scripts; process.exit(s && s.build ? 0 : 1)"; then
         echo "Script 'build' not found in package.json, skipping"
         echo "## ⚠️ Script 'build' not found in package.json, skipping" > $TEMP_DIR/build.md
-        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/build.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        echo "skipped=true" >> $GITHUB_OUTPUT
         echo "::endgroup::"
         exit 0
       fi
-      npm run build 1>$TEMP_DIR/build.out 2>&1 || (exit 0)
-      echo -e "\nBuild result:\n"
+      set +e
+      npm run build 1>$TEMP_DIR/build.out 2>&1
+      BUILD_EXIT_CODE=$?
+      set -e
+      echo "Build exit code: $BUILD_EXIT_CODE"
       cat $TEMP_DIR/build.out
+      echo "::endgroup::"
 
       sed 's/\x1b\[[0-9;]*m//g' $TEMP_DIR/build.out > $TEMP_DIR/build.out.nocolor
-      echo -e "\nBuild result without colors:\n"
-      cat $TEMP_DIR/build.out.nocolor
 
-      # Extract errors from build output - support multiple error formats
+      : > $TEMP_DIR/build.err
+      grep -E ".+:[0-9]+:[0-9]+ - error " $TEMP_DIR/build.out.nocolor >> $TEMP_DIR/build.err || true
+      grep "): error " $TEMP_DIR/build.out.nocolor >> $TEMP_DIR/build.err || true
+      grep -E "Error: " $TEMP_DIR/build.out.nocolor >> $TEMP_DIR/build.err || true
 
-      # Format 1: TypeScript new format: file:line:column - error message
-      grep -E ".+:[0-9]+:[0-9]+ - error " $TEMP_DIR/build.out.nocolor > $TEMP_DIR/build.err.ts_new || (exit 0)
+      grep -iE "Warning:|\[.*\]\[Warning\]" $TEMP_DIR/build.out.nocolor > $TEMP_DIR/build.warn || true
 
-      # Format 2: TypeScript old format: file(line,column): error message
-      grep "): error " $TEMP_DIR/build.out.nocolor > $TEMP_DIR/build.err.ts_old || (exit 0)
-
-      # Format 3: Generic errors: Error: ...
-      grep -E "Error: " $TEMP_DIR/build.out.nocolor > $TEMP_DIR/build.err.generic || (exit 0)
-
-      # Combine all error formats
-      cat $TEMP_DIR/build.err.ts_new $TEMP_DIR/build.err.ts_old $TEMP_DIR/build.err.generic > $TEMP_DIR/build.err 2>/dev/null || (exit 0)
-
-      # Extract warnings (e.g. bundler warnings)
-      grep -iE "Warning:|\[.*\]\[Warning\]" $TEMP_DIR/build.out.nocolor > $TEMP_DIR/build.warn || (exit 0)
-
-      echo -e "\nExtracted build errors:\n"
-      cat $TEMP_DIR/build.err
-      echo -e "\nExtracted build warnings:\n"
-      cat $TEMP_DIR/build.warn
-      echo -e "\n"
-
-      if [ ! -s $TEMP_DIR/build.err ]
-      then
-        echo "## ✅ Build succeeded" > $TEMP_DIR/build.md
-      else
-        # Process all error formats
-        cat $TEMP_DIR/build.err | while read line
-        do
-          # Format 1: TypeScript new format: file:line:column - error message
-          ts_new_regex="(.+):([0-9]+):[0-9]+ - error (.+)"
-          
-          # Format 2: TypeScript old format: file(line,column): error message
-          ts_old_regex="(.+)\(([0-9]+),[0-9]+\): error (.+)"
-          
-          # Format 3: Generic error: Error: ...
-          generic_error_regex="Error: (.+)"
-          
-          if [[ $line =~ $ts_new_regex ]]; then
-            echo "::error file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
-          elif [[ $line =~ $ts_old_regex ]]; then
-            echo "::error file=${BASH_REMATCH[1]},line=${BASH_REMATCH[2]}::${BASH_REMATCH[3]}"
-          elif [[ $line =~ $generic_error_regex ]]; then
-            # For generic errors, we don't create GitHub annotations since we don't have file/line info
-            # The error will still appear in the markdown output below
-            :
-          fi
-        done
-
-        cp $TEMP_DIR/build.err $TEMP_DIR/build.md
-        sed -i '/^$/d' $TEMP_DIR/build.md             # removes empty lines
-        sed -i -e 's/^/- ❌ /' $TEMP_DIR/build.md     # prefix with markdown list item and cross mark emoji
-        echo "## ❌ The following build errors should be fixed:" | cat - $TEMP_DIR/build.md > $TEMP_DIR/build.md.temp && mv $TEMP_DIR/build.md.temp $TEMP_DIR/build.md
-      fi
-
-      # Process warnings - emit GitHub annotations and append to markdown
-      if [ -s $TEMP_DIR/build.warn ]; then
-        while IFS= read -r line; do
-          echo "::warning::$line"
-        done < $TEMP_DIR/build.warn
-        echo "" >> $TEMP_DIR/build.md
-        echo "## ⚠️ Build warnings:" >> $TEMP_DIR/build.md
-        sed -i '/^$/d' $TEMP_DIR/build.warn
-        sed -e 's/^/- ⚠️ /' $TEMP_DIR/build.warn >> $TEMP_DIR/build.md
-      fi
-
-      echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/build.md)"$'\n'EOF >> $GITHUB_OUTPUT
-
-      if [ -s $TEMP_DIR/build.err ]
-      then
-        echo "::endgroup::"
-        echo "❌ Build failed"
-        exit 1
-      fi
-      echo "::endgroup::"
-      echo "✅ Build succeeded"
+  - name: Format build output
+    id: format-build
+    if: steps.dependency-install.outcome == 'success' && steps.node-build.outputs.skipped != 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    with:
+      format: ts
+      errors_file: ${{ env.TEMP_DIR }}/build.err
+      warnings_file: ${{ env.TEMP_DIR }}/build.warn
+      out_md: ${{ env.TEMP_DIR }}/build.md
+      error_header: "## ❌ The following build errors should be fixed:"
+      warning_header: "## ⚠️ Build warnings:"
+      success_message: "## ✅ Build succeeded"
 
   - name: Run extra command
     if: steps.dependency-install.outcome == 'success' && inputs.extra_command != ''
@@ -325,91 +190,47 @@ runs:
       fi
 
   - name: Lint
-    if: steps.dependency-install.outcome == 'success'
     id: node-lint
+    if: steps.dependency-install.outcome == 'success'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
-    env:
-      WORKFLOW_AGENT_PATH: "${{ github.workspace }}/"
     run: |
       echo "::group::Lint"
       if ! node -e "const s=require('./package.json').scripts; process.exit(s && s['lint:ci'] ? 0 : 1)"; then
         echo "Script 'lint:ci' not found in package.json, skipping"
         echo "## ⚠️ Script 'lint:ci' not found in package.json, skipping" > $TEMP_DIR/lint.md
-        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/lint.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        echo "skipped=true" >> $GITHUB_OUTPUT
         echo "::endgroup::"
         exit 0
       fi
       set +e
-      npm run lint:ci -- --output-file $TEMP_DIR/eslint.json 2>$TEMP_DIR/lint.err || (exit 0)
+      npm run lint:ci -- --output-file $TEMP_DIR/eslint.json 2>$TEMP_DIR/lint.err
       LINT_EXIT_CODE=$?
-      echo "Lint exit code: $LINT_EXIT_CODE"
       set -e
-
-      echo -e "\n::group::Lint result\n"
+      echo "Lint exit code: $LINT_EXIT_CODE"
       cat $TEMP_DIR/eslint.json
-      echo -e "\n::endgroup::\n"
+      echo "::endgroup::"
 
-      LINT_FAILED=0
-
-      # Check if there were errors during linting process
-      if [ -s $TEMP_DIR/lint.err ]
-      then
-        echo -e "\nErrors during linting:\n"
-        cat $TEMP_DIR/lint.err
+      # Fail-fast on errors writing to stderr (e.g. ESLint config errors). The format step
+      # below assumes a valid ESLint JSON report.
+      if [ -s $TEMP_DIR/lint.err ]; then
         echo "::error::Errors during linting, see output above."
         echo "## ❌ Errors during linting:" > $TEMP_DIR/lint.md
         cat $TEMP_DIR/lint.err >> $TEMP_DIR/lint.md
-        LINT_FAILED=1
-      else
-        if [ ! -s $TEMP_DIR/eslint.json ] || [ "$(cat $TEMP_DIR/eslint.json)" = "[]" ]
-        then
-          echo "## ✅ No lint issues 🎊" > $TEMP_DIR/lint.md
-        else
-          # Check if there are any actual lint errors/warnings
-          ERROR_COUNT=$(jq '[.[] | select(.errorCount > 0 or .warningCount > 0)] | length' $TEMP_DIR/eslint.json 2>/dev/null || echo "0")
-          
-          if [ "$ERROR_COUNT" = "0" ]
-          then
-            echo "## ✅ No lint issues 🎊" > $TEMP_DIR/lint.md
-          else
-            # Parse JSON and create GitHub error annotations
-            echo "## ❌ The following lint issues should be fixed:" > $TEMP_DIR/lint.md
-            LINT_FAILED=1
-
-            echo "WORKFLOW_AGENT_PATH: ${{ env.WORKFLOW_AGENT_PATH }}"
-            
-            # Use jq to parse JSON and create annotations
-            if command -v jq >/dev/null 2>&1; then
-              # Create GitHub error annotations (severity 2)
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "::error file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
-              # Create GitHub warning annotations (severity 1)
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 1) | "::warning file=" + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "")) + ",line=" + (.line | tostring) + ",col=" + (.column | tostring) + "::" + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json 2>/dev/null || true
-              
-              # Create markdown output for PR comment (errors first, then warnings)
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 2) | "- ❌ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
-              jq -r '.[] | select(.messages | length > 0) | .filePath as $file | .messages[] | select(.severity == 1) | "- ⚠️ " + ($file | sub("${{ env.WORKFLOW_AGENT_PATH }}"; "") | sub(".*/"; "")) + ":" + (.line | tostring) + ":" + (.column | tostring) + " - " + .message + " (\(.ruleId // "unknown"))"' $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md 2>/dev/null || true
-            else
-              # Fallback if jq is not available
-              echo "jq not available, showing raw JSON output" >> $TEMP_DIR/lint.md
-              cat $TEMP_DIR/eslint.json >> $TEMP_DIR/lint.md
-            fi
-          fi
-        fi
+        echo "lint_runtime_error=true" >> $GITHUB_OUTPUT
       fi
 
-      echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/lint.md)"$'\n'EOF >> $GITHUB_OUTPUT
-
-      # Final check - fail the step if any lint issues were found
-      if [ "$LINT_FAILED" = "1" ]
-      then
-        echo "::endgroup::"
-        echo "::error::Lint issues found"
-        exit 1
-      fi
-
-      echo "::endgroup::"
-      echo "✅ No lint errors found"
+  - name: Format lint output
+    id: format-lint
+    if: steps.dependency-install.outcome == 'success' && steps.node-lint.outputs.skipped != 'true' && steps.node-lint.outputs.lint_runtime_error != 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    with:
+      format: eslint-json
+      errors_file: ${{ env.TEMP_DIR }}/eslint.json
+      out_md: ${{ env.TEMP_DIR }}/lint.md
+      error_header: "## ❌ The following lint issues should be fixed:"
+      warning_header: "## ⚠️ Lint warnings:"
+      success_message: "## ✅ No lint issues 🎊"
 
   - name: Run tests
     id: test-coverage
@@ -572,21 +393,33 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     run: |
       echo "Checking for uncommitted changes..."
-      git status --porcelain
-      if [ -n "$(git status --porcelain)" ]; then
-        echo "::error::Changes in files after restore and build:"
-        git status
-        git diff
-        echo "## ❌ Changes in files after restore and build" > $TEMP_DIR/git-status.md
-        echo "" >> $TEMP_DIR/git-status.md
-        echo "The following files have changes:" >> $TEMP_DIR/git-status.md
-        echo "\`\`\`" >> $TEMP_DIR/git-status.md
-        git status --porcelain >> $TEMP_DIR/git-status.md
-        echo "\`\`\`" >> $TEMP_DIR/git-status.md
-        exit 1
+      git config core.fileMode false
+      git -c core.safecrlf=false status --porcelain
+
+      if [ -n "$(git -c core.safecrlf=false status --porcelain)" ]; then
+        echo "Found changes, staging files to see if they are normalized away..."
+        git add -A
+
+        if [ -n "$(git diff --cached)" ]; then
+          echo "::error::Actual content changes in files after install and build:"
+          git status
+          git diff --cached
+          echo "## ❌ Changes in files after install and build" > $TEMP_DIR/git-status.md
+          echo "" >> $TEMP_DIR/git-status.md
+          echo "The following files have actual changes:" >> $TEMP_DIR/git-status.md
+          echo "\`\`\`" >> $TEMP_DIR/git-status.md
+          git diff --cached --name-only >> $TEMP_DIR/git-status.md
+          echo "\`\`\`" >> $TEMP_DIR/git-status.md
+          git reset HEAD
+          exit 1
+        else
+          echo "No actual changes - only line endings or file mode were normalized."
+          git reset HEAD
+          echo "## ✅ No changes in files after install and build were found" > $TEMP_DIR/git-status.md
+        fi
       else
-        echo "No changes in files after restore and build were found."
-        echo "## ✅ No changes in files after restore and build were found" > $TEMP_DIR/git-status.md
+        echo "No changes in files after install and build were found."
+        echo "## ✅ No changes in files after install and build were found" > $TEMP_DIR/git-status.md
       fi
 
   - name: Combine output into PR comment
@@ -606,6 +439,17 @@ runs:
       [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
       echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
+
+  - name: Fail workflow on typecheck/build/lint errors
+    if: |
+      steps.format-typecheck.outputs.failed == 'true'
+      || steps.format-build.outputs.failed == 'true'
+      || steps.format-lint.outputs.failed == 'true'
+      || steps.node-lint.outputs.lint_runtime_error == 'true'
+    shell: bash
+    run: |
+      echo "::error::One or more checks reported errors. See PR comment for details."
+      exit 1
 
   - name: Fail workflow if one or more tests failed
     if: steps.test-reporter.conclusion == 'failure' && inputs.test == 'true'
