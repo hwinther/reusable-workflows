@@ -9,7 +9,10 @@ inputs:
     description: 'Container image navn, f.eks. mappe/undermappe/frontend'
     default: ''
   override_config:
-    description: 'Overstyring av GitVersion konfigurasjonselementer i YAML format'
+    description: |
+      Overstyring av GitVersion konfigurasjonselementer i YAML format.
+      Append-es etter et innebygd default som setter pull-request label til "{BranchName}",
+      så consumer-overstyringer for samme nøkkel vinner.
     default: ''
   persist_checkout_credentials:
     description: 'actions/checkout persist-credentials; set true only if a later step in the same job runs git push using this clone.'
@@ -54,11 +57,33 @@ runs:
     with:
       versionSpec: '6.6.x'
 
+  # Pull-request bygg får som standard en label utledet fra source-branchen, slik at
+  # container- og pakketagger blir f.eks. "0.20.1-feature-login-fix.2" i stedet for
+  # GitVersion-defaulten "0.20.1-PullRequest151.2". Consumer kan overstyre ved å sende
+  # sin egen `pull-request:` blokk via `override_config:` (siste blokk vinner).
+  - name: Bygg GitVersion override-konfigurasjon
+    id: gitversion-override
+    shell: bash
+    env:
+      USER_OVERRIDE: ${{ inputs.override_config }}
+    run: |
+      DEFAULT_OVERRIDE='branches:
+        pull-request:
+          label: "{BranchName}"'
+      {
+        echo 'config<<GITVERSION_OVERRIDE_EOF'
+        printf '%s\n' "$DEFAULT_OVERRIDE"
+        if [ -n "$USER_OVERRIDE" ]; then
+          printf '%s\n' "$USER_OVERRIDE"
+        fi
+        echo 'GITVERSION_OVERRIDE_EOF'
+      } >> "$GITHUB_OUTPUT"
+
   - name: Finn neste versjon
     id: determine_version_values
     uses: gittools/actions/gitversion/execute@bc6623af8fc07d5a8903052dd46da33403eec8e8 # v4.5.0
     with:
-      overrideConfig: ${{ inputs.override_config }}
+      overrideConfig: ${{ steps.gitversion-override.outputs.config }}
 
   - name: Avgjør versjon og tag verdier
     id: determine_version_and_tag_values
