@@ -53,6 +53,10 @@
 *.ksh      text eol=lf
 *.sh       text eol=lf
 *.zsh      text eol=lf
+
+# format.sh test fixtures: format.sh always emits LF, so expected files and inputs
+# must stay LF on every platform (no autocrlf).
+scripts/format.test/cases/**       text eol=lf
 # These are explicitly windows files and should use crlf
 *.bat      text eol=crlf
 *.cmd      text eol=crlf
