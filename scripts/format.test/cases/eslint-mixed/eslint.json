@@ -1,0 +1,19 @@
+[
+  {
+    "filePath": "/home/runner/work/repo/src/foo.ts",
+    "messages": [
+      {"severity": 2, "line": 10, "column": 5, "message": "Unused variable", "ruleId": "no-unused-vars"},
+      {"severity": 1, "line": 12, "column": 3, "message": "Prefer const", "ruleId": "prefer-const"}
+    ]
+  },
+  {
+    "filePath": "/home/runner/work/repo/src/bar.ts",
+    "messages": []
+  },
+  {
+    "filePath": "/home/runner/work/repo/src/baz.ts",
+    "messages": [
+      {"severity": 2, "line": 1, "column": 1, "message": "Missing semicolon", "ruleId": "semi"}
+    ]
+  }
+]

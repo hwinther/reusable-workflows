@@ -1,0 +1,2 @@
+::warning file=/home/runner/work/repo/Project.csproj::NU1903: Package 'Foo' 1.0.0 has a known high severity vulnerability
+::warning file=/home/runner/work/repo/Project.csproj::NU1701: Package 'Bar' was restored using net48 instead of net8.0

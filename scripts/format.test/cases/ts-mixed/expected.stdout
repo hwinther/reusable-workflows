@@ -1,0 +1,3 @@
+::error file=src/foo.ts,line=42::TS2304: Cannot find name 'undefinedVar'.
+::error file=src/bar.ts,line=15::TS1234: Some old format error.
+::warning file=src/baz.ts,line=1::TS6133: 'unused' is declared but never read.

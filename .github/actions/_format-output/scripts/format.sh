@@ -15,7 +15,17 @@ ERROR_HEADER="${ERROR_HEADER:-}"
 WARNING_HEADER="${WARNING_HEADER:-}"
 SUCCESS_MESSAGE="${SUCCESS_MESSAGE:-}"
 MAX_WARNINGS_INLINE="${MAX_WARNINGS_INLINE:-10}"
-PATH_STRIP="${PATH_STRIP:-${GITHUB_WORKSPACE:-}/}"
+
+# PATH_STRIP defaults to GITHUB_WORKSPACE/ when both are set. If neither is, no stripping.
+# Without this guard, an unset GITHUB_WORKSPACE would default PATH_STRIP to "/" which would
+# obliterate every slash in the output.
+if [ -z "${PATH_STRIP:-}" ]; then
+  if [ -n "${GITHUB_WORKSPACE:-}" ]; then
+    PATH_STRIP="${GITHUB_WORKSPACE}/"
+  else
+    PATH_STRIP=""
+  fi
+fi
 
 WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT

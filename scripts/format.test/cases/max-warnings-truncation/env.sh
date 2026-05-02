@@ -1,0 +1,3 @@
+FORMAT=plain
+WARNING_HEADER='## ⚠️ Warnings (N total)'
+MAX_WARNINGS_INLINE=3
