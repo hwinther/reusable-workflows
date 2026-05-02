@@ -97,11 +97,13 @@ runs:
         echo "Setter is_alpha til false"
       else
         if [ -n "${{ inputs.container_image_name }}" ]; then
-          # I en feature/bugfiks branch - bruk neste versjon som tag
-          echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-          echo "Bruker tag med prerelease label: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
+          # Feature/bugfix branch — bruk SemVer (inkluderer prerelease-label utledet fra
+          # branch-navnet, f.eks. "1.2.1-mybranch.5") slik at container-taggen matcher
+          # pakkeversjonen og unikt identifiserer hvilken branch byggene kommer fra.
+          echo "deploy_tag=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
+          echo "container_image_tags=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
+          echo "image_tags=${{ steps.determine_version_values.outputs.semVer }}" >> $GITHUB_OUTPUT
+          echo "Bruker tag med prerelease label: $GITVERSION_SEMVER_TAG"
         fi
 
         echo "version=${{ steps.determine_version_values.outputs.semVer }}" >> $GITHUB_OUTPUT
