@@ -96,12 +96,35 @@ runs:
       GITVERSION_MAJOR_MINOR_PATCH_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
       GITVERSION_SEMVER_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.semVer }}"
 
+      # `:latest` should only ever point at the most recent stable minor release. We attach
+      # it if all three hold:
+      #   1. building from a v-prefixed git tag (no main, no feature branches)
+      #   2. patch component is 0 (e.g. v2.1.0, NOT v2.1.3 — a hotfix shouldn't move :latest)
+      #   3. this tag is the highest stable v-tag in the repo (so a hotfix on an old
+      #      release branch can't move :latest backwards)
+      INCLUDE_LATEST=false
+      if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
+        PATCH=$(echo "${{ steps.determine_version_values.outputs.majorMinorPatch }}" | cut -d. -f3)
+        if [ "$PATCH" = "0" ]; then
+          CURRENT_TAG="v${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+          # Only consider plain vMAJOR.MINOR.PATCH tags — exclude prereleases like v2.0.0-beta1.
+          HIGHEST_TAG=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ "$CURRENT_TAG" = "$HIGHEST_TAG" ]; then
+            INCLUDE_LATEST=true
+          else
+            echo "Not tagging latest: current=$CURRENT_TAG, highest=$HIGHEST_TAG"
+          fi
+        else
+          echo "Not tagging latest: patch=$PATCH (only x.x.0 releases get :latest)"
+        fi
+      fi
+
       if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == "main" ]]; then
         if [ -n "${{ inputs.container_image_name }}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=latest;${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-          echo "Bruker tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
+          echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+          echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+          echo "Bruker tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
         echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
@@ -111,9 +134,15 @@ runs:
       elif [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
         if [ -n "${{ inputs.container_image_name }}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-          echo "Bruker tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
+          if [ "$INCLUDE_LATEST" = "true" ]; then
+            echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+            echo "image_tags=latest;${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+            echo "Bruker tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
+          else
+            echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
+            echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+            echo "Bruker tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
+          fi
         fi
 
         echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
