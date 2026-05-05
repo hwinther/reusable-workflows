@@ -1,0 +1,206 @@
+name: "Build and scan dotnet container (no push)"
+
+# PR-time companion to dotnet-container.yml. Produces the same image content
+# (tagged with the same gitversion refs, no registry prefix) but does NOT
+# push. Uploads the loaded image as a workflow artifact so a downstream job
+# can run e2e tests against it and, conditionally, push the same
+# byte-identical image.
+
+on:
+  workflow_call:
+    inputs:
+      dotnet_version:
+        description: ".NET version, e.g. 10.0.x"
+        required: true
+        type: string
+      solution_path:
+        description: "Solution path, e.g. backend"
+        required: true
+        type: string
+      solution_file:
+        description: "Solution file, e.g. ProjectName.slnx"
+        required: true
+        type: string
+      project_file:
+        description: "Project file, e.g. src/Api/Api.csproj"
+        required: true
+        type: string
+      cache_enabled:
+        description: "Enable NuGet package caching, requires dotnet lockfiles"
+        required: false
+        type: boolean
+        default: true
+      container_registry:
+        description: "Container registry, e.g. ghcr.io"
+        required: true
+        type: string
+      container_image_name_postfix:
+        description: "Container image name postfix, e.g. api"
+        required: true
+        type: string
+      override_config:
+        description: "Override config"
+        required: false
+        type: string
+        default: ""
+      grype_scan_enabled:
+        description: "Run Anchore Grype vulnerability scan (SBOM is still generated when false)"
+        required: false
+        type: boolean
+        default: true
+      grype_severity_cutoff:
+        description: "Grype severity-cutoff (fail on this level and above)"
+        required: false
+        type: string
+        default: high
+      grype_only_fixed:
+        description: "Grype only-fixed: only report vulnerabilities that have a fix available"
+        required: false
+        type: boolean
+        default: true
+      grype_fail_build:
+        description: "Grype fail-build: fail the job when vulnerabilities meet severity-cutoff"
+        required: false
+        type: boolean
+        default: true
+      generate_supply_chain_artifacts:
+        description: "Generate CycloneDX SBOM and Grype JSON for downstream cosign attestations in image-push.yml"
+        required: false
+        type: boolean
+        default: true
+      artifact_retention_days:
+        description: "Retention period for the image, SBOM, and Grype JSON artifacts."
+        required: false
+        type: number
+        default: 1
+    outputs:
+      image_artifact:
+        description: "Workflow artifact name holding the gzipped tarball of the built image."
+        value: ${{ jobs['build-and-scan'].outputs.image_artifact }}
+      sbom_artifact:
+        description: "Workflow artifact name holding the SPDX + CycloneDX SBOMs."
+        value: ${{ jobs['build-and-scan'].outputs.sbom_artifact }}
+      grype_artifact:
+        description: "Workflow artifact name holding the Grype JSON for cosign attestation (empty when generate_supply_chain_artifacts=false)."
+        value: ${{ jobs['build-and-scan'].outputs.grype_artifact }}
+      container_image_tags:
+        description: "Full image refs that will be used when pushing (registry/name:tag, comma-separated)."
+        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+      image_tags:
+        description: "Image tags only (semicolon-separated)."
+        value: ${{ jobs.gitversion.outputs.image_tags }}
+      image_digest:
+        description: "Local image digest (sha256:...) of the built image. Used by image-push.yml for byte-identity assertion."
+        value: ${{ jobs['build-and-scan'].outputs.image_digest }}
+      version:
+        description: "GitVersion-derived version string."
+        value: ${{ jobs.gitversion.outputs.version }}
+      is_alpha:
+        description: "Whether the build is from a feature/bugfix branch (string 'true'/'false')."
+        value: ${{ jobs.gitversion.outputs.is_alpha }}
+
+jobs:
+  prepare-repository-name:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      repository: ${{ steps.lower-repo.outputs.repository }}
+    steps:
+      - id: lower-repo
+        run: |
+          echo "repository=${GITHUB_REPOSITORY@L}" >> $GITHUB_OUTPUT
+
+  gitversion:
+    needs: prepare-repository-name
+    permissions:
+      contents: read
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v1
+    with:
+      container_registry: ${{ inputs.container_registry }}
+      container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+      override_config: ${{ inputs.override_config }}
+
+  build-and-scan:
+    name: Build and scan (${{ needs.gitversion.outputs.container_image_tags }})
+    needs: [prepare-repository-name, gitversion]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+      pull-requests: write  # for the Grype findings PR comment via _grype-summary
+    outputs:
+      image_artifact: ${{ steps.save.outputs.artifact_name }}
+      image_digest: ${{ steps.save.outputs.image_digest }}
+      sbom_artifact: ${{ steps.upload-sboms.outputs.artifact-id && format('build-and-scan-{0}-sboms', inputs.container_image_name_postfix) || '' }}
+      grype_artifact: ${{ steps.upload-grype.outputs.artifact-id && format('build-and-scan-{0}-grype', inputs.container_image_name_postfix) || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Log in to GitHub Container Registry (for base-image pulls)
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ inputs.container_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build dotnet container (publish to archive, load locally)
+        id: build
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-dotnet@v1
+        with:
+          dotnet_version: ${{ inputs.dotnet_version }}
+          solution_path: ${{ inputs.solution_path }}
+          solution_file: ${{ inputs.solution_file }}
+          project_file: ${{ inputs.project_file }}
+          cache_enabled: ${{ inputs.cache_enabled }}
+          image_tags: ${{ needs.gitversion.outputs.image_tags }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          version: ${{ needs.gitversion.outputs.version }}
+          git_sha: ${{ github.sha }}
+
+      - name: Generate SBOM and scan with Grype
+        id: scan
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v1
+        with:
+          image_ref: ${{ steps.build.outputs.local_ref }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
+          grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
+          grype_only_fixed: ${{ inputs.grype_only_fixed }}
+          grype_fail_build: ${{ inputs.grype_fail_build }}
+          cosign_supply_chain_attest_enabled: ${{ inputs.generate_supply_chain_artifacts }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Save image as workflow artifact
+        id: save
+        uses: hwinther/reusable-workflows/.github/actions/_save-image-artifact@v1
+        with:
+          image_ref: ${{ steps.build.outputs.local_ref }}
+          artifact_name: build-and-scan-${{ inputs.container_image_name_postfix }}-image
+          retention_days: ${{ inputs.artifact_retention_days }}
+
+      - name: Upload SBOM artifacts
+        id: upload-sboms
+        if: ${{ inputs.generate_supply_chain_artifacts }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-and-scan-${{ inputs.container_image_name_postfix }}-sboms
+          path: |
+            ${{ steps.scan.outputs.sbom_spdx_path }}
+            ${{ steps.scan.outputs.sbom_cyclonedx_path }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+          if-no-files-found: error
+
+      - name: Upload Grype JSON artifact
+        id: upload-grype
+        if: ${{ inputs.generate_supply_chain_artifacts }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-and-scan-${{ inputs.container_image_name_postfix }}-grype
+          path: ${{ steps.scan.outputs.grype_json_path }}
+          retention-days: ${{ inputs.artifact_retention_days }}
+          if-no-files-found: error

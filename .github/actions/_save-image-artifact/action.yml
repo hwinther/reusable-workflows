@@ -1,0 +1,72 @@
+name: "Save Docker image as a workflow artifact"
+description: |
+  Saves a locally-loaded image to a gzipped tarball with `docker save` and
+  uploads it as a workflow artifact so a downstream job can `docker load` it
+  without round-tripping through a registry. The local image's digest (from
+  `docker inspect`) is captured as an output so callers can pass it forward
+  for byte-identity assertions before pushing.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  image_ref:
+    required: true
+    description: "Local image reference to save (must be present in the local Docker daemon)."
+  artifact_name:
+    required: true
+    description: "Name of the workflow artifact to upload."
+  retention_days:
+    required: false
+    description: "Artifact retention in days."
+    default: "1"
+
+outputs:
+  artifact_name:
+    description: "Echoes the uploaded artifact name."
+    value: ${{ inputs.artifact_name }}
+  image_digest:
+    description: "Local image digest (sha256:...) captured before save."
+    value: ${{ steps.inspect.outputs.image_digest }}
+  archive_path:
+    description: "Path to the gzipped tar that was uploaded."
+    value: ${{ steps.save.outputs.archive_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Inspect local image digest
+      id: inspect
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_ref }}
+      run: |
+        set -euo pipefail
+        # `docker inspect --format='{{.Id}}'` returns the local content digest as `sha256:...`.
+        # This is the layer-tar digest, not the OCI manifest digest the registry computes on push;
+        # it is still a stable identity for the loaded image and is used here for drift detection.
+        DIGEST=$(docker inspect --format='{{.Id}}' "$IMAGE_REF")
+        [ -n "$DIGEST" ] || { echo "::error::Could not inspect digest for $IMAGE_REF"; exit 1; }
+        echo "image_digest=$DIGEST" >> "$GITHUB_OUTPUT"
+        echo "Local image digest: $DIGEST"
+
+    - name: Save image to tarball
+      id: save
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_ref }}
+        RUNNER_TEMP_DIR: ${{ runner.temp }}
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+      run: |
+        set -euo pipefail
+        ARCHIVE="${RUNNER_TEMP_DIR}/${ARTIFACT_NAME}.tar.gz"
+        docker save "$IMAGE_REF" | gzip > "$ARCHIVE"
+        ls -lh "$ARCHIVE"
+        echo "archive_path=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+    - name: Upload image artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ steps.save.outputs.archive_path }}
+        retention-days: ${{ inputs.retention_days }}
+        if-no-files-found: error
