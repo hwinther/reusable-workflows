@@ -73,6 +73,11 @@ on:
         required: false
         type: boolean
         default: true
+      playwright_env:
+        description: "Extra environment variables for the Playwright run. Newline-separated KEY=VALUE pairs; each is exported into $GITHUB_ENV before 'Run Playwright' so the test command sees them. Caller resolves any secrets at its level (e.g. KEY=secrets.E2E_USERNAME via the standard expression syntax) before passing the value in. The runner masks known secret values in logs."
+        required: false
+        type: string
+        default: ""
       results_json_path:
         description: "Path to Playwright JSON report (relative to playwright_working_directory). Used to build the PR comment."
         required: false
@@ -172,6 +177,40 @@ jobs:
           COMPOSE_TIMEOUT: ${{ inputs.compose_up_timeout_seconds }}
         run: |
           docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout "$COMPOSE_TIMEOUT"
+
+      - name: Export extra Playwright env vars
+        if: ${{ inputs.playwright_env != '' }}
+        shell: bash
+        env:
+          EXTRA_ENV: ${{ inputs.playwright_env }}
+        run: |
+          set -euo pipefail
+          # Parse newline-separated KEY=VALUE pairs and append each to $GITHUB_ENV
+          # using the heredoc form so multiline values survive intact. Subsequent
+          # steps (Run Playwright) inherit these as ordinary env vars.
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            case "$line" in
+              \#*) continue ;;
+              *=*) ;;
+              *)
+                echo "::warning::Skipping malformed playwright_env line (no '='): $line"
+                continue
+                ;;
+            esac
+            key="${line%%=*}"
+            value="${line#*=}"
+            # Trim leading/trailing whitespace from the key only; values are kept verbatim.
+            key=$(printf '%s' "$key" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            [ -z "$key" ] && continue
+            delim="GHA_ENV_$(date +%s%N)_$$"
+            {
+              printf '%s<<%s\n' "$key" "$delim"
+              printf '%s\n' "$value"
+              printf '%s\n' "$delim"
+            } >> "$GITHUB_ENV"
+            echo "Exported $key (value masked if a registered secret)"
+          done <<< "$EXTRA_ENV"
 
       - name: Run Playwright
         shell: bash
