@@ -88,6 +88,16 @@ on:
         required: false
         type: number
         default: 14
+    secrets:
+      e2e_username:
+        description: "Username for the auth setup project (exported as E2E_USERNAME for the Playwright run)."
+        required: false
+      e2e_password:
+        description: "Password for the auth setup project (exported as E2E_PASSWORD for the Playwright run)."
+        required: false
+      e2e_otp_secret:
+        description: "TOTP shared secret for the auth setup project (exported as E2E_OTP_SECRET for the Playwright run)."
+        required: false
 
 jobs:
   e2e:
@@ -218,6 +228,9 @@ jobs:
         env:
           CI: "true"
           RUN_CMD: ${{ inputs.playwright_run_command }}
+          E2E_USERNAME: ${{ secrets.e2e_username }}
+          E2E_PASSWORD: ${{ secrets.e2e_password }}
+          E2E_OTP_SECRET: ${{ secrets.e2e_otp_secret }}
         run: |
           set -euo pipefail
           eval "$RUN_CMD"
