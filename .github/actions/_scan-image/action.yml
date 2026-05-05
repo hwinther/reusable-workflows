@@ -16,6 +16,10 @@ inputs:
   container_image_name_postfix:
     required: true
     description: "Used to build distinct SARIF category and PR-comment identifier when scanning multiple images."
+  arch_suffix:
+    required: false
+    description: "Optional architecture suffix (e.g. 'amd64', 'arm64'). When set, SARIF category, SBOM filenames, Grype JSON path, and PR-comment identifier all gain '-${arch_suffix}' so per-platform scans in the same job don't stomp on each other."
+    default: ""
   grype_scan_enabled:
     required: false
     description: "Run the Grype gate scan."
@@ -55,17 +59,30 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Resolve output paths
+    - name: Resolve output paths and category labels
       id: paths
       shell: bash
       env:
         RUNNER_TEMP_DIR: ${{ runner.temp }}
+        POSTFIX: ${{ inputs.container_image_name_postfix }}
+        ARCH_SUFFIX: ${{ inputs.arch_suffix }}
       run: |
         set -euo pipefail
-        echo "sbom_spdx_path=${RUNNER_TEMP_DIR}/container-image.spdx.json" >> "$GITHUB_OUTPUT"
-        echo "sbom_cyclonedx_path=${RUNNER_TEMP_DIR}/container-image.cyclonedx.json" >> "$GITHUB_OUTPUT"
-        echo "grype_json_path=${RUNNER_TEMP_DIR}/grype-cosign-vuln.json" >> "$GITHUB_OUTPUT"
-        echo "sarif_path=${RUNNER_TEMP_DIR}/grype-results.sarif" >> "$GITHUB_OUTPUT"
+        if [ -n "$ARCH_SUFFIX" ]; then
+          file_suffix="-${ARCH_SUFFIX}"
+          name_suffix="-${ARCH_SUFFIX}"
+        else
+          file_suffix=""
+          name_suffix=""
+        fi
+        echo "sbom_spdx_path=${RUNNER_TEMP_DIR}/container-image${file_suffix}.spdx.json" >> "$GITHUB_OUTPUT"
+        echo "sbom_cyclonedx_path=${RUNNER_TEMP_DIR}/container-image${file_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"
+        echo "grype_json_path=${RUNNER_TEMP_DIR}/grype-cosign-vuln${file_suffix}.json" >> "$GITHUB_OUTPUT"
+        echo "sarif_path=${RUNNER_TEMP_DIR}/grype-results${file_suffix}.sarif" >> "$GITHUB_OUTPUT"
+        echo "sarif_category=grype-container-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
+        echo "spdx_artifact_name=container-image-${POSTFIX}${name_suffix}.spdx.json" >> "$GITHUB_OUTPUT"
+        echo "cyclonedx_artifact_name=container-image-${POSTFIX}${name_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"
+        echo "pr_comment_identifier=grype-summary-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
 
     - name: Generate SBOM (SPDX)
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
@@ -73,7 +90,7 @@ runs:
         image: ${{ inputs.image_ref }}
         format: spdx-json
         output-file: ${{ steps.paths.outputs.sbom_spdx_path }}
-        artifact-name: container-image-${{ inputs.container_image_name_postfix }}.spdx.json
+        artifact-name: ${{ steps.paths.outputs.spdx_artifact_name }}
 
     - name: Generate SBOM (CycloneDX) for cosign attestation
       if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' }}
@@ -82,7 +99,7 @@ runs:
         image: ${{ inputs.image_ref }}
         format: cyclonedx-json
         output-file: ${{ steps.paths.outputs.sbom_cyclonedx_path }}
-        artifact-name: container-image-${{ inputs.container_image_name_postfix }}.cyclonedx.json
+        artifact-name: ${{ steps.paths.outputs.cyclonedx_artifact_name }}
 
     - name: Vulnerability scan (Grype)
       id: grype-scan
@@ -102,7 +119,7 @@ runs:
       uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
       with:
         sarif_file: ${{ steps.paths.outputs.sarif_path }}
-        category: grype-container-${{ inputs.container_image_name_postfix }}
+        category: ${{ steps.paths.outputs.sarif_category }}
         wait-for-processing: false
 
     - name: Render Grype findings (job summary + PR comment)
@@ -110,17 +127,17 @@ runs:
       uses: hwinther/reusable-workflows/.github/actions/_grype-summary@v1
       with:
         sarif_file: ${{ steps.paths.outputs.sarif_path }}
-        category: grype-container-${{ inputs.container_image_name_postfix }}
+        category: ${{ steps.paths.outputs.sarif_category }}
         github_token: ${{ inputs.github_token }}
-        pr_comment_identifier: grype-summary-${{ inputs.container_image_name_postfix }}
+        pr_comment_identifier: ${{ steps.paths.outputs.pr_comment_identifier }}
 
     - name: Enforce Grype vulnerability gate
       if: ${{ inputs.grype_scan_enabled == 'true' && inputs.grype_fail_build == 'true' && steps.grype-scan.outcome == 'failure' }}
       shell: bash
       env:
-        IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
+        SARIF_CATEGORY: ${{ steps.paths.outputs.sarif_category }}
       run: |
-        echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${IMAGE_POSTFIX}) or the Grype step log."
+        echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category ${SARIF_CATEGORY}) or the Grype step log."
         exit 1
 
     - name: Download Grype CLI (JSON report for cosign vuln attestation)

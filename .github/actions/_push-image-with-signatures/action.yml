@@ -1,13 +1,26 @@
 name: "Push image and attach signatures + attestations"
 description: |
-  Tags a locally-loaded image with each ref in `container_tags`, pushes each
-  tag, resolves the registry digest, and attaches:
+  Pushes a container image and attaches:
     - GitHub artifact-build-provenance attestation (always)
     - Cosign keyless signature (when cosign_sign_enabled)
     - Cosign CycloneDX SBOM and Grype vuln attestations (when
       cosign_supply_chain_attest_enabled, both pinned to the legacy
       `sha256-….att` manifest path via Cosign v2.4.3 for Kyverno 1.17
       compatibility — see CLAUDE.md).
+
+  Two push paths:
+    - **Single-arch** (default, when `platforms` is single-value): tags the
+      already-loaded `image_ref` with each entry in `container_tags` and
+      `docker push`es each. Byte-identical to the locally-loaded image.
+    - **Multi-arch** (when `platforms` contains a comma): uses
+      `docker/build-push-action` with `push: true` to build and push a
+      manifest list. BuildKit cache from a prior single-arch
+      `_build-image-docker --load` call (used for scanning) makes this fast
+      for the native arch; non-native arches are built under QEMU.
+
+  Cosign sign and attestation steps are shared across both paths and operate
+  on the registry-resolved digest (the manifest-list digest in the multi-arch
+  case).
 
   The caller is responsible for `docker login`-ing to the registry before
   invoking this action and for granting permissions
@@ -18,10 +31,10 @@ description: |
 inputs:
   image_ref:
     required: true
-    description: "Local image reference present in the local Docker daemon (source for `docker tag`)."
+    description: "Local image reference present in the local Docker daemon (source for `docker tag` in the single-arch path; ignored on the multi-arch path)."
   container_tags:
     required: true
-    description: "Comma-separated full image refs to push (typically gitversion container_image_tags)."
+    description: "Comma-separated full image refs to push (typically gitversion container_image_tags merged with additional_tags)."
   container_registry:
     required: true
     description: "Container registry, e.g. ghcr.io"
@@ -49,18 +62,47 @@ inputs:
     default: ""
   version:
     required: false
-    description: "Application version (used for cosign-vuln scanner.invocation parameters)."
+    description: "Application version. Becomes APP_VERSION build arg on the multi-arch path; also referenced by cosign-vuln scanner.invocation parameters."
     default: ""
+  platforms:
+    required: false
+    description: "Comma-separated buildx platforms. Single value → single-arch path (docker tag/push). Multiple values → multi-arch path (buildx build/push manifest list)."
+    default: "linux/amd64"
+  build_context:
+    required: false
+    description: "Docker build context (required on the multi-arch path)."
+    default: ""
+  dockerfile:
+    required: false
+    description: "Dockerfile path (required on the multi-arch path)."
+    default: ""
+  build_args:
+    required: false
+    description: "Additional newline-separated KEY=VALUE build args appended after APP_VERSION and GIT_SHA on the multi-arch path."
+    default: ""
+  labels:
+    required: false
+    description: "OCI labels for the multi-arch path (newline-separated, from docker/metadata-action)."
+    default: ""
+  git_sha:
+    required: false
+    description: "Value for GIT_SHA build arg on the multi-arch path."
+    default: ${{ github.sha }}
 
 outputs:
   image_digest:
-    description: "OCI manifest digest (sha256:...) resolved from the registry after push."
-    value: ${{ steps.image-digest.outputs.digest }}
+    description: "OCI manifest digest (sha256:...) resolved from the registry after push. For multi-arch, this is the manifest-list digest."
+    value: ${{ steps.resolve-digest.outputs.digest }}
 
 runs:
   using: "composite"
   steps:
-    - name: Tag and push image
+    - name: Setup QEMU (multi-arch only)
+      if: ${{ contains(inputs.platforms, ',') }}
+      uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+
+    - name: Tag and push image (single-arch)
+      if: ${{ !contains(inputs.platforms, ',') }}
       shell: bash
       env:
         CONTAINER_TAGS: ${{ inputs.container_tags }}
@@ -74,17 +116,38 @@ runs:
           docker push "$dest"
         done
 
+    - name: Build and push image (multi-arch manifest)
+      id: buildx-push
+      if: ${{ contains(inputs.platforms, ',') }}
+      uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+      with:
+        context: ${{ inputs.build_context }} # zizmor: ignore[template-injection]
+        file: ${{ inputs.dockerfile }} # zizmor: ignore[template-injection]
+        push: true
+        platforms: ${{ inputs.platforms }}
+        tags: ${{ inputs.container_tags }}
+        build-args: |
+          APP_VERSION=${{ inputs.version }}
+          GIT_SHA=${{ inputs.git_sha }}
+          ${{ inputs.build_args }}
+        labels: ${{ inputs.labels }}
+
     - name: Resolve pushed image digest
-      id: image-digest
+      id: resolve-digest
       shell: bash
       env:
         CONTAINER_TAGS: ${{ inputs.container_tags }}
+        BUILDX_DIGEST: ${{ steps.buildx-push.outputs.digest }}
       run: |
         set -euo pipefail
-        REF=$(echo "$CONTAINER_TAGS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | head -1)
-        [ -n "$REF" ] || { echo "::error::No tag in container_tags ('$CONTAINER_TAGS')"; exit 1; }
-        DIGEST=$(docker buildx imagetools inspect "$REF" | awk '/^Digest:[[:space:]]+/ {print $2; exit}')
-        [ -n "$DIGEST" ] || { echo "::error::Failed to resolve image digest for $REF"; exit 1; }
+        if [ -n "${BUILDX_DIGEST:-}" ]; then
+          DIGEST="$BUILDX_DIGEST"
+        else
+          REF=$(echo "$CONTAINER_TAGS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | head -1)
+          [ -n "$REF" ] || { echo "::error::No tag in container_tags ('$CONTAINER_TAGS')"; exit 1; }
+          DIGEST=$(docker buildx imagetools inspect "$REF" | awk '/^Digest:[[:space:]]+/ {print $2; exit}')
+        fi
+        [ -n "$DIGEST" ] || { echo "::error::Failed to resolve image digest"; exit 1; }
         echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
         echo "Pushed digest: $DIGEST"
 
@@ -92,7 +155,7 @@ runs:
       uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
       with:
         subject-name: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}
-        subject-digest: ${{ steps.image-digest.outputs.digest }}
+        subject-digest: ${{ steps.resolve-digest.outputs.digest }}
         push-to-registry: true
 
     # Kyverno 1.17 resolves Cosign attestations like Cosign v2 (sha256-….att manifest tags). Cosign v3+ often publishes via OCI referrers only → 404 on that path while local cosign v3 verify still works via /referrers/.
@@ -106,7 +169,7 @@ runs:
       if: ${{ inputs.cosign_sign_enabled == 'true' }}
       shell: bash
       env:
-        DIGEST: ${{ steps.image-digest.outputs.digest }}
+        DIGEST: ${{ steps.resolve-digest.outputs.digest }}
         CONTAINER_TAGS: ${{ inputs.container_tags }}
       run: |
         set -euo pipefail
@@ -166,7 +229,7 @@ runs:
       if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
       shell: bash
       env:
-        IMAGE_REF: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.image-digest.outputs.digest }}
+        IMAGE_REF: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.resolve-digest.outputs.digest }}
         CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
         VULN_PREDICATE: ${{ runner.temp }}/cosign-vuln-predicate.json
       run: |

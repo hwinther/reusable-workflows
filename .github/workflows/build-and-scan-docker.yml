@@ -29,6 +29,21 @@ on:
         required: false
         type: string
         default: ""
+      build_args:
+        description: "Newline-separated KEY=VALUE build args, appended after APP_VERSION and GIT_SHA. Use this to pass digest-pinned base image refs for chaining."
+        required: false
+        type: string
+        default: ""
+      additional_tags:
+        description: "Semicolon-separated tag-only strings (no registry, no name) to add alongside gitversion's tags. Each becomes ${registry}/${repo}/${postfix}:${tag}."
+        required: false
+        type: string
+        default: ""
+      use_gitversion_tags:
+        description: "When false, skip gitversion-derived tag computation and use only additional_tags. gitversion still runs to populate version / is_alpha."
+        required: false
+        type: boolean
+        default: true
       grype_scan_enabled:
         description: "Run Anchore Grype vulnerability scan (SBOM is still generated when false)"
         required: false
@@ -70,8 +85,8 @@ on:
         description: "Workflow artifact name holding the Grype JSON for cosign attestation (empty when generate_supply_chain_artifacts=false)."
         value: ${{ jobs['build-and-scan'].outputs.grype_artifact }}
       container_image_tags:
-        description: "Full image refs that will be used when pushing (registry/name:tag, comma-separated)."
-        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+        description: "Full image refs that will be used when pushing (registry/name:tag, comma-separated). Includes any additional_tags."
+        value: ${{ jobs['build-and-scan'].outputs.container_tags }}
       image_tags:
         description: "Image tags only (semicolon-separated)."
         value: ${{ jobs.gitversion.outputs.image_tags }}
@@ -118,6 +133,7 @@ jobs:
     outputs:
       image_artifact: ${{ steps.save.outputs.artifact_name }}
       image_digest: ${{ steps.save.outputs.image_digest }}
+      container_tags: ${{ steps.tags.outputs.container_tags }}
       sbom_artifact: ${{ steps.upload-sboms.outputs.artifact-id && format('build-and-scan-{0}-sboms', inputs.container_image_name_postfix) || '' }}
       grype_artifact: ${{ steps.upload-grype.outputs.artifact-id && format('build-and-scan-{0}-grype', inputs.container_image_name_postfix) || '' }}
     steps:
@@ -139,16 +155,50 @@ jobs:
         with:
           images: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
 
+      - name: Compose final container tags
+        id: tags
+        shell: bash
+        env:
+          GITVERSION_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          ADDITIONAL_TAGS: ${{ inputs.additional_tags }}
+          USE_GITVERSION: ${{ inputs.use_gitversion_tags }}
+          REGISTRY: ${{ inputs.container_registry }}
+          REPO: ${{ needs.prepare-repository-name.outputs.repository }}
+          POSTFIX: ${{ inputs.container_image_name_postfix }}
+        run: |
+          set -euo pipefail
+          final_tags=""
+          if [ "$USE_GITVERSION" = "true" ]; then
+            final_tags="$GITVERSION_TAGS"
+          fi
+          if [ -n "$ADDITIONAL_TAGS" ]; then
+            while IFS= read -r t; do
+              t=$(echo "$t" | xargs)
+              [ -z "$t" ] && continue
+              full_ref="${REGISTRY}/${REPO}/${POSTFIX}:${t}"
+              if [ -z "$final_tags" ]; then
+                final_tags="$full_ref"
+              else
+                final_tags="${final_tags},${full_ref}"
+              fi
+            done < <(echo "$ADDITIONAL_TAGS" | tr ';' '\n')
+          fi
+          [ -n "$final_tags" ] || { echo "::error::No container tags resolved (use_gitversion_tags=$USE_GITVERSION, additional_tags='$ADDITIONAL_TAGS')"; exit 1; }
+          echo "container_tags=$final_tags" >> "$GITHUB_OUTPUT"
+          echo "Final container tags:"
+          echo "$final_tags" | tr ',' '\n' | sed 's/^/  /'
+
       - name: Build container (load locally, do not push)
         id: build
         uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v1
         with:
           build_context: ${{ inputs.build_context }}
           dockerfile: ${{ inputs.dockerfile }}
-          tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          tags: ${{ steps.tags.outputs.container_tags }}
           app_version: ${{ needs.gitversion.outputs.version }}
           git_sha: ${{ github.sha }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
+          build_args: ${{ inputs.build_args }}
 
       - name: Generate SBOM and scan with Grype
         id: scan
