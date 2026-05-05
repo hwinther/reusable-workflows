@@ -370,7 +370,7 @@ jobs:
           test: "false"
 
       - name: Inspect code
-        uses: muno92/resharper_inspectcode@9dd06702fe04cae50fe448156b398c9912d3421b # v1.17.1
+        uses: muno92/resharper_inspectcode@9dd06702fe04cae50fe448156b398c9912d3421b # 1.17.1
         with:
           workingDirectory: ${{ inputs.dotnet_working_directory }}
           solutionPath: ${{ inputs.dotnet_solution_file }}
