@@ -28,6 +28,14 @@ inputs:
     required: false
     description: "OCI labels to apply (newline-separated, from docker/metadata-action)."
     default: ""
+  platforms:
+    required: false
+    description: "Single buildx platform for the local-loaded image, e.g. linux/amd64 or linux/arm64. Multi-platform manifest lists are produced at push time, not here."
+    default: "linux/amd64"
+  build_args:
+    required: false
+    description: "Additional newline-separated KEY=VALUE build args appended after APP_VERSION and GIT_SHA. Used for things like passing a digest-pinned base image ref."
+    default: ""
 
 outputs:
   local_ref:
@@ -47,10 +55,12 @@ runs:
         file: ${{ inputs.dockerfile }} # zizmor: ignore[template-injection]
         push: false
         load: true
+        platforms: ${{ inputs.platforms }}
         tags: ${{ inputs.tags }}
         build-args: |
           APP_VERSION=${{ inputs.app_version }}
           GIT_SHA=${{ inputs.git_sha }}
+          ${{ inputs.build_args }}
         labels: ${{ inputs.labels }}
 
     - name: Resolve local ref (first tag)

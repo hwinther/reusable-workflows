@@ -24,6 +24,31 @@ on:
         required: false
         type: string
         default: ""
+      platforms:
+        description: "Comma-separated buildx platforms (e.g. 'linux/amd64' or 'linux/amd64,linux/arm64'). Multi-value triggers QEMU setup and a manifest-list push."
+        required: false
+        type: string
+        default: "linux/amd64"
+      build_args:
+        description: "Newline-separated KEY=VALUE build args, appended after APP_VERSION and GIT_SHA. Use this to pass digest-pinned base image refs for chaining (e.g. SDR_BASE_RUNTIME=ghcr.io/owner/repo/sdr-base@sha256:…)."
+        required: false
+        type: string
+        default: ""
+      additional_tags:
+        description: "Semicolon-separated tag-only strings (no registry, no name) to add alongside gitversion's tags. Each becomes ${registry}/${repo}/${postfix}:${tag}."
+        required: false
+        type: string
+        default: ""
+      use_gitversion_tags:
+        description: "When false, skip gitversion-derived tag computation and use only additional_tags. gitversion still runs to populate version / is_alpha."
+        required: false
+        type: boolean
+        default: true
+      scan_all_platforms:
+        description: "When true, build each non-native arch in `platforms` separately with --load and run Grype against it (distinct SARIF category per arch). When false (default), only the runner-native arch is scanned."
+        required: false
+        type: boolean
+        default: false
       grype_scan_enabled:
         description: "Run Anchore Grype vulnerability scan before push (SBOM is still generated)"
         required: false
@@ -56,11 +81,17 @@ on:
         default: true
     outputs:
       container_image_tags:
-        description: "Full image refs pushed (registry/name:tag, comma-separated)"
-        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+        description: "Full image refs pushed (registry/name:tag, comma-separated). Includes any additional_tags."
+        value: ${{ jobs['build-and-push'].outputs.container_tags }}
       image_digest:
-        description: "OCI manifest digest for the pushed image (sha256:...)"
+        description: "OCI manifest digest for the pushed image (sha256:...). For multi-arch this is the manifest-list digest."
         value: ${{ jobs['build-and-push'].outputs.image_digest }}
+      version:
+        description: "GitVersion-derived version string."
+        value: ${{ jobs.gitversion.outputs.version }}
+      is_alpha:
+        description: "Whether the build is from a feature/bugfix branch (string 'true'/'false')."
+        value: ${{ jobs.gitversion.outputs.is_alpha }}
 
 jobs:
   prepare-repository-name:
@@ -84,7 +115,7 @@ jobs:
       override_config: ${{ inputs.override_config }}
 
   build-and-push:
-    name: Build and push (${{ needs.gitversion.outputs.container_image_tags }})
+    name: Build and push (${{ inputs.container_image_name_postfix }})
     needs: [prepare-repository-name, gitversion]
     runs-on: ubuntu-latest
     permissions:
@@ -97,6 +128,7 @@ jobs:
       pull-requests: write  # for the Grype findings PR comment via _grype-summary
     outputs:
       image_digest: ${{ steps.push.outputs.image_digest }}
+      container_tags: ${{ steps.tags.outputs.container_tags }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -116,91 +148,131 @@ jobs:
         with:
           images: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
 
-      - name: Build container (load locally, do not push)
-        id: build
+      - name: Compose final container tags
+        id: tags
+        shell: bash
+        env:
+          GITVERSION_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          ADDITIONAL_TAGS: ${{ inputs.additional_tags }}
+          USE_GITVERSION: ${{ inputs.use_gitversion_tags }}
+          REGISTRY: ${{ inputs.container_registry }}
+          REPO: ${{ needs.prepare-repository-name.outputs.repository }}
+          POSTFIX: ${{ inputs.container_image_name_postfix }}
+        run: |
+          set -euo pipefail
+          final_tags=""
+          if [ "$USE_GITVERSION" = "true" ]; then
+            final_tags="$GITVERSION_TAGS"
+          fi
+          if [ -n "$ADDITIONAL_TAGS" ]; then
+            while IFS= read -r t; do
+              t=$(echo "$t" | xargs)
+              [ -z "$t" ] && continue
+              full_ref="${REGISTRY}/${REPO}/${POSTFIX}:${t}"
+              if [ -z "$final_tags" ]; then
+                final_tags="$full_ref"
+              else
+                final_tags="${final_tags},${full_ref}"
+              fi
+            done < <(echo "$ADDITIONAL_TAGS" | tr ';' '\n')
+          fi
+          [ -n "$final_tags" ] || { echo "::error::No container tags resolved (use_gitversion_tags=$USE_GITVERSION, additional_tags='$ADDITIONAL_TAGS')"; exit 1; }
+          echo "container_tags=$final_tags" >> "$GITHUB_OUTPUT"
+          echo "Final container tags:"
+          echo "$final_tags" | tr ',' '\n' | sed 's/^/  /'
+
+      - name: Build container for native scan (linux/amd64, load locally)
+        id: build-amd64
         uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v1
         with:
           build_context: ${{ inputs.build_context }}
           dockerfile: ${{ inputs.dockerfile }}
-          tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          tags: ${{ steps.tags.outputs.container_tags }}
           app_version: ${{ needs.gitversion.outputs.version }}
           git_sha: ${{ github.sha }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
+          platforms: linux/amd64
+          build_args: ${{ inputs.build_args }}
 
-      - name: Generate SBOM and scan with Grype
-        id: scan
+      - name: Generate SBOM and scan with Grype (amd64)
+        id: scan-amd64
         uses: hwinther/reusable-workflows/.github/actions/_scan-image@v1
         with:
-          image: ${{ needs.gitversion.outputs.deploy_tag }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/container-image.spdx.json
-          artifact-name: container-image.spdx.json
+          image_ref: ${{ steps.build-amd64.outputs.local_ref }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          arch_suffix: ${{ (inputs.scan_all_platforms && contains(inputs.platforms, ',')) && 'amd64' || '' }}
+          grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
+          grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
+          grype_only_fixed: ${{ inputs.grype_only_fixed }}
+          grype_fail_build: ${{ inputs.grype_fail_build }}
+          cosign_supply_chain_attest_enabled: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate CycloneDX SBOM for cosign attestation
-        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - name: Build container for arm64 scan (load locally under QEMU)
+        id: build-arm64
+        if: ${{ inputs.scan_all_platforms && contains(inputs.platforms, 'linux/arm64') }}
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v1
         with:
-          image: ${{ needs.gitversion.outputs.deploy_tag }}
-          format: cyclonedx-json
-          output-file: ${{ runner.temp }}/container-image.cyclonedx.json
-          artifact-name: container-image.cyclonedx.json
+          build_context: ${{ inputs.build_context }}
+          dockerfile: ${{ inputs.dockerfile }}
+          tags: ${{ steps.tags.outputs.container_tags }}
+          app_version: ${{ needs.gitversion.outputs.version }}
+          git_sha: ${{ github.sha }}
+          labels: ${{ steps.docker-metadata.outputs.labels }}
+          platforms: linux/arm64
+          build_args: ${{ inputs.build_args }}
 
-      - name: Vulnerability scan (Grype)
-        id: grype-scan
-        if: ${{ inputs.grype_scan_enabled }}
-        continue-on-error: true
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      - name: Generate SBOM and scan with Grype (arm64)
+        id: scan-arm64
+        if: ${{ inputs.scan_all_platforms && contains(inputs.platforms, 'linux/arm64') }}
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v1
         with:
-          sbom: ${{ runner.temp }}/container-image.spdx.json
-          output-format: sarif
-          output-file: ${{ runner.temp }}/grype-results.sarif
-          severity-cutoff: ${{ inputs.grype_severity_cutoff }}
-          only-fixed: ${{ inputs.grype_only_fixed }}
-          fail-build: ${{ inputs.grype_fail_build }}
-
-      - name: Upload Grype SARIF to Code Scanning
-        if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
-        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
-        with:
-          sarif_file: ${{ runner.temp }}/grype-results.sarif
-          category: grype-container-${{ inputs.container_image_name_postfix }}
-          wait-for-processing: false
-
-      - name: Render Grype findings (job summary + PR comment)
-        if: ${{ always() && inputs.grype_scan_enabled && steps.grype-scan.outcome != 'skipped' }}
-        uses: hwinther/reusable-workflows/.github/actions/_grype-summary@v1
-        with:
-          sarif_file: ${{ runner.temp }}/grype-results.sarif
-          category: grype-container-${{ inputs.container_image_name_postfix }}
+          image_ref: ${{ steps.build-arm64.outputs.local_ref }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          arch_suffix: arm64
+          grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
+          grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
+          grype_only_fixed: ${{ inputs.grype_only_fixed }}
+          grype_fail_build: ${{ inputs.grype_fail_build }}
+          cosign_supply_chain_attest_enabled: false  # cosign predicate uses native-arch SBOM only in this iteration
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push image and attach signatures + attestations
         id: push
         uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v1
         with:
-          image_ref: ${{ steps.build.outputs.local_ref }}
-          container_tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          image_ref: ${{ steps.build-amd64.outputs.local_ref }}
+          container_tags: ${{ steps.tags.outputs.container_tags }}
           container_registry: ${{ inputs.container_registry }}
           repository: ${{ needs.prepare-repository-name.outputs.repository }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
           cosign_sign_enabled: ${{ inputs.cosign_sign_enabled }}
           cosign_supply_chain_attest_enabled: ${{ inputs.cosign_supply_chain_attest_enabled }}
-          sbom_cyclonedx_path: ${{ steps.scan.outputs.sbom_cyclonedx_path }}
-          grype_json_path: ${{ steps.scan.outputs.grype_json_path }}
+          sbom_cyclonedx_path: ${{ steps.scan-amd64.outputs.sbom_cyclonedx_path }}
+          grype_json_path: ${{ steps.scan-amd64.outputs.grype_json_path }}
           version: ${{ needs.gitversion.outputs.version }}
+          platforms: ${{ inputs.platforms }}
+          build_context: ${{ inputs.build_context }}
+          dockerfile: ${{ inputs.dockerfile }}
+          build_args: ${{ inputs.build_args }}
+          labels: ${{ steps.docker-metadata.outputs.labels }}
+          git_sha: ${{ github.sha }}
 
       - name: Job summary
         env:
-          CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          CONTAINER_TAGS: ${{ steps.tags.outputs.container_tags }}
           IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.push.outputs.image_digest }}
           COSIGN_CERT_IDENTITY: https://github.com/${{ github.workflow_ref }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
           IMAGE_DIGEST: ${{ steps.push.outputs.image_digest }}
           APP_VERSION: ${{ needs.gitversion.outputs.version }}
           GIT_SHA: ${{ github.sha }}
+          PLATFORMS: ${{ inputs.platforms }}
           COSIGN_SUPPLY_CHAIN_ATTEST: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
         run: |
           echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Platforms: \`${PLATFORMS}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "The following tags were pushed to the registry:" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY

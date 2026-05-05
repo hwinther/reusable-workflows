@@ -141,3 +141,53 @@ The compose file (e.g. `docker-compose.e2e.yml`) lives in the consumer repo and 
 ### Why artifact-based image transfer
 
 The PR flow never pushes a feature-branch image until the e2e gate passes **and** the consumer's `if:` allows it. `_save-image-artifact` runs `docker save | gzip` on the loaded image after build + scan and uploads it as a workflow artifact; `_load-image-artifact` downloads + `docker load`s it later. The local content digest (`docker inspect --format='{{.Id}}'`) is captured at save time and re-checked at load time so a tampered or rebuilt artifact is rejected before push. Typical artifact sizes are ~150–500 MB per image; well within GitHub's 10 GB per-artifact ceiling but worth keeping `artifact_retention_days` low (default `1`).
+
+## Multi-arch builds and base-image chaining
+
+`docker-container.yml` supports multi-arch via three inputs (all default to single-arch / today's behaviour):
+
+- `platforms` (default `linux/amd64`) — comma-separated buildx platforms. Single value keeps the fast `docker tag`/`docker push` path; multiple values trigger QEMU + a `docker/build-push-action` push that assembles a manifest list. BuildKit cache from the prior single-arch scan build makes the native arch's contribution cheap.
+- `scan_all_platforms` (default `false`) — when true, build each non-native arch separately with `--load` under QEMU and run Grype against it. SARIF is uploaded as a distinct category per arch (`grype-container-${postfix}-amd64`, `…-arm64`) so Code Scanning shows each side-by-side. CVE coverage is ~99% the same across arches for OS-package vulns; this flag exists for compliance/audit posture, not coverage.
+- `build_args` (newline-separated `KEY=VALUE`) — appended to `APP_VERSION=` and `GIT_SHA=`, passed straight into the build. The lever for base-image chaining (see below).
+
+Default behaviour is unchanged for single-platform consumers. Per-arch scanning is hardcoded to `linux/amd64` + `linux/arm64` for now; other platforms in `platforms` are pushed but not separately scanned.
+
+`build-and-scan-docker.yml` (PR e2e flow) gets the same `build_args`, `additional_tags`, `use_gitversion_tags` inputs but stays single-arch — artifact-transferring a manifest list isn't worth the complexity for a runner-arch-only e2e gate.
+
+### Tag composition: gitversion + additional_tags
+
+Both `docker-container.yml` and `build-and-scan-docker.yml` accept:
+
+- `additional_tags` (semicolon-separated tag-only strings, e.g. `bookworm;bookworm-slim`) — each becomes `${registry}/${repo}/${postfix}:${tag}` in the final tag list.
+- `use_gitversion_tags` (default `true`) — when `false`, only `additional_tags` are pushed and gitversion's tag computation is skipped (gitversion still runs to populate the `version` and `is_alpha` outputs). Use this for matrix builds where gitversion's `latest` would collide between matrix legs sharing one image name (e.g. `sdr-base-wsh` × `bookworm`/`bullseye`/`buster`).
+
+The composed `container_image_tags` workflow output reflects the final list, so downstream jobs (e.g. `image-push.yml`) see exactly what was pushed.
+
+### Base-image chaining via build_args + image_digest
+
+The `image_digest` workflow output is a digest-pinned reference to what was just pushed. Derived images that `FROM` a base image take the base-image ref as a `build_args` input and resolve it from the upstream job's output:
+
+```yaml
+sdr-base-runtime:
+  uses: hwinther/reusable-workflows/.github/workflows/docker-container.yml@v1
+  with:
+    container_image_name_postfix: sdr/sdr-base-wsh
+    build_context: compose/templates/sdr-base/bookworm/base-image
+    dockerfile:    compose/templates/sdr-base/bookworm/base-image/Dockerfile
+    platforms: "linux/amd64,linux/arm64"
+    additional_tags: bookworm
+    use_gitversion_tags: false
+
+adsbexchange:
+  needs: sdr-base-runtime
+  uses: hwinther/reusable-workflows/.github/workflows/docker-container.yml@v1
+  with:
+    container_image_name_postfix: sdr/adsbexchange-wsh
+    build_context: compose/templates/adsb/adsbexchange
+    dockerfile:    compose/templates/adsb/adsbexchange/Dockerfile
+    platforms: "linux/amd64,linux/arm64"
+    build_args: |
+      SDR_BASE_RUNTIME=ghcr.io/${{ github.repository }}/sdr/sdr-base-wsh@${{ needs.sdr-base-runtime.outputs.image_digest }}
+```
+
+The derived Dockerfile uses `ARG SDR_BASE_RUNTIME` and `FROM $SDR_BASE_RUNTIME AS runtime`, so the derived image is pinned to the byte the base was at the moment it was built — pushing a new base does not silently change what derived images point at, and a derived rebuild repins to whatever the latest base build produces.
