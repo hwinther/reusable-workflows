@@ -1,0 +1,151 @@
+name: "Generate SBOM and scan image with Grype"
+description: |
+  Generates an SPDX SBOM (always) and a CycloneDX SBOM (when supply-chain
+  attestation is enabled) for the image, runs Grype against the SPDX SBOM,
+  uploads SARIF to Code Scanning, renders findings via `_grype-summary`, and
+  enforces the configured severity gate. Also produces a Grype JSON report
+  (always when scan is enabled, or via a non-gating run when only attestation
+  is needed) for downstream cosign vuln attestation.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  image_ref:
+    required: true
+    description: "Local image reference to scan (must already be loaded in the local Docker daemon)."
+  container_image_name_postfix:
+    required: true
+    description: "Used to build distinct SARIF category and PR-comment identifier when scanning multiple images."
+  grype_scan_enabled:
+    required: false
+    description: "Run the Grype gate scan."
+    default: "true"
+  grype_severity_cutoff:
+    required: false
+    description: "Severity-cutoff: negligible, low, medium, high, critical."
+    default: "high"
+  grype_only_fixed:
+    required: false
+    description: "Only consider vulnerabilities that have a fix available."
+    default: "true"
+  grype_fail_build:
+    required: false
+    description: "Fail this action when vulnerabilities meet severity-cutoff."
+    default: "true"
+  cosign_supply_chain_attest_enabled:
+    required: false
+    description: "When true, generates the CycloneDX SBOM and the Grype JSON for downstream cosign attestation."
+    default: "true"
+  github_token:
+    required: false
+    description: "Token for the Grype-summary PR comment."
+    default: ""
+
+outputs:
+  sbom_spdx_path:
+    description: "Path to the generated SPDX SBOM file."
+    value: ${{ steps.paths.outputs.sbom_spdx_path }}
+  sbom_cyclonedx_path:
+    description: "Path to the CycloneDX SBOM (only when cosign_supply_chain_attest_enabled is true)."
+    value: ${{ steps.paths.outputs.sbom_cyclonedx_path }}
+  grype_json_path:
+    description: "Path to the Grype JSON for cosign vuln attestation (only when cosign_supply_chain_attest_enabled is true)."
+    value: ${{ steps.paths.outputs.grype_json_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve output paths
+      id: paths
+      shell: bash
+      env:
+        RUNNER_TEMP_DIR: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        echo "sbom_spdx_path=${RUNNER_TEMP_DIR}/container-image.spdx.json" >> "$GITHUB_OUTPUT"
+        echo "sbom_cyclonedx_path=${RUNNER_TEMP_DIR}/container-image.cyclonedx.json" >> "$GITHUB_OUTPUT"
+        echo "grype_json_path=${RUNNER_TEMP_DIR}/grype-cosign-vuln.json" >> "$GITHUB_OUTPUT"
+        echo "sarif_path=${RUNNER_TEMP_DIR}/grype-results.sarif" >> "$GITHUB_OUTPUT"
+
+    - name: Generate SBOM (SPDX)
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.image_ref }}
+        format: spdx-json
+        output-file: ${{ steps.paths.outputs.sbom_spdx_path }}
+        artifact-name: container-image-${{ inputs.container_image_name_postfix }}.spdx.json
+
+    - name: Generate SBOM (CycloneDX) for cosign attestation
+      if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      with:
+        image: ${{ inputs.image_ref }}
+        format: cyclonedx-json
+        output-file: ${{ steps.paths.outputs.sbom_cyclonedx_path }}
+        artifact-name: container-image-${{ inputs.container_image_name_postfix }}.cyclonedx.json
+
+    - name: Vulnerability scan (Grype)
+      id: grype-scan
+      if: ${{ inputs.grype_scan_enabled == 'true' }}
+      continue-on-error: true
+      uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      with:
+        sbom: ${{ steps.paths.outputs.sbom_spdx_path }}
+        output-format: sarif
+        output-file: ${{ steps.paths.outputs.sarif_path }}
+        severity-cutoff: ${{ inputs.grype_severity_cutoff }}
+        only-fixed: ${{ inputs.grype_only_fixed }}
+        fail-build: ${{ inputs.grype_fail_build }}
+
+    - name: Upload Grype SARIF to Code Scanning
+      if: ${{ always() && inputs.grype_scan_enabled == 'true' && steps.grype-scan.outcome != 'skipped' }}
+      uses: github/codeql-action/upload-sarif@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4.35.2
+      with:
+        sarif_file: ${{ steps.paths.outputs.sarif_path }}
+        category: grype-container-${{ inputs.container_image_name_postfix }}
+        wait-for-processing: false
+
+    - name: Render Grype findings (job summary + PR comment)
+      if: ${{ always() && inputs.grype_scan_enabled == 'true' && steps.grype-scan.outcome != 'skipped' }}
+      uses: hwinther/reusable-workflows/.github/actions/_grype-summary@v1
+      with:
+        sarif_file: ${{ steps.paths.outputs.sarif_path }}
+        category: grype-container-${{ inputs.container_image_name_postfix }}
+        github_token: ${{ inputs.github_token }}
+        pr_comment_identifier: grype-summary-${{ inputs.container_image_name_postfix }}
+
+    - name: Enforce Grype vulnerability gate
+      if: ${{ inputs.grype_scan_enabled == 'true' && inputs.grype_fail_build == 'true' && steps.grype-scan.outcome == 'failure' }}
+      shell: bash
+      env:
+        IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
+      run: |
+        echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${IMAGE_POSTFIX}) or the Grype step log."
+        exit 1
+
+    - name: Download Grype CLI (JSON report for cosign vuln attestation)
+      id: grype-for-attest
+      if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.grype_scan_enabled == 'true' }}
+      uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0 (same ref as scan-action)
+
+    - name: Grype JSON for cosign vuln attestation
+      if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.grype_scan_enabled == 'true' }}
+      shell: bash
+      env:
+        GRYPE_CMD: ${{ steps.grype-for-attest.outputs.cmd }}
+        SBOM_PATH: ${{ steps.paths.outputs.sbom_spdx_path }}
+        OUT_PATH: ${{ steps.paths.outputs.grype_json_path }}
+      run: |
+        set -euo pipefail
+        "$GRYPE_CMD" "sbom:${SBOM_PATH}" -o json > "$OUT_PATH"
+
+    - name: Grype JSON only (supply-chain attestation, no SARIF gate)
+      if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.grype_scan_enabled != 'true' }}
+      uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      with:
+        sbom: ${{ steps.paths.outputs.sbom_spdx_path }}
+        output-format: json
+        output-file: ${{ steps.paths.outputs.grype_json_path }}
+        severity-cutoff: negligible
+        only-fixed: false
+        fail-build: false

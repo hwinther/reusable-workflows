@@ -1,0 +1,71 @@
+name: "Load a Docker image previously saved as a workflow artifact"
+description: |
+  Downloads an artifact uploaded by `_save-image-artifact` and loads its
+  gzipped tar into the local Docker daemon. Returns the first loaded image
+  reference so the caller can use it directly or re-tag it.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  artifact_name:
+    required: true
+    description: "Name of the artifact to download (uploaded by _save-image-artifact)."
+  download_path:
+    required: false
+    description: "Where to download the artifact. Defaults to a runner-temp subdirectory."
+    default: ""
+
+outputs:
+  local_ref:
+    description: "First image ref produced by `docker load`."
+    value: ${{ steps.load.outputs.ref }}
+  image_digest:
+    description: "Local image digest (sha256:...) from `docker inspect` after load."
+    value: ${{ steps.load.outputs.digest }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve download path
+      id: resolve
+      shell: bash
+      env:
+        OVERRIDE: ${{ inputs.download_path }}
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+        RUNNER_TEMP_DIR: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        DEST="${OVERRIDE:-${RUNNER_TEMP_DIR}/${ARTIFACT_NAME}}"
+        mkdir -p "$DEST"
+        echo "path=$DEST" >> "$GITHUB_OUTPUT"
+
+    - name: Download image artifact
+      uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+      with:
+        name: ${{ inputs.artifact_name }}
+        path: ${{ steps.resolve.outputs.path }}
+
+    - name: Load image
+      id: load
+      shell: bash
+      env:
+        DOWNLOAD_PATH: ${{ steps.resolve.outputs.path }}
+        ARTIFACT_NAME: ${{ inputs.artifact_name }}
+      run: |
+        set -euo pipefail
+        ARCHIVE=$(find "$DOWNLOAD_PATH" -maxdepth 2 -type f \( -name '*.tar.gz' -o -name '*.tar' \) | head -1)
+        [ -n "$ARCHIVE" ] || { echo "::error::No .tar(.gz) found under $DOWNLOAD_PATH"; ls -la "$DOWNLOAD_PATH"; exit 1; }
+        echo "Loading $ARCHIVE"
+        if [ "${ARCHIVE##*.}" = "gz" ]; then
+          mapfile -t loaded < <(gunzip -c "$ARCHIVE" | docker load | sed -n 's/^Loaded image: //p')
+        else
+          mapfile -t loaded < <(docker load -i "$ARCHIVE" | sed -n 's/^Loaded image: //p')
+        fi
+        [ "${#loaded[@]}" -ge 1 ] || { echo "::error::docker load produced no image lines"; exit 1; }
+        REF="${loaded[0]}"
+        echo "ref=$REF" >> "$GITHUB_OUTPUT"
+        DIGEST=$(docker inspect --format='{{.Id}}' "$REF")
+        echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+        echo "Loaded refs:"
+        printf '  %s\n' "${loaded[@]}"
+        echo "Local digest: $DIGEST"

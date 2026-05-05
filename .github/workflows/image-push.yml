@@ -1,0 +1,224 @@
+name: "Push image artifact to registry with signatures and attestations"
+
+# Companion to build-and-scan-{docker,dotnet}.yml. Downloads the image
+# artifact those workflows produce, asserts byte-identity with the local
+# digest captured at build time, then tags + pushes + signs + attests using
+# the same supply-chain pipeline as docker-container.yml / dotnet-container.yml.
+#
+# The caller is responsible for the `if:` gate on the job (PR label, branch,
+# etc.). When the gate is open, every invocation pushes.
+
+on:
+  workflow_call:
+    inputs:
+      container_registry:
+        description: "Container registry, e.g. ghcr.io"
+        default: "ghcr.io"
+        type: string
+      container_image_name_postfix:
+        description: "Container image name postfix, must match the build-and-scan job."
+        required: true
+        type: string
+      artifact_name:
+        description: "Workflow artifact name from build-and-scan-*.yml output (image_artifact)."
+        required: true
+        type: string
+      container_image_tags:
+        description: "Comma-separated full image refs to push (passed verbatim from build-and-scan-*.yml output)."
+        required: true
+        type: string
+      image_digest:
+        description: "Local image digest (sha256:...) from build-and-scan-*.yml output. Asserted against the loaded artifact."
+        required: true
+        type: string
+      version:
+        description: "Version string (build-and-scan-*.yml output)."
+        required: true
+        type: string
+      cosign_sign_enabled:
+        description: "Sign the pushed image digest with cosign (keyless / GitHub OIDC)."
+        required: false
+        type: boolean
+        default: true
+      cosign_supply_chain_attest_enabled:
+        description: "Attach Cosign CycloneDX SBOM and Grype vuln attestations after sign."
+        required: false
+        type: boolean
+        default: true
+      sbom_artifact_name:
+        description: "Workflow artifact holding the CycloneDX SBOM (build-and-scan-*.yml sbom_artifact). Required when cosign_supply_chain_attest_enabled is true."
+        required: false
+        type: string
+        default: ""
+      grype_artifact_name:
+        description: "Workflow artifact holding the Grype JSON (build-and-scan-*.yml grype_artifact). Required when cosign_supply_chain_attest_enabled is true."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      pushed_tags:
+        description: "Comma-separated tags that were pushed."
+        value: ${{ inputs.container_image_tags }}
+      pushed_digest:
+        description: "OCI manifest digest resolved from the registry after push."
+        value: ${{ jobs.push.outputs.image_digest }}
+
+jobs:
+  prepare-repository-name:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      repository: ${{ steps.lower-repo.outputs.repository }}
+    steps:
+      - id: lower-repo
+        run: |
+          echo "repository=${GITHUB_REPOSITORY@L}" >> $GITHUB_OUTPUT
+
+  push:
+    name: Push (${{ inputs.container_image_tags }})
+    needs: prepare-repository-name
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      actions: read  # download-artifact uses the run-scoped token
+    outputs:
+      image_digest: ${{ steps.push.outputs.image_digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ${{ inputs.container_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download and load image artifact
+        id: load
+        uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v1
+        with:
+          artifact_name: ${{ inputs.artifact_name }}
+
+      - name: Assert byte-identity with build-time digest
+        shell: bash
+        env:
+          EXPECTED: ${{ inputs.image_digest }}
+          ACTUAL: ${{ steps.load.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "::error::Loaded image digest ($ACTUAL) does not match expected ($EXPECTED). The artifact may have been tampered with or rebuilt."
+            exit 1
+          fi
+          echo "Local digest matches build-time digest: $ACTUAL"
+
+      - name: Download CycloneDX SBOM artifact
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: ${{ inputs.sbom_artifact_name }}
+          path: ${{ runner.temp }}/sboms
+
+      - name: Download Grype JSON artifact
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: ${{ inputs.grype_artifact_name }}
+          path: ${{ runner.temp }}/grype
+
+      - name: Resolve attestation predicate paths
+        id: predicates
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+        shell: bash
+        env:
+          SBOM_DIR: ${{ runner.temp }}/sboms
+          GRYPE_DIR: ${{ runner.temp }}/grype
+        run: |
+          set -euo pipefail
+          CYCLONEDX=$(find "$SBOM_DIR" -maxdepth 2 -type f -name '*.cyclonedx.json' | head -1)
+          [ -n "$CYCLONEDX" ] || { echo "::error::No CycloneDX SBOM found under $SBOM_DIR"; ls -la "$SBOM_DIR"; exit 1; }
+          GRYPE=$(find "$GRYPE_DIR" -maxdepth 2 -type f -name '*.json' | head -1)
+          [ -n "$GRYPE" ] || { echo "::error::No Grype JSON found under $GRYPE_DIR"; ls -la "$GRYPE_DIR"; exit 1; }
+          echo "sbom_cyclonedx_path=$CYCLONEDX" >> "$GITHUB_OUTPUT"
+          echo "grype_json_path=$GRYPE" >> "$GITHUB_OUTPUT"
+
+      - name: Push image and attach signatures + attestations
+        id: push
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v1
+        with:
+          image_ref: ${{ steps.load.outputs.local_ref }}
+          container_tags: ${{ inputs.container_image_tags }}
+          container_registry: ${{ inputs.container_registry }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          cosign_sign_enabled: ${{ inputs.cosign_sign_enabled }}
+          cosign_supply_chain_attest_enabled: ${{ inputs.cosign_supply_chain_attest_enabled }}
+          sbom_cyclonedx_path: ${{ steps.predicates.outputs.sbom_cyclonedx_path }}
+          grype_json_path: ${{ steps.predicates.outputs.grype_json_path }}
+          version: ${{ inputs.version }}
+
+      - name: Job summary
+        env:
+          CONTAINER_TAGS: ${{ inputs.container_image_tags }}
+          IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.push.outputs.image_digest }}
+          COSIGN_CERT_IDENTITY: https://github.com/${{ github.workflow_ref }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.image_digest }}
+          APP_VERSION: ${{ inputs.version }}
+          GIT_SHA: ${{ github.sha }}
+          COSIGN_SUPPLY_CHAIN_ATTEST: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+        run: |
+          echo "### 📦 Container image (PR push, byte-identical to scan + e2e tested artifact)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "The following tags were pushed to the registry:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "$CONTAINER_TAGS" | tr ',' '\n' | while read -r tag; do
+            tag=$(echo "$tag" | xargs)
+            [ -z "$tag" ] && continue
+            echo "- [\`${tag}\`](https://${tag})" >> $GITHUB_STEP_SUMMARY
+          done
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image digest: \`${IMAGE_DIGEST}\`" >> $GITHUB_STEP_SUMMARY
+          echo "App version: \`${APP_VERSION}\`, git sha: \`${GIT_SHA}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Verify digest, signature, and attestation" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Immutable reference: \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**cosign** (keyless: certificate identifies image-push.yml. Pin consumers with \`uses: …/image-push.yml@v1\` so verification can target \`@refs/tags/v1\`.):" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- This run: \`${WORKFLOW_REF}\` → identity \`${COSIGN_CERT_IDENTITY}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Verify **this exact run**:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity \"${COSIGN_CERT_IDENTITY}\" \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Policy-style verify when consumers use the floating **v1** tag:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp '^https://github.com/[^/]+/[^/]+/\\.github/workflows/image-push\\.yml@refs/tags/v1\$' \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${COSIGN_SUPPLY_CHAIN_ATTEST}" = "true" ]; then
+            echo "**Cosign supply-chain attestations** (CycloneDX SBOM + Grype vuln):" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+            echo "cosign tree \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+            echo "cosign verify-attestation --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity \"${COSIGN_CERT_IDENTITY}\" --type cyclonedx \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+            echo "cosign verify-attestation --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity \"${COSIGN_CERT_IDENTITY}\" --type vuln \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "**GitHub artifact attestation:**" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
+          echo "gh attestation verify oci://${IMAGE_REF} --repo ${GITHUB_REPOSITORY}" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"

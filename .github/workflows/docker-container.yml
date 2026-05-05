@@ -96,15 +96,12 @@ jobs:
       security-events: write
       pull-requests: write  # for the Grype findings PR comment via _grype-summary
     outputs:
-      image_digest: ${{ steps.docker-push.outputs.digest }}
+      image_digest: ${{ steps.push.outputs.image_digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
@@ -120,20 +117,19 @@ jobs:
           images: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
 
       - name: Build container (load locally, do not push)
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        id: build
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v1
         with:
-          context: ${{ inputs.build_context }} # zizmor: ignore[template-injection]
-          file: ${{ inputs.dockerfile }} # zizmor: ignore[template-injection]
-          push: false
-          load: true
+          build_context: ${{ inputs.build_context }}
+          dockerfile: ${{ inputs.dockerfile }}
           tags: ${{ needs.gitversion.outputs.container_image_tags }}
-          build-args: |
-            APP_VERSION=${{ needs.gitversion.outputs.version }}
-            GIT_SHA=${{ github.sha }}
+          app_version: ${{ needs.gitversion.outputs.version }}
+          git_sha: ${{ github.sha }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
 
-      - name: Generate SBOM for container image
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+      - name: Generate SBOM and scan with Grype
+        id: scan
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v1
         with:
           image: ${{ needs.gitversion.outputs.deploy_tag }}
           format: spdx-json
@@ -177,137 +173,29 @@ jobs:
           sarif_file: ${{ runner.temp }}/grype-results.sarif
           category: grype-container-${{ inputs.container_image_name_postfix }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          pr_comment_identifier: grype-summary-${{ inputs.container_image_name_postfix }}
 
-      - name: Enforce Grype vulnerability gate
-        if: ${{ inputs.grype_scan_enabled && inputs.grype_fail_build && steps.grype-scan.outcome == 'failure' }}
-        env:
-          IMAGE_POSTFIX: ${{ inputs.container_image_name_postfix }}
-        run: |
-          echo "::error::Grype reported vulnerabilities at or above the configured severity cutoff. See Code Scanning (category grype-container-${IMAGE_POSTFIX}) or the Grype step log."
-          exit 1
-
-      - name: Download Grype (JSON report for cosign vuln attestation)
-        id: grype-for-attest
-        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled && inputs.grype_scan_enabled }}
-        uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0 (same ref as scan-action)
-
-      - name: Grype JSON for cosign vuln attestation
-        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled && inputs.grype_scan_enabled }}
-        run: |
-          set -euo pipefail
-          "${{ steps.grype-for-attest.outputs.cmd }}" "sbom:${{ runner.temp }}/container-image.spdx.json" -o json > "${{ runner.temp }}/grype-cosign-vuln.json"
-
-      - name: Grype JSON only (supply chain attestation, no SARIF gate)
-        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled && !inputs.grype_scan_enabled }}
-        uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      - name: Push image and attach signatures + attestations
+        id: push
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v1
         with:
-          sbom: ${{ runner.temp }}/container-image.spdx.json
-          output-format: json
-          output-file: ${{ runner.temp }}/grype-cosign-vuln.json
-          severity-cutoff: negligible
-          only-fixed: false
-          fail-build: false
-
-      - name: Push container to GHCR
-        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
-        id: docker-push
-        with:
-          context: ${{ inputs.build_context }} # zizmor: ignore[template-injection]
-          file: ${{ inputs.dockerfile }} # zizmor: ignore[template-injection]
-          push: true
-          tags: ${{ needs.gitversion.outputs.container_image_tags }}
-          build-args: |
-            APP_VERSION=${{ needs.gitversion.outputs.version }}
-            GIT_SHA=${{ github.sha }}
-          labels: ${{ steps.docker-metadata.outputs.labels }}
-
-      - name: Generate artifact attestation
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-name: ghcr.io/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
-          subject-digest: ${{ steps.docker-push.outputs.digest }}
-          push-to-registry: true
-
-      # Kyverno 1.17 resolves Cosign attestations like Cosign v2 (sha256-….att manifest tags). Cosign v3+ often publishes via OCI referrers only → 404 on that path while local cosign v3 verify still works via /referrers/.
-      - name: Install Cosign
-        if: ${{ inputs.cosign_sign_enabled }}
-        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
-        with:
-          cosign-release: v2.4.3
-
-      - name: Sign container image (cosign, keyless)
-        if: ${{ inputs.cosign_sign_enabled }}
-        env:
-          DIGEST: ${{ steps.docker-push.outputs.digest }}
-          CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
-        run: |
-          set -euo pipefail
-          images=""
-          while IFS= read -r tag; do
-            tag=$(echo "$tag" | xargs)
-            [ -z "$tag" ] && continue
-            if [ -z "$images" ]; then
-              images="${tag}@${DIGEST}"
-            else
-              images="${images} ${tag}@${DIGEST}"
-            fi
-          done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
-          [ -n "$images" ] || { echo "::error::No image refs to sign"; exit 1; }
-          echo "Signing images: ${images}"
-          cosign sign --yes ${images}
-
-      - name: Build cosign vuln attestation predicate
-        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
-        env:
-          RUN_URI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          GRYPE_JSON="${{ runner.temp }}/grype-cosign-vuln.json"
-          [ -f "$GRYPE_JSON" ] || { echo "::error::Missing $GRYPE_JSON (Grype JSON for vuln attestation)"; exit 1; }
-          STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          FINISHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          jq -n \
-            --slurpfile result "$GRYPE_JSON" \
-            --arg run_uri "$RUN_URI" \
-            --arg run_id "${{ github.run_id }}" \
-            --arg started "$STARTED" \
-            --arg finished "$FINISHED" \
-            '{
-              invocation: {
-                parameters: ["sbom"],
-                uri: $run_uri,
-                event_id: $run_id,
-                "builder.id": "https://github.com/actions/runner"
-              },
-              scanner: {
-                uri: "https://github.com/anchore/grype",
-                version: "anchore/scan-action@v7",
-                db: {uri: "", version: ""},
-                result: $result[0]
-              },
-              metadata: {
-                scanStartedOn: $started,
-                scanFinishedOn: $finished
-              }
-            }' > "${{ runner.temp }}/cosign-vuln-predicate.json"
-
-      - name: Cosign attest CycloneDX and vulnerability scan (registry)
-        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
-        env:
-          IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.docker-push.outputs.digest }}
-        run: |
-          set -euo pipefail
-          cosign attest --yes --type cyclonedx --predicate "${{ runner.temp }}/container-image.cyclonedx.json" "$IMAGE_REF"
-          cosign attest --yes --type vuln --predicate "${{ runner.temp }}/cosign-vuln-predicate.json" "$IMAGE_REF"
+          image_ref: ${{ steps.build.outputs.local_ref }}
+          container_tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          container_registry: ${{ inputs.container_registry }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          cosign_sign_enabled: ${{ inputs.cosign_sign_enabled }}
+          cosign_supply_chain_attest_enabled: ${{ inputs.cosign_supply_chain_attest_enabled }}
+          sbom_cyclonedx_path: ${{ steps.scan.outputs.sbom_cyclonedx_path }}
+          grype_json_path: ${{ steps.scan.outputs.grype_json_path }}
+          version: ${{ needs.gitversion.outputs.version }}
 
       - name: Job summary
         env:
           CONTAINER_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
-          IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.docker-push.outputs.digest }}
+          IMAGE_REF: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.push.outputs.image_digest }}
           COSIGN_CERT_IDENTITY: https://github.com/${{ github.workflow_ref }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
-          IMAGE_DIGEST: ${{ steps.docker-push.outputs.digest }}
+          IMAGE_DIGEST: ${{ steps.push.outputs.image_digest }}
           APP_VERSION: ${{ needs.gitversion.outputs.version }}
           GIT_SHA: ${{ github.sha }}
           COSIGN_SUPPLY_CHAIN_ATTEST: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}

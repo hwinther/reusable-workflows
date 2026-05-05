@@ -1,0 +1,121 @@
+name: "Build dotnet container locally"
+description: |
+  Runs `dotnet publish -t:PublishContainer` to a local archive, then `docker
+  load`s it so the image is available in the local Docker daemon for downstream
+  scan and push steps. Does not push to any registry.
+
+  The published image is tagged as `<repository>/<postfix>:<each-image-tag>`
+  (no registry prefix). Downstream steps add the registry prefix via
+  `docker tag` before pushing.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  dotnet_version:
+    required: true
+    description: ".NET version, e.g. 10.0.x"
+  solution_path:
+    required: true
+    description: "Solution path, e.g. backend (used as working-directory and for cache key)."
+  solution_file:
+    required: true
+    description: "Solution file (relative to solution_path), e.g. ProjectName.slnx"
+  project_file:
+    required: true
+    description: "Project file (relative to solution_path), e.g. src/Api/Api.csproj"
+  cache_enabled:
+    required: false
+    description: "Enable NuGet package caching (requires lock files)."
+    default: "true"
+  image_tags:
+    required: true
+    description: "Semicolon-separated image tags (no registry, no name) — passed as ContainerImageTags MSBuild property."
+  repository:
+    required: true
+    description: "Lowercased GITHUB_REPOSITORY (owner/repo)."
+  container_image_name_postfix:
+    required: true
+    description: "Image name postfix appended to repository (becomes ContainerRepository)."
+  version:
+    required: true
+    description: "Version string for ContainerVersion / InformationalVersion MSBuild properties."
+  git_sha:
+    required: false
+    description: "Value for SourceRevisionId."
+    default: ${{ github.sha }}
+  archive_path:
+    required: false
+    description: "Output path for the container archive. Defaults to a runner-temp tarball."
+    default: ""
+
+outputs:
+  local_ref:
+    description: "First image ref produced by `docker load` after publish (no registry prefix)."
+    value: ${{ steps.load-image.outputs.ref }}
+  archive_path:
+    description: "Path to the container archive produced by dotnet publish."
+    value: ${{ steps.publish.outputs.archive_path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up .NET
+      uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+      with:
+        dotnet-version: ${{ inputs.dotnet_version }}
+        cache: ${{ inputs.cache_enabled }}
+        cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+    - name: Restore
+      shell: bash
+      working-directory: ${{ inputs.solution_path }}
+      env:
+        SOLUTION_FILE: ${{ inputs.solution_file }}
+      run: dotnet restore --locked-mode "$SOLUTION_FILE"
+
+    - name: Publish container to archive
+      id: publish
+      shell: bash
+      working-directory: ${{ inputs.solution_path }}
+      env:
+        ContainerImageTags: ${{ inputs.image_tags }}
+        PROJECT_FILE: ${{ inputs.project_file }}
+        REPOSITORY: ${{ inputs.repository }}
+        POSTFIX: ${{ inputs.container_image_name_postfix }}
+        VERSION: ${{ inputs.version }}
+        GIT_SHA: ${{ inputs.git_sha }}
+        SERVER_URL: ${{ github.server_url }}
+        REPO_FULL: ${{ github.repository }}
+        ARCHIVE_OVERRIDE: ${{ inputs.archive_path }}
+        RUNNER_TEMP_DIR: ${{ runner.temp }}
+      run: |
+        set -euo pipefail
+        ARCHIVE="${ARCHIVE_OVERRIDE:-${RUNNER_TEMP_DIR}/container-image.tar.gz}"
+        dotnet publish "$PROJECT_FILE" \
+          -c Release \
+          --no-restore \
+          -t:PublishContainer \
+          -p:ContainerArchiveOutputPath="$ARCHIVE" \
+          -p:ContainerRepository="${REPOSITORY}/${POSTFIX}" \
+          -p:ContainerVersion="$VERSION" \
+          -p:InformationalVersion="$VERSION" \
+          -p:SourceRevisionId="$GIT_SHA" \
+          -p:PublishRepositoryUrl=true \
+          -p:RepositoryUrl="${SERVER_URL}/${REPO_FULL}.git"
+        echo "archive_path=$ARCHIVE" >> "$GITHUB_OUTPUT"
+
+    - name: Load image from archive
+      id: load-image
+      shell: bash
+      env:
+        ARCHIVE: ${{ steps.publish.outputs.archive_path }}
+      run: |
+        set -euo pipefail
+        mapfile -t loaded < <(docker load -i "$ARCHIVE" | sed -n 's/^Loaded image: //p')
+        [ "${#loaded[@]}" -ge 1 ] || { echo "::error::docker load produced no image lines"; exit 1; }
+        echo "ref=${loaded[0]}" >> "$GITHUB_OUTPUT"
+        echo "Loaded refs:"
+        printf '  %s\n' "${loaded[@]}"

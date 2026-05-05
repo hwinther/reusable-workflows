@@ -1,0 +1,66 @@
+name: "Build Docker container locally"
+description: |
+  Runs `docker buildx build` with `load: true` so the image is available in the
+  local Docker daemon for downstream scan and push steps. Does not push to any
+  registry. Tags from gitversion are applied to the loaded image.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  build_context:
+    required: true
+    description: "Docker build context, e.g. frontend or '.'"
+  dockerfile:
+    required: true
+    description: "Dockerfile path, e.g. frontend/Dockerfile"
+  tags:
+    required: true
+    description: "Comma-separated full image refs to apply (from gitversion container_image_tags)."
+  app_version:
+    required: false
+    description: "APP_VERSION build arg, typically gitversion version output."
+    default: ""
+  git_sha:
+    required: false
+    description: "GIT_SHA build arg."
+    default: ${{ github.sha }}
+  labels:
+    required: false
+    description: "OCI labels to apply (newline-separated, from docker/metadata-action)."
+    default: ""
+
+outputs:
+  local_ref:
+    description: "First tag in `tags`, available in the local Docker daemon after this action runs."
+    value: ${{ steps.resolve-ref.outputs.local_ref }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+    - name: Build container (load locally, do not push)
+      uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+      with:
+        context: ${{ inputs.build_context }} # zizmor: ignore[template-injection]
+        file: ${{ inputs.dockerfile }} # zizmor: ignore[template-injection]
+        push: false
+        load: true
+        tags: ${{ inputs.tags }}
+        build-args: |
+          APP_VERSION=${{ inputs.app_version }}
+          GIT_SHA=${{ inputs.git_sha }}
+        labels: ${{ inputs.labels }}
+
+    - name: Resolve local ref (first tag)
+      id: resolve-ref
+      shell: bash
+      env:
+        TAGS: ${{ inputs.tags }}
+      run: |
+        set -euo pipefail
+        FIRST=$(echo "$TAGS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' | head -1)
+        [ -n "$FIRST" ] || { echo "::error::No tag could be resolved from inputs.tags ('$TAGS')"; exit 1; }
+        echo "local_ref=$FIRST" >> "$GITHUB_OUTPUT"
+        echo "Local ref: $FIRST"
