@@ -88,6 +88,11 @@ on:
         required: false
         type: number
         default: 14
+      environment:
+        description: "GitHub environment to associate with the e2e job (for environment-scoped secrets, approvals, or rules). Empty means no environment."
+        required: false
+        type: string
+        default: ""
     secrets:
       e2e_username:
         description: "Username for the auth setup project (exported as E2E_USERNAME for the Playwright run)."
@@ -103,6 +108,7 @@ jobs:
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    environment: ${{ inputs.environment }}
     permissions:
       contents: read
       packages: read
