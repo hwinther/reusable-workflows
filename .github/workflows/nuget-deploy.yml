@@ -1,0 +1,151 @@
+name: "Deploy NuGet package(s) to GitHub Packages"
+
+# Layer-1 reusable workflow: pack and push every IsPackable=true project in a
+# solution to a private NuGet feed. Versioning, change detection, and trigger
+# semantics are explicitly NOT this workflow's concern — the caller computes
+# the version (typically via the package-version composite action) and gates
+# whether to run.
+
+on:
+  workflow_call:
+    inputs:
+      solution_file:
+        description: "Solution file to pack (e.g. ClutterStock.slnx). All IsPackable=true projects in it are packed and pushed."
+        required: true
+        type: string
+      dotnet_version:
+        description: ".NET SDK version, e.g. 10.0.x."
+        required: true
+        type: string
+      package_version:
+        description: "Package version to embed in every produced nupkg. Caller's responsibility to compute (see actions/package-version)."
+        required: true
+        type: string
+      informational_version:
+        description: "AssemblyInformationalVersion. Defaults to package_version when empty."
+        required: false
+        type: string
+        default: ''
+      is_alpha:
+        description: "Informational flag, surfaced in the job summary. Does not change packaging — package_version already encodes any prerelease label."
+        required: false
+        type: string
+        default: 'false'
+      package_source_name:
+        description: "NuGet source name as used by `dotnet nuget`. Caller is expected to have this source declared in nuget.config (or rely on GitHub Packages defaults)."
+        required: false
+        type: string
+        default: 'github'
+      package_source_url:
+        description: "NuGet source URL. Defaults to the calling repo owner's GitHub Packages feed."
+        required: false
+        type: string
+        default: ''
+      tests_enabled:
+        description: "Run `dotnet test` against the solution before pack."
+        required: false
+        type: boolean
+        default: true
+      cache_enabled:
+        description: "Enable NuGet package caching via setup-dotnet (requires packages.lock.json files)."
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      packages_pat:
+        description: "PAT with read:packages scope for restoring private dependencies. Falls back to GITHUB_TOKEN when unset."
+        required: false
+    outputs:
+      version:
+        description: "Echoes back the package_version that was published."
+        value: ${{ inputs.package_version }}
+
+jobs:
+  pack-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    env:
+      INFORMATIONAL_VERSION: ${{ inputs.informational_version != '' && inputs.informational_version || inputs.package_version }}
+      EFFECTIVE_SOURCE_URL: ${{ inputs.package_source_url != '' && inputs.package_source_url || format('https://nuget.pkg.github.com/{0}/index.json', github.repository_owner) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+          cache: ${{ inputs.cache_enabled }}
+          cache-dependency-path: ${{ inputs.cache_enabled && '**/packages.lock.json' || '' }}
+
+      - name: Authenticate NuGet source for restore
+        env:
+          NUGET_TOKEN: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Ensure the source is registered (idempotent: update if exists, add otherwise).
+          if dotnet nuget list source | awk '{print $2}' | grep -Fxq "${{ inputs.package_source_name }}"; then
+            dotnet nuget update source "${{ inputs.package_source_name }}" \
+              --username "${{ github.actor }}" \
+              --password "$NUGET_TOKEN" \
+              --store-password-in-clear-text
+          else
+            dotnet nuget add source "$EFFECTIVE_SOURCE_URL" \
+              --name "${{ inputs.package_source_name }}" \
+              --username "${{ github.actor }}" \
+              --password "$NUGET_TOKEN" \
+              --store-password-in-clear-text
+          fi
+
+      - name: Restore
+        run: dotnet restore --locked-mode "${{ inputs.solution_file }}"
+
+      - name: Build
+        run: dotnet build "${{ inputs.solution_file }}" -c Release --no-restore
+
+      - name: Test
+        if: inputs.tests_enabled
+        run: dotnet test --solution "${{ inputs.solution_file }}" -c Release --no-build
+
+      - name: Pack
+        run: |
+          dotnet pack "${{ inputs.solution_file }}" \
+            -c Release --no-build -o nupkg \
+            -p:Version=${{ inputs.package_version }} \
+            -p:InformationalVersion=$INFORMATIONAL_VERSION
+
+      - name: Push to NuGet feed
+        env:
+          NUGET_TOKEN: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
+        run: |
+          dotnet nuget push 'nupkg/*.nupkg' \
+            --source "${{ inputs.package_source_name }}" \
+            --skip-duplicate \
+            --api-key "$NUGET_TOKEN"
+
+      - name: Job summary
+        env:
+          IS_ALPHA: ${{ inputs.is_alpha }}
+          PKG_VERSION: ${{ inputs.package_version }}
+        run: |
+          {
+            echo "### NuGet publish"
+            echo ""
+            echo "- Version: \`${PKG_VERSION}\`"
+            echo "- Informational: \`${INFORMATIONAL_VERSION}\`"
+            echo "- Alpha: \`${IS_ALPHA}\`"
+            echo "- Source: \`${EFFECTIVE_SOURCE_URL}\`"
+            echo ""
+            echo "Pushed nupkgs:"
+            echo ""
+            for f in nupkg/*.nupkg; do
+              [ -f "$f" ] || continue
+              echo "- \`$(basename "$f")\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

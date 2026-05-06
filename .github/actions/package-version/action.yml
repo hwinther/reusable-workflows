@@ -1,0 +1,105 @@
+name: "Compute package version"
+description: |
+  Compute a SemVer-compatible package version from the latest reachable
+  v[X.Y.Z] git tag plus the commit count since that tag. When is_alpha is
+  'true', append a sanitized branch name + short SHA as a SemVer prerelease
+  label so each commit on a feature branch produces a unique alpha version.
+
+  The caller must perform actions/checkout with fetch-depth: 0 and
+  fetch-tags: true before invoking this action — composite actions do not
+  check out the repo themselves.
+
+inputs:
+  is_alpha:
+    description: "When 'true', append branch + short-sha as a SemVer prerelease label."
+    required: false
+    default: 'false'
+  branch_name:
+    description: "Override the branch name used in the alpha suffix. Defaults to github.head_ref (PR) or github.ref_name (push)."
+    required: false
+    default: ''
+  path:
+    description: "Optional path filter. When set, only commits that touched files under this path count toward the patch increment. Useful for monorepos or for ignoring docs/workflow-only commits. Empty (default) counts all commits since the tag."
+    required: false
+    default: ''
+
+outputs:
+  version:
+    description: "Package version (e.g. 0.1.7 or 0.1.7-feature-foo.abc1234)."
+    value: ${{ steps.compute.outputs.version }}
+  informational_version:
+    description: "Same as version with '+sha.<full-sha>' build metadata appended; suitable for AssemblyInformationalVersion."
+    value: ${{ steps.compute.outputs.informational_version }}
+
+runs:
+  using: composite
+  steps:
+    - id: compute
+      shell: bash
+      env:
+        IS_ALPHA: ${{ inputs.is_alpha }}
+        OVERRIDE_BRANCH: ${{ inputs.branch_name }}
+        EVENT_BRANCH: ${{ github.head_ref || github.ref_name }}
+        PATH_FILTER: ${{ inputs.path }}
+      run: |
+        set -euo pipefail
+
+        if TAG=$(git describe --tags --abbrev=0 --match='v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null); then
+          if [ -n "$PATH_FILTER" ]; then
+            COMMITS=$(git rev-list "$TAG"..HEAD --count -- "$PATH_FILTER")
+          else
+            COMMITS=$(git rev-list "$TAG"..HEAD --count)
+          fi
+        else
+          TAG="v0.0.0"
+          if [ -n "$PATH_FILTER" ]; then
+            COMMITS=$(git rev-list HEAD --count -- "$PATH_FILTER")
+          else
+            COMMITS=$(git rev-list HEAD --count)
+          fi
+        fi
+
+        BASE=${TAG#v}
+        MAJOR=$(echo "$BASE" | cut -d. -f1)
+        MINOR=$(echo "$BASE" | cut -d. -f2)
+        PATCH=$(echo "$BASE" | cut -d. -f3)
+
+        if [ "$COMMITS" = "0" ]; then
+          STABLE="${MAJOR}.${MINOR}.${PATCH}"
+        else
+          STABLE="${MAJOR}.${MINOR}.$((PATCH + COMMITS))"
+        fi
+
+        if [ "$IS_ALPHA" = "true" ]; then
+          BRANCH="$OVERRIDE_BRANCH"
+          [ -z "$BRANCH" ] && BRANCH="$EVENT_BRANCH"
+          if [ -z "$BRANCH" ]; then
+            echo "::error::is_alpha=true but no branch_name input and no github.head_ref/ref_name available."
+            exit 1
+          fi
+          SHORT_SHA="${GITHUB_SHA:0:7}"
+          # SemVer prerelease identifiers: [0-9A-Za-z-]+, separated by '.'.
+          # Normalize: lower, replace '/'/'_' with '-', strip anything else, truncate, trim trailing '-'.
+          SAFE=$(echo "$BRANCH" | tr '/_' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+          SAFE=${SAFE:0:40}
+          SAFE=${SAFE%-}
+          if [ -z "$SAFE" ]; then
+            SAFE="branch"
+          fi
+          VERSION="${STABLE}-${SAFE}.${SHORT_SHA}"
+        else
+          VERSION="${STABLE}"
+        fi
+
+        INFO="${VERSION}+sha.${GITHUB_SHA}"
+
+        echo "Base tag:               ${TAG}"
+        echo "Path filter:            ${PATH_FILTER:-<none>}"
+        echo "Commits past tag:       ${COMMITS}"
+        echo "Stable version:         ${STABLE}"
+        echo "is_alpha:               ${IS_ALPHA}"
+        echo "Resolved version:       ${VERSION}"
+        echo "Informational version:  ${INFO}"
+
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "informational_version=${INFO}" >> "$GITHUB_OUTPUT"
