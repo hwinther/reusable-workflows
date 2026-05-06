@@ -1,0 +1,208 @@
+name: "Deploy package(s) across one or more ecosystems"
+
+# Layer-2 kitchen-sink reusable workflow: computes a single shared package
+# version once, optionally detects which ecosystems' files changed, and fans
+# out to per-ecosystem layer-1 reusables (nuget-deploy, npm-deploy, ...) for
+# the ones that are enabled and changed. All ecosystems publishing in the
+# same run share the same version string.
+#
+# Triggers, branch checks, and label gating live in the consumer's caller
+# workflow — this workflow assumes the caller has already decided "yes, run
+# a publish."
+
+on:
+  workflow_call:
+    inputs:
+      is_alpha:
+        description: "When 'true', package versions get a SemVer prerelease suffix (branch + short SHA)."
+        required: false
+        type: string
+        default: 'false'
+
+      # nuget --------------------------------------------------------------
+      nuget_enabled:
+        required: false
+        type: boolean
+        default: false
+      nuget_solution_file:
+        required: false
+        type: string
+        default: ''
+      nuget_dotnet_version:
+        required: false
+        type: string
+        default: '10.0.x'
+      nuget_changes_regex:
+        description: "Regex matched against changed file paths. Empty means 'always run when nuget_enabled'."
+        required: false
+        type: string
+        default: ''
+      nuget_tests_enabled:
+        required: false
+        type: boolean
+        default: true
+      nuget_package_source_name:
+        required: false
+        type: string
+        default: 'github'
+      nuget_version_path:
+        description: "Optional path filter for nuget version computation. When set, only commits touching this path count toward the patch increment. Empty (default) counts all commits since the tag."
+        required: false
+        type: string
+        default: ''
+
+      # npm ----------------------------------------------------------------
+      npm_enabled:
+        required: false
+        type: boolean
+        default: false
+      npm_working_directory:
+        required: false
+        type: string
+        default: '.'
+      npm_node_version:
+        required: false
+        type: string
+        default: '24.x'
+      npm_scope:
+        required: false
+        type: string
+        default: ''
+      npm_changes_regex:
+        description: "Regex matched against changed file paths. Empty means 'always run when npm_enabled'."
+        required: false
+        type: string
+        default: ''
+      npm_version_path:
+        description: "Optional path filter for npm version computation. When set, only commits touching this path count toward the patch increment. Empty (default) counts all commits since the tag."
+        required: false
+        type: string
+        default: ''
+    outputs:
+      nuget_version:
+        description: "Computed nuget package version (empty when nuget_enabled=false)."
+        value: ${{ jobs.detect-and-version.outputs.nuget_version }}
+      npm_version:
+        description: "Computed npm package version (empty when npm_enabled=false)."
+        value: ${{ jobs.detect-and-version.outputs.npm_version }}
+      nuget_published:
+        description: "'true' if the nuget job ran (fanned out and not skipped)."
+        value: ${{ jobs.nuget.result == 'success' }}
+      npm_published:
+        description: "'true' if the npm job ran (fanned out and not skipped)."
+        value: ${{ jobs.npm.result == 'success' }}
+
+jobs:
+  detect-and-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      nuget_version: ${{ steps.nuget_pkgver.outputs.version }}
+      nuget_informational_version: ${{ steps.nuget_pkgver.outputs.informational_version }}
+      npm_version: ${{ steps.npm_pkgver.outputs.version }}
+      npm_informational_version: ${{ steps.npm_pkgver.outputs.informational_version }}
+      nuget_changed: ${{ steps.changes.outputs.nuget_changed }}
+      npm_changed: ${{ steps.changes.outputs.npm_changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      # Compute version per ecosystem so different `*_version_path` inputs can
+      # produce different versions. When both paths are empty (default), the
+      # two composite invocations resolve to the same string.
+      - name: Compute nuget version
+        id: nuget_pkgver
+        if: inputs.nuget_enabled
+        uses: hwinther/reusable-workflows/.github/actions/package-version@v1
+        with:
+          is_alpha: ${{ inputs.is_alpha }}
+          path: ${{ inputs.nuget_version_path }}
+
+      - name: Compute npm version
+        id: npm_pkgver
+        if: inputs.npm_enabled
+        uses: hwinther/reusable-workflows/.github/actions/package-version@v1
+        with:
+          is_alpha: ${{ inputs.is_alpha }}
+          path: ${{ inputs.npm_version_path }}
+
+      - name: Detect changes per ecosystem
+        id: changes
+        env:
+          NUGET_ENABLED: ${{ inputs.nuget_enabled }}
+          NPM_ENABLED: ${{ inputs.npm_enabled }}
+          NUGET_REGEX: ${{ inputs.nuget_changes_regex }}
+          NPM_REGEX: ${{ inputs.npm_changes_regex }}
+        run: |
+          set -euo pipefail
+
+          # Choose comparison base: PR base sha for pull_request events, otherwise origin/main.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="${{ github.event.pull_request.base.sha }}"
+          else
+            git fetch --no-tags --depth=1 origin main 2>/dev/null || true
+            BASE_REF="origin/main"
+          fi
+          echo "Comparison base: $BASE_REF"
+
+          decide() {
+            local name="$1"; local enabled="$2"; local regex="$3"
+            if [ "$enabled" != "true" ]; then
+              echo "${name}_changed=false" >> "$GITHUB_OUTPUT"
+              echo "${name}: disabled"
+              return
+            fi
+            if [ -z "$regex" ]; then
+              echo "${name}_changed=true" >> "$GITHUB_OUTPUT"
+              echo "${name}: enabled, no regex → always run"
+              return
+            fi
+            if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$regex"; then
+              echo "${name}_changed=true" >> "$GITHUB_OUTPUT"
+              echo "${name}: changes detected"
+            else
+              echo "${name}_changed=false" >> "$GITHUB_OUTPUT"
+              echo "${name}: no matching changes"
+            fi
+          }
+
+          decide nuget "$NUGET_ENABLED" "$NUGET_REGEX"
+          decide npm "$NPM_ENABLED" "$NPM_REGEX"
+
+  nuget:
+    needs: detect-and-version
+    if: inputs.nuget_enabled && needs.detect-and-version.outputs.nuget_changed == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: hwinther/reusable-workflows/.github/workflows/nuget-deploy.yml@v1
+    secrets: inherit
+    with:
+      solution_file: ${{ inputs.nuget_solution_file }}
+      dotnet_version: ${{ inputs.nuget_dotnet_version }}
+      package_version: ${{ needs.detect-and-version.outputs.nuget_version }}
+      informational_version: ${{ needs.detect-and-version.outputs.nuget_informational_version }}
+      is_alpha: ${{ inputs.is_alpha }}
+      tests_enabled: ${{ inputs.nuget_tests_enabled }}
+      package_source_name: ${{ inputs.nuget_package_source_name }}
+
+  npm:
+    needs: detect-and-version
+    if: inputs.npm_enabled && needs.detect-and-version.outputs.npm_changed == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: hwinther/reusable-workflows/.github/workflows/npm-deploy.yml@v1
+    secrets: inherit
+    with:
+      working-directory: ${{ inputs.npm_working_directory }}
+      node_version: ${{ inputs.npm_node_version }}
+      scope: ${{ inputs.npm_scope }}
+      package_version: ${{ needs.detect-and-version.outputs.npm_version }}
+      is_alpha: ${{ inputs.is_alpha }}
