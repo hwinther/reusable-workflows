@@ -17,11 +17,13 @@ on:
       create_release:
         description: "Opprett en GitHub Release for denne taggen"
         required: false
-        default: "true"
+        type: boolean
+        default: true
       floating_tags:
         description: "Opprett/oppdater floating tags (vX og vX.Y) på samme commit"
         required: false
-        default: "true"
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       tag_name:
