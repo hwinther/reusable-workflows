@@ -1,0 +1,304 @@
+name: "Prune GHCR images (reusable)"
+
+# Deletes:
+#   - untagged manifests that are NOT OCI 1.1 referrers (i.e. not attestations
+#     pointing at another image via .subject.digest)
+#   - tagged manifests whose only tags are GitVersion prerelease semvers
+#     (X.Y.Z-<label>.<n>) for branches that no longer exist on origin
+#   - cosign legacy sha256-XXXX.{sig,att,sbom} tags whose parent manifest is
+#     itself being deleted in the same run
+#
+# Anything unrecognised is KEPT (fail-safe).
+#
+# Auth note:
+#   For USER-scoped GHCR namespaces, the caller's GITHUB_TOKEN can DELETE
+#   versions only when each package has "Inherit access from source repository"
+#   enabled (GHCR's default when first pushed from a workflow). If deletion
+#   403s, the caller should pass GHCR_PRUNE_TOKEN — a PAT with the
+#   `delete:packages` scope (and `read:packages` if you want auto-discovery
+#   to enumerate private user packages).
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "When false, actually delete versions. When true, only print what would be deleted."
+        type: boolean
+        required: true
+      images:
+        description: "Comma-separated GHCR package names to prune (e.g. 'clutterstock/api,clutterstock/migrator'). Blank = auto-discover via the API."
+        type: string
+        required: false
+        default: ""
+      package_namespace_prefix:
+        description: "When auto-discovering, filter the result to package names starting with this prefix (e.g. 'clutterstock/'). Blank = no filter."
+        type: string
+        required: false
+        default: ""
+    secrets:
+      GHCR_PRUNE_TOKEN:
+        description: "Optional PAT with delete:packages (and read:packages for discovery). Falls back to GITHUB_TOKEN when not set."
+        required: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      OWNER: ${{ github.repository_owner }}
+      REPO: ${{ github.repository }}
+      DRY_RUN: ${{ inputs.dry_run }}
+      IMAGES_INPUT: ${{ inputs.images }}
+      NAMESPACE_PREFIX: ${{ inputs.package_namespace_prefix }}
+      GH_TOKEN: ${{ secrets.GHCR_PRUNE_TOKEN || secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Show config
+        run: |
+          echo "trigger=${{ github.event_name }}"
+          echo "owner=$OWNER"
+          echo "repo=$REPO"
+          echo "dry_run=$DRY_RUN"
+          echo "images_input=$IMAGES_INPUT"
+          echo "namespace_prefix=$NAMESPACE_PREFIX"
+          echo "token_source=${{ secrets.GHCR_PRUNE_TOKEN != '' && 'GHCR_PRUNE_TOKEN' || 'GITHUB_TOKEN' }}"
+
+      - name: Compute live branch labels
+        id: live
+        run: |
+          set -euo pipefail
+          OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
+          gh api "repos/$REPO/branches" --paginate --jq '.[].name' > /tmp/live-branches.txt
+          # Approximate GitVersion's branch -> prerelease-label sanitisation:
+          # lowercase, replace any character that isn't [a-z0-9-] with '-'.
+          # Anything that doesn't match this round-trip will fall through to
+          # the "unknown tag" branch and be KEPT, so over-conservative.
+          : > /tmp/live-labels.txt
+          while read -r b; do
+            echo "$b" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
+          done < /tmp/live-branches.txt | sort -u > /tmp/live-labels.txt
+          echo "Live branches:"; cat /tmp/live-branches.txt
+          echo "Live labels:";   cat /tmp/live-labels.txt
+          echo "owner_lc=$OWNER_LC" >> "$GITHUB_OUTPUT"
+
+      - name: Discover packages
+        run: |
+          set -euo pipefail
+          if [ -n "$IMAGES_INPUT" ]; then
+            echo "$IMAGES_INPUT" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' > /tmp/packages.txt
+          else
+            # Auto-discover. An empty NAMESPACE_PREFIX matches all packages.
+            gh api "/users/$OWNER/packages?package_type=container" --paginate \
+              --jq '.[].name' \
+              | grep "^${NAMESPACE_PREFIX}" > /tmp/packages.txt || true
+          fi
+          if [ ! -s /tmp/packages.txt ]; then
+            echo "No packages in scope. Nothing to do."
+          else
+            echo "Packages in scope:"; cat /tmp/packages.txt
+          fi
+
+      - name: Prune
+        env:
+          OWNER_LC: ${{ steps.live.outputs.owner_lc }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -s /tmp/packages.txt ]; then
+            echo "No packages — skipping."
+            exit 0
+          fi
+
+          # GHCR accepts the GitHub token base64-encoded as a Bearer for
+          # repos the token has read access to. Same trick used by the
+          # docker/login-action under the hood.
+          REGISTRY_TOKEN=$(printf '%s' "$GH_TOKEN" | base64)
+
+          fetch_manifest_classification() {
+            # Echoes one of:
+            #   attestation:<subject-digest>   (OCI 1.1 referrer — keep)
+            #   orphan                         (untagged, not a referrer — prune)
+            #   fetch-failed                   (network/auth blip — fail-safe keep)
+            local pkg="$1" digest="$2"
+            local resp
+            if ! resp=$(curl -sS --fail \
+                -H "Authorization: Bearer $REGISTRY_TOKEN" \
+                -H "Accept: application/vnd.oci.image.manifest.v1+json" \
+                -H "Accept: application/vnd.oci.image.index.v1+json" \
+                -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+                -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
+                "https://ghcr.io/v2/$OWNER_LC/$pkg/manifests/$digest" 2>/dev/null); then
+              echo "fetch-failed"
+              return 0
+            fi
+            local subj
+            subj=$(echo "$resp" | jq -r '.subject.digest // ""')
+            if [ -n "$subj" ]; then
+              echo "attestation:$subj"
+            else
+              echo "orphan"
+            fi
+          }
+
+          delete_version() {
+            local pkg="$1" id="$2" enc
+            enc=$(jq -rn --arg s "$pkg" '$s|@uri')
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "    DRY-RUN: would DELETE id=$id"
+              return 0
+            fi
+            if ! gh api -X DELETE "/users/$OWNER/packages/container/$enc/versions/$id" 2>/tmp/del.err; then
+              echo "    ERROR deleting id=$id:" >&2
+              cat /tmp/del.err >&2
+              return 1
+            fi
+            echo "    DELETED id=$id"
+          }
+
+          TOTAL_KEEP=0
+          TOTAL_PRUNE=0
+          ANY_FAILED=0
+          : > /tmp/summary.md
+
+          while read -r pkg; do
+            [ -z "$pkg" ] && continue
+            echo
+            echo "=== $pkg ==="
+            enc=$(jq -rn --arg s "$pkg" '$s|@uri')
+
+            if ! gh api "/users/$OWNER/packages/container/$enc/versions" --paginate \
+                --jq '.[] | {id, name, tags: (.metadata.container.tags // [])}' \
+                > /tmp/versions.json 2>/tmp/versions.err; then
+              if grep -q 'HTTP 404' /tmp/versions.err; then
+                echo "  Package not found — skipping."
+                continue
+              fi
+              echo "  Error listing versions:" >&2
+              cat /tmp/versions.err >&2
+              exit 1
+            fi
+            COUNT=$(wc -l < /tmp/versions.json | tr -d ' ')
+            echo "  $COUNT versions"
+
+            # Pass 1: classify each version.
+            # Layout: id<TAB>verdict<TAB>reason<TAB>digest<TAB>tags(comma)
+            : > /tmp/verdicts.tsv
+            while IFS= read -r v; do
+              id=$(echo "$v" | jq -r '.id')
+              digest=$(echo "$v" | jq -r '.name')
+              tags_csv=$(echo "$v" | jq -r '.tags | join(",")')
+
+              if [ -z "$tags_csv" ]; then
+                cls=$(fetch_manifest_classification "$pkg" "$digest")
+                case "$cls" in
+                  attestation:*)
+                    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP" "$cls" "$digest" "" >> /tmp/verdicts.tsv ;;
+                  fetch-failed)
+                    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP" "manifest-fetch-failed" "$digest" "" >> /tmp/verdicts.tsv ;;
+                  orphan)
+                    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "PRUNE" "untagged-orphan" "$digest" "" >> /tmp/verdicts.tsv ;;
+                esac
+                continue
+              fi
+
+              # Tagged. If every tag is sha256-XXXX.{sig,att,sbom}, defer.
+              all_sigatt=true
+              for t in $(echo "$v" | jq -r '.tags[]'); do
+                if ! echo "$t" | grep -Eq '^sha256-[a-f0-9]{64}\.(sig|att|sbom)$'; then
+                  all_sigatt=false; break
+                fi
+              done
+              if [ "$all_sigatt" = "true" ]; then
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "DEFER" "sig-att-tag" "$digest" "$tags_csv" >> /tmp/verdicts.tsv
+                continue
+              fi
+
+              # Vote per tag — KEEP wins ties (fail-safe).
+              keep=false
+              reasons=""
+              for t in $(echo "$v" | jq -r '.tags[]'); do
+                if [ "$t" = "latest" ]; then
+                  keep=true; reasons="$reasons latest"; continue
+                fi
+                if echo "$t" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+                  keep=true; reasons="$reasons release($t)"; continue
+                fi
+                if echo "$t" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-.+\.[0-9]+$'; then
+                  label=$(echo "$t" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-(.+)\.[0-9]+$/\1/')
+                  if grep -Fxq "$label" /tmp/live-labels.txt; then
+                    keep=true; reasons="$reasons live-branch($label)"; continue
+                  else
+                    reasons="$reasons dead-branch($label)"; continue
+                  fi
+                fi
+                # Unrecognised tag — fail-safe KEEP.
+                keep=true; reasons="$reasons unknown-tag($t)"
+              done
+              if [ "$keep" = "true" ]; then
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP" "${reasons# }" "$digest" "$tags_csv" >> /tmp/verdicts.tsv
+              else
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "PRUNE" "${reasons# }" "$digest" "$tags_csv" >> /tmp/verdicts.tsv
+              fi
+            done < /tmp/versions.json
+
+            # Pass 2: resolve DEFER (sig/att/sbom) rows by looking up the
+            # parent digest's verdict in the rows we just wrote.
+            awk -F'\t' '$2!="DEFER"' /tmp/verdicts.tsv > /tmp/verdicts.final.tsv
+            awk -F'\t' '$2=="DEFER"'  /tmp/verdicts.tsv > /tmp/verdicts.defer.tsv
+            while IFS=$'\t' read -r id _verdict _reason digest tags_csv; do
+              first=$(echo "$tags_csv" | tr ',' '\n' | head -1)
+              parent_short=$(echo "$first" | sed -E 's/^sha256-([a-f0-9]{64})\..*/\1/')
+              parent_digest="sha256:$parent_short"
+              parent_verdict=$(awk -F'\t' -v d="$parent_digest" '$4==d {print $2; exit}' /tmp/verdicts.final.tsv)
+              if [ "$parent_verdict" = "PRUNE" ]; then
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "PRUNE" "follows-parent-prune($parent_short)" "$digest" "$tags_csv" >> /tmp/verdicts.final.tsv
+              else
+                # KEEP if parent KEEP, missing, or anything else.
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP"  "follows-parent-keep($parent_short)"  "$digest" "$tags_csv" >> /tmp/verdicts.final.tsv
+              fi
+            done < /tmp/verdicts.defer.tsv
+            mv /tmp/verdicts.final.tsv /tmp/verdicts.tsv
+
+            keep_n=$(awk -F'\t' '$2=="KEEP"'  /tmp/verdicts.tsv | wc -l | tr -d ' ')
+            prune_n=$(awk -F'\t' '$2=="PRUNE"' /tmp/verdicts.tsv | wc -l | tr -d ' ')
+            echo "  KEEP=$keep_n PRUNE=$prune_n"
+            TOTAL_KEEP=$((TOTAL_KEEP + keep_n))
+            TOTAL_PRUNE=$((TOTAL_PRUNE + prune_n))
+
+            {
+              echo "### $pkg"
+              echo
+              echo "| | count |"
+              echo "|---|---:|"
+              echo "| Total | $COUNT |"
+              echo "| KEEP  | $keep_n |"
+              echo "| PRUNE | $prune_n |"
+              echo
+            } >> /tmp/summary.md
+
+            # Print every PRUNE row, then delete (or pretend to).
+            while IFS=$'\t' read -r id verdict reason digest tags_csv; do
+              [ "$verdict" = "PRUNE" ] || continue
+              echo "  PRUNE id=$id digest=$digest tags=[$tags_csv] reason=$reason"
+              if ! delete_version "$pkg" "$id"; then
+                ANY_FAILED=1
+              fi
+            done < /tmp/verdicts.tsv
+          done < /tmp/packages.txt
+
+          {
+            echo "## Prune summary"
+            echo
+            echo "- dry_run: \`$DRY_RUN\`"
+            echo "- trigger: \`${{ github.event_name }}\`"
+            echo "- TOTAL KEEP: $TOTAL_KEEP"
+            echo "- TOTAL PRUNE: $TOTAL_PRUNE"
+            echo
+            cat /tmp/summary.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ANY_FAILED" -ne 0 ]; then
+            echo "::error::One or more deletions failed."
+            exit 1
+          fi
