@@ -33,6 +33,7 @@ env:
 
 jobs:
   deploy:
+    name: "Deploy npm ${{ inputs.package_version }}"
     runs-on: ubuntu-latest
     permissions:
       contents: read

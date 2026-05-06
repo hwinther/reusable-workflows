@@ -62,6 +62,7 @@ on:
 
 jobs:
   pack-and-push:
+    name: "Pack and push NuGet ${{ inputs.package_version }}"
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
