@@ -1,0 +1,81 @@
+name: "Oppdater dotnet lockfiles i dependabot PR-er (gjenbrukbar)"
+
+# Intended trigger in the caller workflow:
+#   on:
+#     pull_request_target:
+#       types: [labeled, synchronize]
+#
+# The job's `if:` gates on user.login == 'dependabot[bot]' and the configured
+# label, so the reusable workflow can be invoked unconditionally — runs for
+# unrelated PRs are skipped at the job level.
+
+on:
+  workflow_call:
+    inputs:
+      solution_path:
+        required: true
+        type: string
+        description: "Mappen som inneholder .NET solution-filen"
+      solution_name:
+        required: true
+        type: string
+        description: "Navn på solution-filen (f.eks. Backend.slnx)"
+      dotnet_version:
+        required: false
+        type: string
+        description: ".NET versjon, f.eks. 10.0.x"
+        default: "10.0.x"
+      label:
+        required: false
+        type: string
+        description: "PR-label som styrer om lockfile-oppdatering kjøres"
+        default: "update-dotnet-lockfiles"
+    secrets:
+      WORKFLOW_TOKEN:
+        required: true
+        description: "PAT med contents:write som kan pushe tilbake til dependabot-PR-grenen"
+
+jobs:
+  update-lockfiles:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == inputs.label) ||
+        (github.event.action == 'synchronize' &&
+          contains(join(github.event.pull_request.labels.*.name, ','), inputs.label))
+      )
+    steps:
+      - name: Checkout ${{ github.head_ref }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.WORKFLOW_TOKEN }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+
+      - name: Setup git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Update lockfiles
+        working-directory: ${{ inputs.solution_path }}
+        env:
+          SOLUTION_NAME: ${{ inputs.solution_name }}
+        run: |
+          dotnet restore "$SOLUTION_NAME"
+          git status
+          if output=$(git status --porcelain) && [ -z "$output" ]; then
+            echo "Working directory clean"
+            exit 0
+          else
+            echo "Add and commit changes"
+            git commit -a -m "Update lockfiles"
+            git push
+          fi
