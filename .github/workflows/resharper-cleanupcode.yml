@@ -1,0 +1,215 @@
+name: "ReSharper CleanupCode (gjenbrukbar)"
+
+# Two-mode helper:
+#   mode=cleanupcode       → run `jb cleanupcode` against a .NET solution and
+#                            open a PR with the diff.
+#   mode=blame-ignore-revs → after CleanupCode has merged to the default branch
+#                            (squash/rebase), sync .git-blame-ignore-revs from
+#                            that history and open a PR.
+#
+# Caller owns the trigger (workflow_dispatch with a `mode` choice input is the
+# expected shape); the job-level `if:` here gates which job runs.
+
+on:
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+        description: "Hvilken jobb som skal kjøres: 'cleanupcode' eller 'blame-ignore-revs'."
+      solution_path:
+        required: true
+        type: string
+        description: "Mappen som inneholder .NET solution-filen."
+      solution_name:
+        required: true
+        type: string
+        description: "Navn på solution-filen (f.eks. Backend.slnx)."
+      dotnet_version:
+        required: false
+        type: string
+        description: ".NET versjon, f.eks. 10.0.x."
+        default: "10.0.x"
+      commit_subject:
+        required: false
+        type: string
+        description: "Commit-subject brukt for CleanupCode-PR-en og som søkestreng i blame-ignore-revs-syncen."
+        default: "chore: ReSharper CleanupCode"
+
+jobs:
+  cleanupcode:
+    if: ${{ inputs.mode == 'cleanupcode' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+          cache: true
+          cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+
+      - name: Restore
+        working-directory: ${{ inputs.solution_path }}
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_name }}
+        run: dotnet restore --locked-mode "$SOLUTION_FILE"
+
+      - name: Install JetBrains.ReSharper.GlobalTools
+        run: dotnet tool install JetBrains.ReSharper.GlobalTools --global
+
+      - name: Run CleanupCode
+        working-directory: ${{ inputs.solution_path }}
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_name }}
+        run: jb cleanupcode "$SOLUTION_FILE"
+
+      - name: Branch, commit, and open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SUBJECT: ${{ inputs.commit_subject }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes after CleanupCode; skipping PR."
+            exit 0
+          fi
+          branch="jb/cleanupcode-${{ github.run_id }}"
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "$COMMIT_SUBJECT"
+          git push origin "$branch"
+          base_branch="${{ github.ref_name }}"
+          if [ -z "$(git ls-remote origin "refs/heads/${base_branch}")" ]; then
+            base_branch="${{ github.event.repository.default_branch }}"
+            echo "::warning::Trigger branch ${{ github.ref_name }} is not on origin; opening PR against ${base_branch}."
+          fi
+          gh pr create \
+            --base "$base_branch" \
+            --head "$branch" \
+            --title "$COMMIT_SUBJECT" \
+            --body "Automated changes from JetBrains [CleanupCode](https://www.jetbrains.com/help/resharper/CleanupCode.html) (\`jb cleanupcode\` via [JetBrains.ReSharper.GlobalTools](https://www.nuget.org/packages/JetBrains.ReSharper.GlobalTools))."
+
+  sync-git-blame-ignore-revs:
+    if: ${{ inputs.mode == 'blame-ignore-revs' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync .git-blame-ignore-revs from CleanupCode commits on default branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SUBJECT: ${{ inputs.commit_subject }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          default_branch="${{ github.event.repository.default_branch }}"
+          git fetch origin --prune
+          git checkout "$default_branch"
+          git reset --hard "origin/${default_branch}"
+
+          subject="$COMMIT_SUBJECT"
+          mapfile -t cleanup_shas < <(git log "$default_branch" --reverse --fixed-strings --grep="$subject" --pretty=format:%H || true)
+          if [ "${#cleanup_shas[@]}" -eq 0 ] || [ -z "${cleanup_shas[0]:-}" ]; then
+            echo "No commits on ${default_branch} match the CleanupCode message (merge the CleanupCode PR first, or ensure the squash/rebase title still contains: ${subject})."
+            exit 0
+          fi
+
+          ignore_file=".git-blame-ignore-revs"
+          header="# Revisions listed here are ignored by git blame (see https://git-scm.com/docs/git-blame#Documentation/git-blame.txt-ignoreRevsFile)"
+          declare -A seen=()
+          declare -a existing_shas=()
+          comment_block=""
+
+          if [ -f "$ignore_file" ]; then
+            while IFS= read -r line || [ -n "$line" ]; do
+              if [[ "$line" =~ ^[0-9a-f]{40}$ ]]; then
+                break
+              fi
+              comment_block+="${line}"$'\n'
+            done < "$ignore_file"
+            while IFS= read -r line; do
+              [ -z "$line" ] && continue
+              if [ -z "${seen[$line]:-}" ]; then
+                existing_shas+=("$line")
+                seen["$line"]=1
+              fi
+            done < <(grep -E '^[0-9a-f]{40}$' "$ignore_file" || true)
+          fi
+
+          added=0
+          for sha in "${cleanup_shas[@]}"; do
+            if [ -z "$sha" ]; then
+              continue
+            fi
+            if [ -z "${seen[$sha]:-}" ]; then
+              existing_shas+=("$sha")
+              seen["$sha"]=1
+              added=$((added + 1))
+            fi
+          done
+
+          sort_shas_chronologically() {
+            for sha in "$@"; do
+              [ -n "$sha" ] || continue
+              ts="$(git log -1 --format=%ct "$sha" 2>/dev/null || echo "0")"
+              printf '%s %s\n' "$ts" "$sha"
+            done | sort -n | cut -d' ' -f2-
+          }
+
+          mapfile -t sorted_shas < <(sort_shas_chronologically "${existing_shas[@]}")
+
+          tmpfile="$(mktemp)"
+          if [ -n "$comment_block" ]; then
+            printf '%s' "$comment_block" > "$tmpfile"
+          else
+            printf '%s\n\n' "$header" > "$tmpfile"
+          fi
+          for sha in "${sorted_shas[@]}"; do
+            printf '%s\n' "$sha" >> "$tmpfile"
+          done
+
+          if [ -f "$ignore_file" ] && cmp -s "$ignore_file" "$tmpfile"; then
+            echo ".git-blame-ignore-revs already lists all CleanupCode commits."
+            rm -f "$tmpfile"
+            exit 0
+          fi
+
+          branch="jb/blame-ignore-revs-${{ github.run_id }}"
+          git checkout -b "$branch"
+
+          mv "$tmpfile" "$ignore_file"
+          git add "$ignore_file"
+
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+
+          msg="chore: sync .git-blame-ignore-revs with ReSharper CleanupCode commits"
+          if [ "$added" -gt 0 ]; then
+            git commit -m "$msg" -m "Added $added missing revision(s) matching: $subject"
+          else
+            git commit -m "$msg"
+          fi
+
+          git push origin "$branch"
+          gh pr create \
+            --base "$default_branch" \
+            --head "$branch" \
+            --title "chore: sync .git-blame-ignore-revs with ReSharper CleanupCode commits" \
+            --body "Adds missing full SHAs for commits on \`${default_branch}\` whose message contains the CleanupCode subject (workflow input \`commit_subject\`). Merge after required checks (e.g. pr-build, CodeQL) pass."

@@ -47,6 +47,7 @@ There is no build/test/lint suite for the repo itself — all "testing" happens 
   - `tag-and-release.yml` — manual or workflow_call; creates `vX.Y.Z` tag (+ floating `vX.Y` and `vX` when `floating_tags=true`) and a GitHub Release. Refuses to tag if HEAD already points at the latest semver tag.
   - `validate-version.yml` — runs the version-refs validator on PRs.
   - `dependabot-update-dotnet-lockfiles.yml` — for `pull_request_target` triggers; on dependabot PRs that carry a configurable label (default `update-dotnet-lockfiles`), runs `dotnet restore` to refresh `packages.lock.json` files and pushes the result back to the PR branch using a caller-supplied `WORKFLOW_TOKEN` PAT. Caller owns the `pull_request_target` trigger; the job-level `if:` does the dependabot/label gating.
+  - `resharper-cleanupcode.yml` — `workflow_dispatch`-style helper exposed for callers; runs `jb cleanupcode` against a .NET solution and opens a PR (`mode: cleanupcode`), or syncs `.git-blame-ignore-revs` from CleanupCode commits already on the default branch (`mode: blame-ignore-revs`). Caller owns the `workflow_dispatch` trigger and the `mode` choice input; the reusable's job-level `if:` gates which job runs. Uses the auto `GITHUB_TOKEN` for branch push and PR creation.
   - `poutine.yml`, `zizmor.yml` — Actions-targeted SAST that uploads SARIF to Code Scanning.
 
 ## Where shared scripts can live (and where they can't)
