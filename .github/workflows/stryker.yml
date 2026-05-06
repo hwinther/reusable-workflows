@@ -1,0 +1,148 @@
+name: "Stryker mutasjonstesting (gjenbrukbar)"
+
+# Two optional jobs:
+#   dotnet-stryker — `dotnet stryker` against a .NET solution.
+#   node-stryker   — `npm run stryker` against a Node project.
+#
+# Both default to producing an upload-artifact named after the input
+# (default: stryker-report-dotnet / stryker-report-node) so a downstream
+# job (e.g. a GitHub Pages publisher) can pick the reports up.
+
+on:
+  workflow_call:
+    inputs:
+      run_dotnet_stryker:
+        required: false
+        type: boolean
+        description: "Kjør dotnet-stryker-jobben."
+        default: false
+      run_node_stryker:
+        required: false
+        type: boolean
+        description: "Kjør node-stryker-jobben."
+        default: true
+
+      dotnet_version:
+        required: false
+        type: string
+        description: ".NET versjon, f.eks. 10.0.x."
+        default: "10.0.x"
+      solution_path:
+        required: false
+        type: string
+        description: "Mappen som inneholder .NET solution-filen. Påkrevd når run_dotnet_stryker = true."
+        default: ""
+      solution_name:
+        required: false
+        type: string
+        description: "Navn på solution-filen (f.eks. ClutterStock.slnx). Påkrevd når run_dotnet_stryker = true."
+        default: ""
+
+      node_version:
+        required: false
+        type: string
+        description: "Node versjon, f.eks. 24.x."
+        default: "24.x"
+      node_working_directory:
+        required: false
+        type: string
+        description: "Mappen som inneholder Node-prosjektet. Påkrevd når run_node_stryker = true."
+        default: ""
+
+      mutation_level:
+        required: false
+        type: string
+        description: "Stryker --mutation-level (Basic | Standard | Advanced | Complete)."
+        default: "Standard"
+      extra_arguments:
+        required: false
+        type: string
+        description: "Ekstra flagg som sendes uendret til `dotnet stryker`."
+        default: "--diag"
+
+      dotnet_artifact_name:
+        required: false
+        type: string
+        description: "Navn på upload-artifact for dotnet-rapporten."
+        default: "stryker-report-dotnet"
+      node_artifact_name:
+        required: false
+        type: string
+        description: "Navn på upload-artifact for node-rapporten."
+        default: "stryker-report-node"
+
+jobs:
+  dotnet-stryker:
+    if: ${{ inputs.run_dotnet_stryker }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+          cache: true
+          cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+
+      - name: Restore
+        working-directory: ${{ inputs.solution_path }}
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_name }}
+        run: dotnet restore --locked-mode "$SOLUTION_FILE"
+
+      - name: Test with Stryker
+        working-directory: ${{ inputs.solution_path }}
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_name }}
+          MUTATION_LEVEL: ${{ inputs.mutation_level }}
+          EXTRA_ARGS: ${{ inputs.extra_arguments }}
+        run: |
+          dotnet tool restore
+          # dotnet tool install -g dotnet-stryker # For now relying on the local tool
+          dotnet stryker --solution "$SOLUTION_FILE" --test-runner mtp --mutation-level "$MUTATION_LEVEL" -r html -r json -r cleartext $EXTRA_ARGS
+
+      - name: Upload dotnet stryker report artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.dotnet_artifact_name }}
+          path: stryker-report-dotnet
+
+  node-stryker:
+    if: ${{ inputs.run_node_stryker }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: npm
+          cache-dependency-path: "${{ inputs.node_working_directory }}/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.node_working_directory }}
+        run: npm ci
+
+      - name: Run Stryker
+        working-directory: ${{ inputs.node_working_directory }}
+        run: npm run stryker
+
+      - name: Upload frontend Stryker report artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ inputs.node_artifact_name }}
+          path: "${{ inputs.node_working_directory }}/reports/mutation"
