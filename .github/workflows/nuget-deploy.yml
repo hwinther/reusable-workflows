@@ -87,17 +87,29 @@ jobs:
       - name: Authenticate NuGet source for restore
         env:
           NUGET_TOKEN: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
+          INPUT_NAME: ${{ inputs.package_source_name }}
         run: |
           set -euo pipefail
-          # Ensure the source is registered (idempotent: update if exists, add otherwise).
-          if dotnet nuget list source | awk '{print $2}' | grep -Fxq "${{ inputs.package_source_name }}"; then
-            dotnet nuget update source "${{ inputs.package_source_name }}" \
+
+          # Match existing sources by URL — the consumer's nuget.config may
+          # already declare this URL under a different name (e.g. 'wshno').
+          # Adding under a different name would fail with "source already
+          # added" because of URL collision.
+          RESOLVED_NAME=$(dotnet nuget list source | awk -v url="$EFFECTIVE_SOURCE_URL" '
+            /^[[:space:]]+[0-9]+\.[[:space:]]/ { name = $2 }
+            index($0, url) > 0 && name != "" { print name; exit }
+          ')
+
+          if [ -n "$RESOLVED_NAME" ]; then
+            echo "Found existing source '$RESOLVED_NAME' for URL $EFFECTIVE_SOURCE_URL — updating credentials"
+            dotnet nuget update source "$RESOLVED_NAME" \
               --username "${{ github.actor }}" \
               --password "$NUGET_TOKEN" \
               --store-password-in-clear-text
           else
+            echo "No source found matching URL $EFFECTIVE_SOURCE_URL — adding as '$INPUT_NAME'"
             dotnet nuget add source "$EFFECTIVE_SOURCE_URL" \
-              --name "${{ inputs.package_source_name }}" \
+              --name "$INPUT_NAME" \
               --username "${{ github.actor }}" \
               --password "$NUGET_TOKEN" \
               --store-password-in-clear-text
@@ -124,8 +136,10 @@ jobs:
         env:
           NUGET_TOKEN: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
         run: |
+          # Push by URL so we don't depend on whichever name the source is
+          # registered under in nuget.config / runtime config.
           dotnet nuget push 'nupkg/*.nupkg' \
-            --source "${{ inputs.package_source_name }}" \
+            --source "$EFFECTIVE_SOURCE_URL" \
             --skip-duplicate \
             --api-key "$NUGET_TOKEN"
 
