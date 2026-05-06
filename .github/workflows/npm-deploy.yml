@@ -80,3 +80,27 @@ jobs:
           else
             npm publish
           fi
+
+      - name: Oppsummering
+        working-directory: ${{ inputs.working-directory }}
+        env:
+          PKG_VERSION: ${{ inputs.package_version }}
+          IS_ALPHA: ${{ inputs.is_alpha }}
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          PKG_NAME=$(node -p "require('./package.json').name")
+          if [ "$IS_ALPHA" = "true" ]; then
+            DIST_TAG="alpha"
+          else
+            DIST_TAG="latest"
+          fi
+          {
+            echo "### npm publish"
+            echo ""
+            echo "- Package: \`${PKG_NAME}\`"
+            echo "- Version: \`${PKG_VERSION}\`"
+            echo "- Tag: \`${DIST_TAG}\`"
+            echo "- Alpha: \`${IS_ALPHA}\`"
+            echo "- Scope: \`${SCOPE:-(none)}\`"
+            echo "- Registry: \`https://npm.pkg.github.com/\`"
+          } >> "$GITHUB_STEP_SUMMARY"
