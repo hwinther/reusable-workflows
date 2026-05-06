@@ -47,6 +47,30 @@ inputs:
     required: false
     description: "Output path for the container archive. Defaults to a runner-temp tarball."
     default: ""
+  github_token:
+    required: false
+    description: "GitHub token, used as the fallback for nuget_auth_token when private feeds are configured. Defaults to the runner-provided GITHUB_TOKEN."
+    default: ${{ github.token }}
+  nuget_auth_token:
+    required: false
+    description: "Auth token used for NUGET_AUTH_TOKEN (setup-dotnet) and as --password for the extra source. When empty, falls back to github_token."
+    default: ""
+  primary_nuget_source:
+    required: false
+    description: "Primary NuGet source URL passed to actions/setup-dotnet via source-url."
+    default: ""
+  extra_nuget_source:
+    required: false
+    description: "Additional private NuGet feed URL added via `dotnet nuget add source` before restore."
+    default: ""
+  extra_nuget_source_name:
+    required: false
+    description: "Name for the extra NuGet source."
+    default: ""
+  extra_nuget_source_username:
+    required: false
+    description: "Username for `dotnet nuget add source` on the extra source. GitHub Packages and Azure Artifacts both accept any non-empty value alongside a PAT."
+    default: "az"
 
 outputs:
   local_ref:
@@ -63,18 +87,43 @@ runs:
       uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
       with:
         dotnet-version: ${{ inputs.dotnet_version }}
+        source-url: ${{ inputs.primary_nuget_source }}
         cache: ${{ inputs.cache_enabled }}
         cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+      env:
+        NUGET_AUTH_TOKEN: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
+
+    - name: Add extra NuGet source
+      if: inputs.extra_nuget_source != ''
+      shell: bash
+      working-directory: ${{ inputs.solution_path }}
+      env:
+        EXTRA_SOURCE: ${{ inputs.extra_nuget_source }}
+        EXTRA_SOURCE_NAME: ${{ inputs.extra_nuget_source_name }}
+        EXTRA_SOURCE_USERNAME: ${{ inputs.extra_nuget_source_username }}
+        EXTRA_SOURCE_PASSWORD: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
+      run: |
+        set -euo pipefail
+        dotnet nuget remove source "$EXTRA_SOURCE_NAME" || true
+        dotnet nuget add source "$EXTRA_SOURCE" --name "$EXTRA_SOURCE_NAME" --username "$EXTRA_SOURCE_USERNAME" --password "$EXTRA_SOURCE_PASSWORD" --store-password-in-clear-text
 
     - name: Restore
       shell: bash
       working-directory: ${{ inputs.solution_path }}
       env:
         SOLUTION_FILE: ${{ inputs.solution_file }}
-      run: dotnet restore --locked-mode "$SOLUTION_FILE"
+      run: |
+        set -euo pipefail
+        dotnet restore --locked-mode "$SOLUTION_FILE"
+        # Restore any committed nuget.config; otherwise drop the runtime-added one so it doesn't leak into the publish context.
+        if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
+          git checkout HEAD -- nuget.config
+        else
+          rm -f nuget.config || true
+        fi
 
     - name: Publish container to archive
       id: publish

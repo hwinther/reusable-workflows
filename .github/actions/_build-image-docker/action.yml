@@ -36,6 +36,10 @@ inputs:
     required: false
     description: "Additional newline-separated KEY=VALUE build args appended after APP_VERSION and GIT_SHA. Used for things like passing a digest-pinned base image ref."
     default: ""
+  npm_auth_token:
+    required: false
+    description: "When non-empty, exposed to the build as a BuildKit secret with id `npm_auth_token`. Consume in the Dockerfile via `RUN --mount=type=secret,id=npm_auth_token,target=/run/secrets/npm_auth_token`. Build args are NOT used for this because they leak into image history."
+    default: ""
 
 outputs:
   local_ref:
@@ -62,6 +66,7 @@ runs:
           GIT_SHA=${{ inputs.git_sha }}
           ${{ inputs.build_args }}
         labels: ${{ inputs.labels }}
+        secrets: ${{ inputs.npm_auth_token != '' && format('npm_auth_token={0}', inputs.npm_auth_token) || '' }}
 
     - name: Resolve local ref (first tag)
       id: resolve-ref

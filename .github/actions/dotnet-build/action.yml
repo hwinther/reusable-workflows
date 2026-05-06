@@ -13,7 +13,11 @@ inputs:
     description: "Solution file to build, e.g. backend/ProjectName.slnx"
   github_token:
     required: true
-    description: "GitHub token for access to private NuGet packages"
+    description: "GitHub token for access to private NuGet packages. Used as the fallback for nuget_auth_token when that input is empty."
+  nuget_auth_token:
+    required: false
+    description: "Auth token used for NUGET_AUTH_TOKEN (setup-dotnet) and as --password for the extra source. When empty, falls back to github_token."
+    default: ""
   primary_nuget_source:
     required: false
     description: "Primary NuGet source for public packages, e.g. https://pkgs.dev.azure.com/org/_packaging/feed/nuget/v3/index.json"
@@ -21,9 +25,15 @@ inputs:
   extra_nuget_source:
     required: false
     description: "Extra NuGet source for private packages, e.g. https://pkgs.dev.azure.com/org/collection/_packaging/feed/nuget/v3/index.json"
+    default: ""
   extra_nuget_source_name:
     required: false
     description: "Name of the extra NuGet source, e.g. 'feed'"
+    default: ""
+  extra_nuget_source_username:
+    required: false
+    description: "Username for `dotnet nuget add source` on the extra source. GitHub Packages and Azure Artifacts both accept any non-empty value alongside a PAT; default 'az' matches the existing behaviour."
+    default: "az"
   cache:
     required: false
     description: "Enable NuGet package caching"
@@ -60,15 +70,21 @@ runs:
       cache: ${{ inputs.cache }}
       cache-dependency-path: "${{ inputs.working_directory }}/**/packages.lock.json"
     env:
-      NUGET_AUTH_TOKEN: ${{ inputs.github_token }}
+      NUGET_AUTH_TOKEN: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
 
   - name: Add extra NuGet source
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     if: inputs.extra_nuget_source != ''
+    env:
+      EXTRA_SOURCE: ${{ inputs.extra_nuget_source }}
+      EXTRA_SOURCE_NAME: ${{ inputs.extra_nuget_source_name }}
+      EXTRA_SOURCE_USERNAME: ${{ inputs.extra_nuget_source_username }}
+      EXTRA_SOURCE_PASSWORD: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
     run: |
-      dotnet nuget remove source ${{ inputs.extra_nuget_source_name }} || true
-      dotnet nuget add source ${{ inputs.extra_nuget_source }} --name ${{ inputs.extra_nuget_source_name }} --username az --password ${{ inputs.github_token }} --store-password-in-clear-text
+      set -euo pipefail
+      dotnet nuget remove source "$EXTRA_SOURCE_NAME" || true
+      dotnet nuget add source "$EXTRA_SOURCE" --name "$EXTRA_SOURCE_NAME" --username "$EXTRA_SOURCE_USERNAME" --password "$EXTRA_SOURCE_PASSWORD" --store-password-in-clear-text
 
   - name: Run dotnet restore
     id: dotnet-restore

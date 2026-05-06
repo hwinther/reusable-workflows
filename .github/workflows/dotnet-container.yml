@@ -67,6 +67,30 @@ on:
         required: false
         type: boolean
         default: true
+      primary_nuget_source:
+        description: "Primary NuGet source URL passed to actions/setup-dotnet via source-url."
+        required: false
+        type: string
+        default: ""
+      extra_nuget_source:
+        description: "Additional private NuGet feed URL added via `dotnet nuget add source` before restore."
+        required: false
+        type: string
+        default: ""
+      extra_nuget_source_name:
+        description: "Name for the extra NuGet source."
+        required: false
+        type: string
+        default: ""
+      extra_nuget_source_username:
+        description: "Username for `dotnet nuget add source` on the extra source."
+        required: false
+        type: string
+        default: "az"
+    secrets:
+      nuget_auth_token:
+        description: "Auth token for NuGet feeds (NUGET_AUTH_TOKEN for setup-dotnet primary source and --password for the extra source). When unset, falls back to GITHUB_TOKEN."
+        required: false
     outputs:
       container_image_tags:
         description: "Full image refs pushed (registry/name:tag, comma-separated)"
@@ -137,6 +161,12 @@ jobs:
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
           version: ${{ needs.gitversion.outputs.version }}
           git_sha: ${{ github.sha }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nuget_auth_token: ${{ secrets.nuget_auth_token }}
+          primary_nuget_source: ${{ inputs.primary_nuget_source }}
+          extra_nuget_source: ${{ inputs.extra_nuget_source }}
+          extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
+          extra_nuget_source_username: ${{ inputs.extra_nuget_source_username }}
 
       - name: Generate SBOM and scan with Grype
         id: scan

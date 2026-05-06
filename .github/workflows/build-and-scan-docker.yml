@@ -74,6 +74,10 @@ on:
         required: false
         type: number
         default: 1
+    secrets:
+      npm_auth_token:
+        description: "When set, exposed to the Docker build as a BuildKit secret with id `npm_auth_token`. Consume in the Dockerfile via `RUN --mount=type=secret,id=npm_auth_token`. When unset, no secret is mounted."
+        required: false
     outputs:
       image_artifact:
         description: "Workflow artifact name holding the gzipped tarball of the built image."
@@ -199,6 +203,7 @@ jobs:
           git_sha: ${{ github.sha }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
           build_args: ${{ inputs.build_args }}
+          npm_auth_token: ${{ secrets.npm_auth_token }}
 
       - name: Generate SBOM and scan with Grype
         id: scan

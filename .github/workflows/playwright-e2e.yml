@@ -93,6 +93,16 @@ on:
         required: false
         type: string
         default: ""
+      npm_registry_url:
+        description: "npm registry URL passed to actions/setup-node for the runner-side npm ci. Defaults to GitHub Packages."
+        required: false
+        type: string
+        default: "https://npm.pkg.github.com"
+      npm_scope:
+        description: "Package scope (e.g. '@org') passed to actions/setup-node for the runner-side npm ci."
+        required: false
+        type: string
+        default: ""
     secrets:
       e2e_username:
         description: "Username for the auth setup project (exported as E2E_USERNAME for the Playwright run)."
@@ -102,6 +112,9 @@ on:
         required: false
       e2e_otp_secret:
         description: "TOTP shared secret for the auth setup project (exported as E2E_OTP_SECRET for the Playwright run)."
+        required: false
+      npm_auth_token:
+        description: "Auth token written into ~/.npmrc as NODE_AUTH_TOKEN for the runner-side npm ci. When unset, falls back to GITHUB_TOKEN."
         required: false
 
 jobs:
@@ -132,12 +145,15 @@ jobs:
           node-version: ${{ inputs.node_version }}
           cache: npm
           cache-dependency-path: ${{ inputs.playwright_working_directory }}/package-lock.json
+          registry-url: ${{ inputs.npm_registry_url }}
+          scope: ${{ inputs.npm_scope }}
 
       - name: Install npm dependencies
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
           INSTALL_CMD: ${{ inputs.playwright_install_command }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           eval "$INSTALL_CMD"
@@ -147,6 +163,7 @@ jobs:
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
           BROWSERS: ${{ inputs.playwright_browsers }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: npx playwright install --with-deps $BROWSERS
 
       - name: Download image artifacts and load into local Docker daemon
