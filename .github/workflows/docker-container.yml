@@ -79,6 +79,10 @@ on:
         required: false
         type: boolean
         default: true
+    secrets:
+      npm_auth_token:
+        description: "When set, exposed to the Docker build (both single-arch scan build and multi-arch manifest push) as a BuildKit secret with id `npm_auth_token`. Consume in the Dockerfile via `RUN --mount=type=secret,id=npm_auth_token`."
+        required: false
     outputs:
       container_image_tags:
         description: "Full image refs pushed (registry/name:tag, comma-separated). Includes any additional_tags."
@@ -193,6 +197,7 @@ jobs:
           labels: ${{ steps.docker-metadata.outputs.labels }}
           platforms: linux/amd64
           build_args: ${{ inputs.build_args }}
+          npm_auth_token: ${{ secrets.npm_auth_token }}
 
       - name: Generate SBOM and scan with Grype (amd64)
         id: scan-amd64
@@ -221,6 +226,7 @@ jobs:
           labels: ${{ steps.docker-metadata.outputs.labels }}
           platforms: linux/arm64
           build_args: ${{ inputs.build_args }}
+          npm_auth_token: ${{ secrets.npm_auth_token }}
 
       - name: Generate SBOM and scan with Grype (arm64)
         id: scan-arm64
@@ -257,6 +263,7 @@ jobs:
           build_args: ${{ inputs.build_args }}
           labels: ${{ steps.docker-metadata.outputs.labels }}
           git_sha: ${{ github.sha }}
+          npm_auth_token: ${{ secrets.npm_auth_token }}
 
       - name: Job summary
         env:

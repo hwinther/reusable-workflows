@@ -34,6 +34,11 @@ on:
         type: string
         description: "Package scope, e.g. '@org'"
         default: ''
+      node_registry_url:
+        required: false
+        type: string
+        description: "npm registry URL for actions/setup-node. Defaults to GitHub Packages."
+        default: "https://npm.pkg.github.com"
       node_extra_command:
         required: false
         type: string
@@ -68,6 +73,11 @@ on:
         type: string
         description: "Regex for files to check for changes"
         default: ""
+      dotnet_primary_nuget_source:
+        required: false
+        type: string
+        description: "Primary NuGet source URL passed to actions/setup-dotnet via source-url."
+        default: ""
       dotnet_extra_nuget_source:
         required: false
         type: string
@@ -78,6 +88,11 @@ on:
         type: string
         description: "Name of the extra NuGet source, e.g. 'feed'"
         default: ""
+      dotnet_extra_nuget_source_username:
+        required: false
+        type: string
+        description: "Username for `dotnet nuget add source` on the extra source. GitHub Packages and Azure Artifacts both accept any non-empty value alongside a PAT."
+        default: "az"
       dotnet_extra_command:
         required: false
         type: string
@@ -98,6 +113,13 @@ on:
         type: boolean
         description: "Create TODO PR comment"
         default: true
+    secrets:
+      npm_auth_token:
+        description: "Auth token for the npm registry (passed to node-build as NODE_AUTH_TOKEN). When unset, falls back to GITHUB_TOKEN — the GitHub Packages flow."
+        required: false
+      nuget_auth_token:
+        description: "Auth token for NuGet feeds (used as NUGET_AUTH_TOKEN and as the password for the extra-source `dotnet nuget add source` call). When unset, falls back to GITHUB_TOKEN."
+        required: false
 
 # Cancel superseded PR runs. Note: this only scopes the inner reusable-workflow runs;
 # consumers should also set `concurrency:` on their caller workflow for cancellation
@@ -214,6 +236,8 @@ jobs:
           node_version: ${{ inputs.node_version }}
           working_directory: ${{ inputs.node_working_directory }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          npm_registry_url: ${{ inputs.node_registry_url }}
+          npm_auth_token: ${{ secrets.npm_auth_token }}
           scope: ${{ inputs.node_scope }}
           extra_command: ${{ inputs.node_extra_command }}
           test: ${{ inputs.node_test_enabled }}
@@ -251,8 +275,11 @@ jobs:
           working_directory: ${{ inputs.dotnet_working_directory }}
           solution_file: ${{ inputs.dotnet_solution_file }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          nuget_auth_token: ${{ secrets.nuget_auth_token }}
+          primary_nuget_source: ${{ inputs.dotnet_primary_nuget_source }}
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
+          extra_nuget_source_username: ${{ inputs.dotnet_extra_nuget_source_username }}
           extra_command: ${{ inputs.dotnet_extra_command }}
           test: ${{ inputs.dotnet_test_enabled }}
 
@@ -365,8 +392,11 @@ jobs:
           working_directory: ${{ inputs.dotnet_working_directory }}
           solution_file: ${{ inputs.dotnet_solution_file }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          nuget_auth_token: ${{ secrets.nuget_auth_token }}
+          primary_nuget_source: ${{ inputs.dotnet_primary_nuget_source }}
           extra_nuget_source: ${{ inputs.dotnet_extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.dotnet_extra_nuget_source_name }}
+          extra_nuget_source_username: ${{ inputs.dotnet_extra_nuget_source_username }}
           test: "false"
 
       - name: Inspect code

@@ -10,9 +10,17 @@ inputs:
     description: "Working directory for the build, the package.json and package-lock.json files are expected to be in this directory"
   github_token:
     required: true
-    description: "GitHub token for access to private npm packages"
+    description: "GitHub token for access to private npm packages. Used as the fallback for npm_auth_token when that input is empty."
+  npm_registry_url:
+    required: false
+    description: "npm registry URL passed to actions/setup-node. Defaults to GitHub Packages."
+    default: "https://npm.pkg.github.com"
+  npm_auth_token:
+    required: false
+    description: "Auth token written into ~/.npmrc as NODE_AUTH_TOKEN for npm ci. When empty, falls back to github_token (the standard GitHub Packages flow)."
+    default: ""
   scope:
-    required: false 
+    required: false
     description: "Package scope, e.g. '@org'"
     default: ''
   extra_command:
@@ -48,14 +56,14 @@ runs:
       cache: "npm"
       cache-dependency-path: "${{ inputs.working_directory }}/package-lock.json"
       scope: ${{ inputs.scope }}
-      registry-url: 'https://npm.pkg.github.com'
+      registry-url: ${{ inputs.npm_registry_url }}
 
   - name: Install dependencies
     id: dependency-install
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
-      NODE_AUTH_TOKEN: ${{ inputs.github_token }}
+      NODE_AUTH_TOKEN: ${{ inputs.npm_auth_token != '' && inputs.npm_auth_token || inputs.github_token }}
     run: |
       echo "::group::Install dependencies"
       set +e

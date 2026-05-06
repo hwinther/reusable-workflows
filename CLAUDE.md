@@ -70,6 +70,40 @@ If two actions need to share the same script, the way to do it is a third intern
 - Cosign is intentionally pinned to `v2.4.3` in the container workflows. Do not bump to v3 — the comment in `docker-container.yml` explains that Kyverno 1.17 `verifyImages` resolves attestations via the legacy `sha256-….att` manifest path that v3 publishes only as OCI referrers.
 - `pr-build.yml` declares its own `concurrency:` block with `cancel-in-progress` for PR events, but that scopes only the inner reusable-workflow run. Consumers should also add `concurrency:` on their **caller** workflow if they want superseded runs cancelled at their level too — group keys like `${{ github.workflow }}-${{ github.ref }}` are typical.
 
+## Private package registries (npm + NuGet)
+
+All workflows and actions that install npm or NuGet packages accept optional inputs/secrets for private feeds. **Defaults preserve GitHub Packages behaviour**: leave the `*_auth_token` secret unset and the action falls back to `secrets.GITHUB_TOKEN`. Override only when targeting a non-GitHub feed.
+
+### Runner-side npm
+
+`node-build` (composite) accepts `npm_registry_url` (default `https://npm.pkg.github.com`), `npm_auth_token` (default empty → falls back to `github_token`), and the existing `scope`. `playwright-e2e.yml` and `pr-build.yml` surface these as `npm_registry_url` / `node_registry_url` inputs and an `npm_auth_token` secret. The token resolves via `${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}` so unset means "use GITHUB_TOKEN."
+
+### Runner-side NuGet
+
+`dotnet-build` (composite) accepts `primary_nuget_source`, `extra_nuget_source`, `extra_nuget_source_name`, `extra_nuget_source_username` (default `az`), and `nuget_auth_token` (falls back to `github_token`). `pr-build.yml` exposes all five as `dotnet_*` inputs and an `nuget_auth_token` secret. The "Add extra NuGet source" step uses `env:` redirection (zizmor-clean) and runs `dotnet nuget add source --username $USER --password $TOKEN --store-password-in-clear-text`; `nuget.config` is restored or removed after restore so credentials don't leak.
+
+### Container-side NuGet (`_build-image-dotnet`)
+
+Same input names as `dotnet-build`. `build-and-scan-dotnet.yml` and `dotnet-container.yml` surface them as workflow inputs (`primary_nuget_source`, `extra_nuget_source*`) and a `nuget_auth_token` secret. The action wires `setup-dotnet` `source-url` + `NUGET_AUTH_TOKEN`, runs the same `dotnet nuget add source` step before `dotnet restore`, and cleans `nuget.config` after.
+
+### Container-side npm (`_build-image-docker` + `_push-image-with-signatures`)
+
+Uses BuildKit secret mounts, **not** build-args (build-args leak via `docker history`/manifest layers; secrets don't). When `npm_auth_token` is set on the action, it's exposed via `secrets: npm_auth_token=<value>` to `docker/build-push-action`. Consumer Dockerfile contract:
+
+```dockerfile
+ARG NPM_REGISTRY_HOST=npm.pkg.github.com
+RUN --mount=type=secret,id=npm_auth_token,target=/run/secrets/npm_auth_token,required=true \
+    printf "//%s/:_authToken=%s\n" "$NPM_REGISTRY_HOST" "$(cat /run/secrets/npm_auth_token)" > /tmp/.npmrc \
+    && cd /app && npm ci --userconfig /tmp/.npmrc \
+    && rm /tmp/.npmrc
+```
+
+`build-and-scan-docker.yml` and `docker-container.yml` declare `npm_auth_token` as a workflow secret. On the multi-arch path, `docker-container.yml` passes the secret to both `_build-image-docker` (single-arch scan build) and `_push-image-with-signatures` (manifest-list build) so the same secret flows to every build invocation.
+
+### Token convention
+
+`*_auth_token` secrets are always optional. Unset → fall back to `GITHUB_TOKEN` (the canonical GitHub Packages flow). Set explicitly → use that token verbatim. This means existing GHCR/GitHub-Packages consumers don't need to change anything; only consumers targeting Azure Artifacts, MyGet, Verdaccio, etc. need to declare the secret on their caller workflow.
+
 ## GitVersion behavior
 
 `GitVersion.yml` uses the `GitHubFlow/v1` workflow (mainline = `main`). The `gitversion` composite action's branching logic:

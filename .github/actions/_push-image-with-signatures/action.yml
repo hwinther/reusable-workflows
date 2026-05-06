@@ -88,6 +88,10 @@ inputs:
     required: false
     description: "Value for GIT_SHA build arg on the multi-arch path."
     default: ${{ github.sha }}
+  npm_auth_token:
+    required: false
+    description: "When non-empty (and on the multi-arch path), exposed to the build as a BuildKit secret with id `npm_auth_token`. Mirrors the input on `_build-image-docker` so the manifest-list rebuild can authenticate the same way."
+    default: ""
 
 outputs:
   image_digest:
@@ -131,6 +135,7 @@ runs:
           GIT_SHA=${{ inputs.git_sha }}
           ${{ inputs.build_args }}
         labels: ${{ inputs.labels }}
+        secrets: ${{ inputs.npm_auth_token != '' && format('npm_auth_token={0}', inputs.npm_auth_token) || '' }}
 
     - name: Resolve pushed image digest
       id: resolve-digest
