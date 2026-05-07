@@ -158,15 +158,26 @@ jobs:
           NPM_REGEX: ${{ inputs.npm_changes_regex }}
           NUGET_PATH: ${{ inputs.nuget_version_path }}
           NPM_PATH: ${{ inputs.npm_version_path }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
-          # Choose comparison base: PR base sha for pull_request events, otherwise origin/main.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE_REF="${{ github.event.pull_request.base.sha }}"
+          # Comparison base:
+          #   pull_request → PR base sha (what the PR introduces).
+          #   anything else (push to main, tag push, manual) → previous v[X.Y.Z] tag,
+          #     i.e. "anything changed since the last published version." Aligns with
+          #     package-version, which patches off that same tag — so a push that
+          #     bumps the version implies at least one matching change here, and a
+          #     push with no matching changes implies no version bump (publish skipped).
+          #   Fallback when no semver tag exists yet (very first publish): empty tree,
+          #     so the diff lists every tracked file and any non-empty pattern matches.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            BASE_REF="$PR_BASE_SHA"
+          elif TAG=$(git describe --tags --abbrev=0 --match='v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null); then
+            BASE_REF="$TAG"
           else
-            git fetch --no-tags --depth=1 origin main 2>/dev/null || true
-            BASE_REF="origin/main"
+            BASE_REF="$(git hash-object -t tree /dev/null)" # empty tree; diff vs HEAD = full tree
           fi
           echo "Comparison base: $BASE_REF"
 
