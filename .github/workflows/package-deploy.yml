@@ -50,6 +50,11 @@ on:
         required: false
         type: string
         default: ''
+      nuget_package_source_url:
+        description: "NuGet source URL passed through to nuget-deploy. Defaults to the calling repo owner's GitHub Packages feed (resolved inside nuget-deploy when empty)."
+        required: false
+        type: string
+        default: ''
 
       # npm ----------------------------------------------------------------
       npm_enabled:
@@ -68,6 +73,11 @@ on:
         required: false
         type: string
         default: ''
+      npm_registry_url:
+        description: "npm registry URL passed through to npm-deploy. Defaults to GitHub Packages."
+        required: false
+        type: string
+        default: 'https://npm.pkg.github.com'
       npm_changes_regex:
         description: "Regex matched against changed file paths. Empty means 'always run when npm_enabled'."
         required: false
@@ -78,6 +88,13 @@ on:
         required: false
         type: string
         default: ''
+    secrets:
+      packages_pat:
+        description: "PAT with read:packages scope used by nuget-deploy for restoring private dependencies. Falls back to GITHUB_TOKEN inside nuget-deploy when unset."
+        required: false
+      npm_auth_token:
+        description: "Auth token passed through to npm-deploy as NODE_AUTH_TOKEN. Falls back to GITHUB_TOKEN inside npm-deploy when unset."
+        required: false
     outputs:
       nuget_version:
         description: "Computed nuget package version (empty when nuget_enabled=false)."
@@ -182,7 +199,8 @@ jobs:
       contents: read
       packages: write
     uses: hwinther/reusable-workflows/.github/workflows/nuget-deploy.yml@v1
-    secrets: inherit
+    secrets:
+      packages_pat: ${{ secrets.packages_pat }}
     with:
       solution_file: ${{ inputs.nuget_solution_file }}
       dotnet_version: ${{ inputs.nuget_dotnet_version }}
@@ -191,6 +209,7 @@ jobs:
       is_alpha: ${{ inputs.is_alpha }}
       tests_enabled: ${{ inputs.nuget_tests_enabled }}
       package_source_name: ${{ inputs.nuget_package_source_name }}
+      package_source_url: ${{ inputs.nuget_package_source_url }}
 
   npm:
     needs: detect-and-version
@@ -199,10 +218,12 @@ jobs:
       contents: read
       packages: write
     uses: hwinther/reusable-workflows/.github/workflows/npm-deploy.yml@v1
-    secrets: inherit
+    secrets:
+      npm_auth_token: ${{ secrets.npm_auth_token }}
     with:
       working-directory: ${{ inputs.npm_working_directory }}
       node_version: ${{ inputs.npm_node_version }}
       scope: ${{ inputs.npm_scope }}
+      npm_registry_url: ${{ inputs.npm_registry_url }}
       package_version: ${{ needs.detect-and-version.outputs.npm_version }}
       is_alpha: ${{ inputs.is_alpha }}

@@ -27,6 +27,15 @@ on:
         type: string
         description: "Scope for pakken, f.eks. '@organisasjon'"
         default: ''
+      npm_registry_url:
+        required: false
+        type: string
+        description: "npm registry-URL som sendes til actions/setup-node og publish. Standard er GitHub Packages."
+        default: "https://npm.pkg.github.com"
+    secrets:
+      npm_auth_token:
+        required: false
+        description: "Auth token brukt som NODE_AUTH_TOKEN ved npm ci og npm publish. Ved tom verdi brukes secrets.GITHUB_TOKEN (standard GitHub Packages-flyt)."
 
 env:
   NODE_VERSION: ${{ inputs.node_version }}
@@ -48,22 +57,22 @@ jobs:
         name: Sett opp Node
         with:
           node-version: ${{ env.NODE_VERSION }}
-          registry-url: "https://npm.pkg.github.com/"
+          registry-url: ${{ inputs.npm_registry_url }}
           scope: ${{ inputs.scope }}
           cache: "npm"
           cache-dependency-path: "${{ inputs.working-directory }}/package-lock.json"
 
-      - name: Legger til GitHub token i npmrc
-        working-directory: ${{ inputs.working-directory }}
-        run: echo -e "\n//npm.pkg.github.com/:_authToken=${{ secrets.GITHUB_TOKEN }}" >> ./.npmrc
-
       - name: Oppdater pakkeversjonen
         working-directory: ${{ inputs.working-directory }}
-        run: npm version ${{ inputs.package_version }} --no-git-tag-version
+        env:
+          PKG_VERSION: ${{ inputs.package_version }}
+        run: npm version "$PKG_VERSION" --no-git-tag-version
 
       - name: Installer avhengigheter
         working-directory: ${{ inputs.working-directory }}
         id: dependency-install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: npm ci
 
       - name: Bygg pakke
@@ -73,9 +82,10 @@ jobs:
       - name: Publiser pakke
         working-directory: ${{ inputs.working-directory }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
+          IS_ALPHA: ${{ inputs.is_alpha }}
         run: |
-          if [ "${{ inputs.is_alpha }}" = "true" ]; then
+          if [ "$IS_ALPHA" = "true" ]; then
             npm publish --tag alpha
           else
             npm publish
@@ -87,6 +97,7 @@ jobs:
           PKG_VERSION: ${{ inputs.package_version }}
           IS_ALPHA: ${{ inputs.is_alpha }}
           SCOPE: ${{ inputs.scope }}
+          REGISTRY_URL: ${{ inputs.npm_registry_url }}
         run: |
           PKG_NAME=$(node -p "require('./package.json').name")
           if [ "$IS_ALPHA" = "true" ]; then
@@ -102,5 +113,5 @@ jobs:
             echo "- Tag: \`${DIST_TAG}\`"
             echo "- Alpha: \`${IS_ALPHA}\`"
             echo "- Scope: \`${SCOPE:-(none)}\`"
-            echo "- Registry: \`https://npm.pkg.github.com/\`"
+            echo "- Registry: \`${REGISTRY_URL}\`"
           } >> "$GITHUB_STEP_SUMMARY"

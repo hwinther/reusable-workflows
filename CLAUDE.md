@@ -57,7 +57,7 @@ The runner-execution context for a reusable workflow called from a consumer repo
 
 When a composite action is referenced via `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`, the runner resolves it and downloads the action's **whole directory** — including any sibling files. Inside that action's bash `run:` blocks, `$GITHUB_ACTION_PATH` points at that directory, so an action can ship its own `scripts/foo.sh` and call `bash "$GITHUB_ACTION_PATH/scripts/foo.sh"`.
 
-If two actions need to share the same script, the way to do it is a third internal composite action (e.g. `_format-output/`) that both call via `uses:`. That's how the runner is willing to deliver one set of files to multiple action consumers without an extra checkout.
+If two actions need to share the same script, the way to do it is a third internal composite action (e.g. `_format-output/`) that both call via `uses:`. That's how the runner is willing to deliver one set of files to multiple action consumers without an extra checkout. The same trick is used by `_dotnet-add-nuget-source/` — a one-step composite that runs the `dotnet nuget remove → dotnet nuget add source` pair via `env:`-redirected shell, used by `dotnet-build`, `_build-image-dotnet`, `stryker.yml`, `resharper-cleanupcode.yml`, and `dependabot-update-dotnet-lockfiles.yml` so all five callers stay in sync.
 
 ## Conventions to follow when editing workflows/actions
 
@@ -99,6 +99,16 @@ RUN --mount=type=secret,id=npm_auth_token,target=/run/secrets/npm_auth_token,req
 ```
 
 `build-and-scan-docker.yml` and `docker-container.yml` declare `npm_auth_token` as a workflow secret. On the multi-arch path, `docker-container.yml` passes the secret to both `_build-image-docker` (single-arch scan build) and `_push-image-with-signatures` (manifest-list build) so the same secret flows to every build invocation.
+
+### Publish workflows
+
+`npm-deploy.yml` accepts `npm_registry_url` (default GitHub Packages) and an optional `npm_auth_token` secret used as `NODE_AUTH_TOKEN` for both `npm ci` and `npm publish`. `nuget-deploy.yml` was already feed-aware: `package_source_url` (defaults to the calling owner's GH Packages feed) plus the optional `packages_pat` secret. `package-deploy.yml` (the layer-2 fanout) surfaces both as `npm_registry_url` / `nuget_package_source_url` inputs and `npm_auth_token` / `packages_pat` secrets, and forwards them explicitly to its child workflows (no `secrets: inherit`).
+
+### Quality / maintenance workflows
+
+`stryker.yml`, `resharper-cleanupcode.yml`, and `dependabot-update-dotnet-lockfiles.yml` all run `dotnet restore` against the consumer's solution and accept the same four NuGet inputs (`primary_nuget_source`, `extra_nuget_source*`) plus the optional `nuget_auth_token` secret. Each uses `_dotnet-add-nuget-source` as its "add extra source" step. `stryker.yml` additionally accepts `npm_registry_url` / `npm_scope` inputs and an `npm_auth_token` secret for its `node-stryker` job.
+
+Caveat for `resharper-cleanupcode.yml`: `dotnet tool install JetBrains.ReSharper.GlobalTools --global` resolves from nuget.org. If `primary_nuget_source` redirects to a feed that doesn't upstream nuget.org, tool install breaks — point primary at a feed that proxies nuget.org or leave it empty.
 
 ### Token convention
 
