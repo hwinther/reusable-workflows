@@ -60,7 +60,7 @@ jobs:
           registry-url: ${{ inputs.npm_registry_url }}
           scope: ${{ inputs.scope }}
           cache: "npm"
-          cache-dependency-path: "${{ inputs.working-directory }}/package-lock.json"
+          cache-dependency-path: ${{ inputs.working-directory != '' && format('{0}/package-lock.json', inputs.working-directory) || 'package-lock.json' }}
 
       - name: Oppdater pakkeversjonen
         working-directory: ${{ inputs.working-directory }}

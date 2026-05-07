@@ -77,7 +77,7 @@ jobs:
           dotnet-version: ${{ inputs.dotnet_version }}
           source-url: ${{ inputs.primary_nuget_source }}
           cache: true
-          cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+          cache-dependency-path: ${{ inputs.solution_path != '' && format('{0}/**/packages.lock.json', inputs.solution_path) || '**/packages.lock.json' }}
         env:
           NUGET_AUTH_TOKEN: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
 

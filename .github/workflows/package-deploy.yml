@@ -46,7 +46,7 @@ on:
         type: string
         default: 'github'
       nuget_version_path:
-        description: "Optional path filter for nuget version computation. When set, only commits touching this path count toward the patch increment. Empty (default) counts all commits since the tag."
+        description: "Optional path scope. Drives both version computation (only commits touching this path count toward the patch increment) and change-detection gating (publish only runs when this path has changes since the base). Empty (default) = all commits count, always run. Overridden by nuget_changes_regex when that input is set."
         required: false
         type: string
         default: ''
@@ -84,7 +84,7 @@ on:
         type: string
         default: ''
       npm_version_path:
-        description: "Optional path filter for npm version computation. When set, only commits touching this path count toward the patch increment. Empty (default) counts all commits since the tag."
+        description: "Optional path scope. Drives both version computation (only commits touching this path count toward the patch increment) and change-detection gating (publish only runs when this path has changes since the base). Empty (default) = all commits count, always run. Overridden by npm_changes_regex when that input is set."
         required: false
         type: string
         default: ''
@@ -156,6 +156,8 @@ jobs:
           NPM_ENABLED: ${{ inputs.npm_enabled }}
           NUGET_REGEX: ${{ inputs.nuget_changes_regex }}
           NPM_REGEX: ${{ inputs.npm_changes_regex }}
+          NUGET_PATH: ${{ inputs.nuget_version_path }}
+          NPM_PATH: ${{ inputs.npm_version_path }}
         run: |
           set -euo pipefail
 
@@ -169,28 +171,30 @@ jobs:
           echo "Comparison base: $BASE_REF"
 
           decide() {
-            local name="$1"; local enabled="$2"; local regex="$3"
+            local name="$1"; local enabled="$2"; local regex="$3"; local path="$4"
             if [ "$enabled" != "true" ]; then
               echo "${name}_changed=false" >> "$GITHUB_OUTPUT"
               echo "${name}: disabled"
               return
             fi
-            if [ -z "$regex" ]; then
-              echo "${name}_changed=true" >> "$GITHUB_OUTPUT"
-              echo "${name}: enabled, no regex → always run"
-              return
+            if [ -n "$regex" ]; then
+              pattern="$regex"
+            elif [ -n "$path" ]; then
+              pattern="^${path}/"
+            else
+              pattern=".*"
             fi
-            if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$regex"; then
+            if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$pattern"; then
               echo "${name}_changed=true" >> "$GITHUB_OUTPUT"
-              echo "${name}: changes detected"
+              echo "${name}: changes detected matching ${pattern}"
             else
               echo "${name}_changed=false" >> "$GITHUB_OUTPUT"
-              echo "${name}: no matching changes"
+              echo "${name}: no changes matching ${pattern}"
             fi
           }
 
-          decide nuget "$NUGET_ENABLED" "$NUGET_REGEX"
-          decide npm "$NPM_ENABLED" "$NPM_REGEX"
+          decide nuget "$NUGET_ENABLED" "$NUGET_REGEX" "$NUGET_PATH"
+          decide npm "$NPM_ENABLED" "$NPM_REGEX" "$NPM_PATH"
 
   nuget:
     needs: detect-and-version

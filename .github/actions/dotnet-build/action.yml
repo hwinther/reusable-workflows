@@ -68,7 +68,7 @@ runs:
       dotnet-version: ${{ inputs.dotnet_version }}
       source-url: ${{ inputs.primary_nuget_source }}
       cache: ${{ inputs.cache }}
-      cache-dependency-path: "${{ inputs.working_directory }}/**/packages.lock.json"
+      cache-dependency-path: ${{ inputs.working_directory != '' && format('{0}/**/packages.lock.json', inputs.working_directory) || '**/packages.lock.json' }}
     env:
       NUGET_AUTH_TOKEN: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
 

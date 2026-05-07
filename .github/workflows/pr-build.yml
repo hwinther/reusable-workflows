@@ -23,7 +23,7 @@ on:
         required: false
         type: string
         description: "Working directory for the build, the package.json and package-lock.json files are expected to be in this directory"
-        default: "."
+        default: ""
       node_changes_regex:
         required: false
         type: string
@@ -63,7 +63,7 @@ on:
         required: false
         type: string
         description: Working directory for the build, the solution file is expected to be in this directory"
-        default: "./"
+        default: ""
       dotnet_solution_file:
         required: false
         type: string
@@ -161,55 +161,74 @@ jobs:
         id: node-check
         if: inputs.node_enabled
         env:
-          WD: ${{ inputs.node_working_directory }}
+          SOURCE_PATH: ${{ inputs.node_working_directory }}
           REGEX: ${{ inputs.node_changes_regex }}
           BASE_REF: ${{ steps.set-base.outputs.base_ref }}
+          LABEL: "Frontend (node)"
         run: |
-          if [ -z "$REGEX" ]; then
-            # Escape regex meta-chars so a directory like "src/(legacy)" is matched literally.
-            ESCAPED_WD=$(printf '%s' "$WD" | sed -e 's/[][\\.*^$+?(){}|]/\\&/g')
-            PATTERN="^${ESCAPED_WD}/"
-          else
+          set -euo pipefail
+          if [ -n "$REGEX" ]; then
             PATTERN="$REGEX"
+          elif [ -n "$SOURCE_PATH" ]; then
+            PATTERN="^${SOURCE_PATH}/"
+          else
+            PATTERN=".*"
           fi
 
           echo "Using regex pattern: $PATTERN"
           echo "Files to check against:"
           git diff --name-only "$BASE_REF"...HEAD
 
+          {
+            echo "## 🔍 ${LABEL} change check"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
           if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
-            echo "changes_detected=true" >> $GITHUB_OUTPUT
+            echo "changes_detected=true" >> "$GITHUB_OUTPUT"
             echo "Changes detected in pattern."
+            echo "✅ Changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "changes_detected=false" >> $GITHUB_OUTPUT
+            echo "changes_detected=false" >> "$GITHUB_OUTPUT"
             echo "No changes detected in pattern."
+            echo "⏭️ No changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Check for backend changes
         id: dotnet-check
         if: inputs.dotnet_enabled
         env:
-          WD: ${{ inputs.dotnet_working_directory }}
+          SOURCE_PATH: ${{ inputs.dotnet_working_directory }}
           REGEX: ${{ inputs.dotnet_changes_regex }}
           BASE_REF: ${{ steps.set-base.outputs.base_ref }}
+          LABEL: "Backend (dotnet)"
         run: |
-          if [ -z "$REGEX" ]; then
-            ESCAPED_WD=$(printf '%s' "$WD" | sed -e 's/[][\\.*^$+?(){}|]/\\&/g')
-            PATTERN="^${ESCAPED_WD}/"
-          else
+          set -euo pipefail
+          if [ -n "$REGEX" ]; then
             PATTERN="$REGEX"
+          elif [ -n "$SOURCE_PATH" ]; then
+            PATTERN="^${SOURCE_PATH}/"
+          else
+            PATTERN=".*"
           fi
 
           echo "Using regex pattern: $PATTERN"
           echo "Files to check against:"
           git diff --name-only "$BASE_REF"...HEAD
 
+          {
+            echo "## 🔍 ${LABEL} change check"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
           if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
-            echo "changes_detected=true" >> $GITHUB_OUTPUT
+            echo "changes_detected=true" >> "$GITHUB_OUTPUT"
             echo "Changes detected in pattern."
+            echo "✅ Changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "changes_detected=false" >> $GITHUB_OUTPUT
+            echo "changes_detected=false" >> "$GITHUB_OUTPUT"
             echo "No changes detected in pattern."
+            echo "⏭️ No changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
   node-build:

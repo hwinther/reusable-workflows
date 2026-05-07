@@ -144,7 +144,7 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
           cache: npm
-          cache-dependency-path: ${{ inputs.playwright_working_directory }}/package-lock.json
+          cache-dependency-path: ${{ inputs.playwright_working_directory != '' && format('{0}/package-lock.json', inputs.playwright_working_directory) || 'package-lock.json' }}
           registry-url: ${{ inputs.npm_registry_url }}
           scope: ${{ inputs.npm_scope }}
 

@@ -128,7 +128,7 @@ jobs:
           dotnet-version: ${{ inputs.dotnet_version }}
           source-url: ${{ inputs.primary_nuget_source }}
           cache: true
-          cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+          cache-dependency-path: ${{ inputs.solution_path != '' && format('{0}/**/packages.lock.json', inputs.solution_path) || '**/packages.lock.json' }}
         env:
           NUGET_AUTH_TOKEN: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
 
@@ -191,7 +191,7 @@ jobs:
           registry-url: ${{ inputs.npm_registry_url }}
           scope: ${{ inputs.npm_scope }}
           cache: npm
-          cache-dependency-path: "${{ inputs.node_working_directory }}/package-lock.json"
+          cache-dependency-path: ${{ inputs.node_working_directory != '' && format('{0}/package-lock.json', inputs.node_working_directory) || 'package-lock.json' }}
 
       - name: Install dependencies
         working-directory: ${{ inputs.node_working_directory }}
