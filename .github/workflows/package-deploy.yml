@@ -170,22 +170,29 @@ jobs:
           #     package-version, which patches off that same tag — so a push that
           #     bumps the version implies at least one matching change here, and a
           #     push with no matching changes implies no version bump (publish skipped).
-          #   Fallback when no semver tag exists yet (very first publish): empty tree,
-          #     so the diff lists every tracked file and any non-empty pattern matches.
+          #   No semver tag yet (first publish) → bootstrap; treat every enabled
+          #     ecosystem as changed so the initial publish goes through.
+          BOOTSTRAP=false
           if [ "$EVENT_NAME" = "pull_request" ]; then
             BASE_REF="$PR_BASE_SHA"
           elif TAG=$(git describe --tags --abbrev=0 --match='v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null); then
             BASE_REF="$TAG"
           else
-            BASE_REF="$(git hash-object -t tree /dev/null)" # empty tree; diff vs HEAD = full tree
+            BOOTSTRAP=true
+            BASE_REF=""
           fi
-          echo "Comparison base: $BASE_REF"
+          echo "Comparison base: ${BASE_REF:-<bootstrap: no semver tag yet>}"
 
           decide() {
             local name="$1"; local enabled="$2"; local regex="$3"; local path="$4"
             if [ "$enabled" != "true" ]; then
               echo "${name}_changed=false" >> "$GITHUB_OUTPUT"
               echo "${name}: disabled"
+              return
+            fi
+            if [ "$BOOTSTRAP" = "true" ]; then
+              echo "${name}_changed=true" >> "$GITHUB_OUTPUT"
+              echo "${name}: bootstrap publish (no prior tag)"
               return
             fi
             if [ -n "$regex" ]; then
