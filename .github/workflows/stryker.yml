@@ -71,6 +71,44 @@ on:
         description: "Navn på upload-artifact for node-rapporten."
         default: "stryker-report-node"
 
+      npm_registry_url:
+        required: false
+        type: string
+        description: "npm registry-URL som sendes til actions/setup-node. Standard er GitHub Packages."
+        default: "https://npm.pkg.github.com"
+      npm_scope:
+        required: false
+        type: string
+        description: "npm scope, f.eks. '@org'."
+        default: ''
+      primary_nuget_source:
+        required: false
+        type: string
+        description: "Primær NuGet-feed-URL sendt til actions/setup-dotnet via source-url. Tom = standard nuget.org."
+        default: ''
+      extra_nuget_source:
+        required: false
+        type: string
+        description: "Ekstra privat NuGet-feed lagt til via `dotnet nuget add source` før restore."
+        default: ''
+      extra_nuget_source_name:
+        required: false
+        type: string
+        description: "Navn på den ekstra NuGet-kilden."
+        default: ''
+      extra_nuget_source_username:
+        required: false
+        type: string
+        description: "Brukernavn for `dotnet nuget add source` på ekstra kilde."
+        default: 'az'
+    secrets:
+      npm_auth_token:
+        required: false
+        description: "Auth token brukt som NODE_AUTH_TOKEN i npm-jobben. Tom = fall tilbake til GITHUB_TOKEN."
+      nuget_auth_token:
+        required: false
+        description: "Auth token for NuGet-feeds (NUGET_AUTH_TOKEN for setup-dotnet og --password på ekstra-kilde). Tom = fall tilbake til GITHUB_TOKEN."
+
 jobs:
   dotnet-stryker:
     if: ${{ inputs.run_dotnet_stryker }}
@@ -88,14 +126,34 @@ jobs:
         uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
+          source-url: ${{ inputs.primary_nuget_source }}
           cache: true
           cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
+
+      - name: Add extra NuGet source
+        if: inputs.extra_nuget_source != ''
+        uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v1
+        with:
+          extra_nuget_source: ${{ inputs.extra_nuget_source }}
+          extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
+          extra_nuget_source_username: ${{ inputs.extra_nuget_source_username }}
+          nuget_auth_token: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
+          working_directory: ${{ inputs.solution_path }}
 
       - name: Restore
         working-directory: ${{ inputs.solution_path }}
         env:
           SOLUTION_FILE: ${{ inputs.solution_name }}
-        run: dotnet restore --locked-mode "$SOLUTION_FILE"
+        run: |
+          set -euo pipefail
+          dotnet restore --locked-mode "$SOLUTION_FILE"
+          if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
+            git checkout HEAD -- nuget.config
+          else
+            rm -f nuget.config || true
+          fi
 
       - name: Test with Stryker
         working-directory: ${{ inputs.solution_path }}
@@ -130,15 +188,21 @@ jobs:
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: ${{ inputs.node_version }}
+          registry-url: ${{ inputs.npm_registry_url }}
+          scope: ${{ inputs.npm_scope }}
           cache: npm
           cache-dependency-path: "${{ inputs.node_working_directory }}/package-lock.json"
 
       - name: Install dependencies
         working-directory: ${{ inputs.node_working_directory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: npm ci
 
       - name: Run Stryker
         working-directory: ${{ inputs.node_working_directory }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: npm run stryker
 
       - name: Upload frontend Stryker report artifact

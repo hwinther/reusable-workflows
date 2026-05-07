@@ -1,0 +1,48 @@
+name: "Add private NuGet source"
+description: |
+  Calls `dotnet nuget add source` for a single private feed, with credentials
+  redirected through `env:` (zizmor-clean). Idempotent — removes any
+  pre-existing source with the same name first.
+
+  Internal — leading underscore signals it's not part of the public surface.
+  Used by `dotnet-build`, `_build-image-dotnet`, `stryker.yml`,
+  `resharper-cleanupcode.yml`, and `dependabot-update-dotnet-lockfiles.yml`.
+
+  Does NOT include the `setup-dotnet` invocation or the `nuget.config`
+  cleanup — those have different policies per caller (committed-vs-not,
+  post-restore vs post-publish), so callers handle them inline.
+
+inputs:
+  extra_nuget_source:
+    required: true
+    description: "NuGet feed URL, e.g. https://pkgs.dev.azure.com/org/_packaging/feed/nuget/v3/index.json"
+  extra_nuget_source_name:
+    required: true
+    description: "Name for the source (must be unique within nuget.config)."
+  extra_nuget_source_username:
+    required: false
+    description: "Username for `dotnet nuget add source`. GitHub Packages and Azure Artifacts both accept any non-empty value alongside a PAT."
+    default: "az"
+  nuget_auth_token:
+    required: true
+    description: "Auth token used as --password on the source. Caller is responsible for resolving any GITHUB_TOKEN fallback before passing in."
+  working_directory:
+    required: false
+    description: "Working directory the `dotnet nuget add source` command runs in (relevant when a nuget.config sits next to the solution)."
+    default: "."
+
+runs:
+  using: "composite"
+  steps:
+    - name: Add extra NuGet source
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        EXTRA_SOURCE: ${{ inputs.extra_nuget_source }}
+        EXTRA_SOURCE_NAME: ${{ inputs.extra_nuget_source_name }}
+        EXTRA_SOURCE_USERNAME: ${{ inputs.extra_nuget_source_username }}
+        EXTRA_SOURCE_PASSWORD: ${{ inputs.nuget_auth_token }}
+      run: |
+        set -euo pipefail
+        dotnet nuget remove source "$EXTRA_SOURCE_NAME" || true
+        dotnet nuget add source "$EXTRA_SOURCE" --name "$EXTRA_SOURCE_NAME" --username "$EXTRA_SOURCE_USERNAME" --password "$EXTRA_SOURCE_PASSWORD" --store-password-in-clear-text

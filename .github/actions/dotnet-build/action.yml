@@ -73,18 +73,14 @@ runs:
       NUGET_AUTH_TOKEN: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
 
   - name: Add extra NuGet source
-    shell: bash
-    working-directory: ${{ inputs.working_directory }}
     if: inputs.extra_nuget_source != ''
-    env:
-      EXTRA_SOURCE: ${{ inputs.extra_nuget_source }}
-      EXTRA_SOURCE_NAME: ${{ inputs.extra_nuget_source_name }}
-      EXTRA_SOURCE_USERNAME: ${{ inputs.extra_nuget_source_username }}
-      EXTRA_SOURCE_PASSWORD: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
-    run: |
-      set -euo pipefail
-      dotnet nuget remove source "$EXTRA_SOURCE_NAME" || true
-      dotnet nuget add source "$EXTRA_SOURCE" --name "$EXTRA_SOURCE_NAME" --username "$EXTRA_SOURCE_USERNAME" --password "$EXTRA_SOURCE_PASSWORD" --store-password-in-clear-text
+    uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v1
+    with:
+      extra_nuget_source: ${{ inputs.extra_nuget_source }}
+      extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
+      extra_nuget_source_username: ${{ inputs.extra_nuget_source_username }}
+      nuget_auth_token: ${{ inputs.nuget_auth_token != '' && inputs.nuget_auth_token || inputs.github_token }}
+      working_directory: ${{ inputs.working_directory }}
 
   - name: Run dotnet restore
     id: dotnet-restore

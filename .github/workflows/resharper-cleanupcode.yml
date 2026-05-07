@@ -35,6 +35,30 @@ on:
         type: string
         description: "Commit-subject brukt for CleanupCode-PR-en og som søkestreng i blame-ignore-revs-syncen."
         default: "chore: ReSharper CleanupCode"
+      primary_nuget_source:
+        required: false
+        type: string
+        description: "Primær NuGet-feed-URL sendt til actions/setup-dotnet via source-url. NB: `dotnet tool install JetBrains.ReSharper.GlobalTools` krever at nuget.org er nåbar — pek primær-feeden mot en feed som upstreamer til nuget.org dersom du overstyrer."
+        default: ''
+      extra_nuget_source:
+        required: false
+        type: string
+        description: "Ekstra privat NuGet-feed lagt til via `dotnet nuget add source` før restore."
+        default: ''
+      extra_nuget_source_name:
+        required: false
+        type: string
+        description: "Navn på den ekstra NuGet-kilden."
+        default: ''
+      extra_nuget_source_username:
+        required: false
+        type: string
+        description: "Brukernavn for `dotnet nuget add source` på ekstra kilde."
+        default: 'az'
+    secrets:
+      nuget_auth_token:
+        required: false
+        description: "Auth token for NuGet-feeds (NUGET_AUTH_TOKEN for setup-dotnet og --password på ekstra-kilde). Tom = fall tilbake til GITHUB_TOKEN."
 
 jobs:
   cleanupcode:
@@ -51,14 +75,34 @@ jobs:
         uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
         with:
           dotnet-version: ${{ inputs.dotnet_version }}
+          source-url: ${{ inputs.primary_nuget_source }}
           cache: true
           cache-dependency-path: "${{ inputs.solution_path }}/**/packages.lock.json"
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
+
+      - name: Add extra NuGet source
+        if: inputs.extra_nuget_source != ''
+        uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v1
+        with:
+          extra_nuget_source: ${{ inputs.extra_nuget_source }}
+          extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
+          extra_nuget_source_username: ${{ inputs.extra_nuget_source_username }}
+          nuget_auth_token: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
+          working_directory: ${{ inputs.solution_path }}
 
       - name: Restore
         working-directory: ${{ inputs.solution_path }}
         env:
           SOLUTION_FILE: ${{ inputs.solution_name }}
-        run: dotnet restore --locked-mode "$SOLUTION_FILE"
+        run: |
+          set -euo pipefail
+          dotnet restore --locked-mode "$SOLUTION_FILE"
+          if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
+            git checkout HEAD -- nuget.config
+          else
+            rm -f nuget.config || true
+          fi
 
       - name: Install JetBrains.ReSharper.GlobalTools
         run: dotnet tool install JetBrains.ReSharper.GlobalTools --global
