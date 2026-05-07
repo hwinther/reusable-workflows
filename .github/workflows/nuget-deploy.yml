@@ -32,7 +32,7 @@ on:
         type: string
         default: 'false'
       package_source_name:
-        description: "NuGet source name as used by `dotnet nuget`. Caller is expected to have this source declared in nuget.config (or rely on GitHub Packages defaults)."
+        description: "NuGet source name. Must match the name used in any committed nuget.config that already declares `package_source_url` — `dotnet nuget add source` collides on URL when the same URL is registered under a different name. Default 'github' works for consumers without a committed nuget.config."
         required: false
         type: string
         default: 'github'
@@ -86,35 +86,12 @@ jobs:
           cache-dependency-path: ${{ inputs.cache_enabled && '**/packages.lock.json' || '' }}
 
       - name: Authenticate NuGet source for restore
-        env:
-          NUGET_TOKEN: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
-          INPUT_NAME: ${{ inputs.package_source_name }}
-        run: |
-          set -euo pipefail
-
-          # Match existing sources by URL — the consumer's nuget.config may
-          # already declare this URL under a different name (e.g. 'wshno').
-          # Adding under a different name would fail with "source already
-          # added" because of URL collision.
-          RESOLVED_NAME=$(dotnet nuget list source | awk -v url="$EFFECTIVE_SOURCE_URL" '
-            /^[[:space:]]+[0-9]+\.[[:space:]]/ { name = $2 }
-            index($0, url) > 0 && name != "" { print name; exit }
-          ')
-
-          if [ -n "$RESOLVED_NAME" ]; then
-            echo "Found existing source '$RESOLVED_NAME' for URL $EFFECTIVE_SOURCE_URL — updating credentials"
-            dotnet nuget update source "$RESOLVED_NAME" \
-              --username "${{ github.actor }}" \
-              --password "$NUGET_TOKEN" \
-              --store-password-in-clear-text
-          else
-            echo "No source found matching URL $EFFECTIVE_SOURCE_URL — adding as '$INPUT_NAME'"
-            dotnet nuget add source "$EFFECTIVE_SOURCE_URL" \
-              --name "$INPUT_NAME" \
-              --username "${{ github.actor }}" \
-              --password "$NUGET_TOKEN" \
-              --store-password-in-clear-text
-          fi
+        uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v1
+        with:
+          extra_nuget_source: ${{ env.EFFECTIVE_SOURCE_URL }}
+          extra_nuget_source_name: ${{ inputs.package_source_name }}
+          extra_nuget_source_username: ${{ github.actor }}
+          nuget_auth_token: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
 
       - name: Restore
         run: dotnet restore --locked-mode "${{ inputs.solution_file }}"
