@@ -12,8 +12,8 @@ on:
       node_enabled:
         required: false
         type: boolean
-        description: "Run node build and file change detection for frontend"
-        default: true
+        description: "Run node build and file change detection for frontend. Opt-in: callers must set this explicitly."
+        default: false
       node_version:
         required: false
         type: string
@@ -52,8 +52,8 @@ on:
       dotnet_enabled:
         required: false
         type: boolean
-        description: "Run dotnet build and file change detection for backend"
-        default: true
+        description: "Run dotnet build and file change detection for backend. Opt-in: callers must set this explicitly."
+        default: false
       dotnet_version:
         required: false
         type: string
