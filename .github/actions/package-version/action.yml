@@ -1,9 +1,18 @@
 name: "Compute package version"
 description: |
-  Compute a SemVer-compatible package version from the latest reachable
-  v[X.Y.Z] git tag plus the commit count since that tag. When is_alpha is
-  'true', append a sanitized branch name + short SHA as a SemVer prerelease
-  label so each commit on a feature branch produces a unique alpha version.
+  Compute a version from the latest reachable v[X.Y.Z] git tag plus the
+  commit count since that tag.
+
+  Two output formats are supported via the 'format' input:
+    - semver  (default) — produces SemVer 2.0.0. When is_alpha='true', appends
+              a sanitized branch name + short SHA as a prerelease label, so
+              each commit on a feature branch produces a unique alpha
+              version (e.g. 0.1.7-feature-foo.abc1234).
+    - pep440  — produces PEP 440 versions accepted by PyPI. When
+              is_alpha='true', appends '.dev<run_number>' (e.g. 0.1.7.dev42).
+              run_number must be provided in this case. PyPI rejects PEP 440
+              local-version segments, so the pep440 informational_version
+              omits the '+sha.<full>' suffix that semver carries.
 
   The caller must perform actions/checkout with fetch-depth: 0 and
   fetch-tags: true before invoking this action — composite actions do not
@@ -11,24 +20,32 @@ description: |
 
 inputs:
   is_alpha:
-    description: "When 'true', append branch + short-sha as a SemVer prerelease label."
+    description: "When 'true', emit a prerelease/dev version instead of a stable one."
     required: false
     default: 'false'
   branch_name:
-    description: "Override the branch name used in the alpha suffix. Defaults to github.head_ref (PR) or github.ref_name (push)."
+    description: "Override the branch name used in the semver alpha suffix. Defaults to github.head_ref (PR) or github.ref_name (push). Ignored when format=pep440."
     required: false
     default: ''
   path:
     description: "Optional path filter. When set, only commits that touched files under this path count toward the patch increment. Useful for monorepos or for ignoring docs/workflow-only commits. Empty (default) counts all commits since the tag."
     required: false
     default: ''
+  format:
+    description: "Output format: 'semver' (default) or 'pep440'. semver suits npm/NuGet/SemVer consumers; pep440 suits PyPI."
+    required: false
+    default: 'semver'
+  run_number:
+    description: "Workflow run number used as the .dev<N> counter for pep440 alpha versions. Required when format=pep440 and is_alpha=true. Pass ${{ github.run_number }}."
+    required: false
+    default: ''
 
 outputs:
   version:
-    description: "Package version (e.g. 0.1.7 or 0.1.7-feature-foo.abc1234)."
+    description: "Package version. semver: '0.1.7' or '0.1.7-feature-foo.abc1234'. pep440: '0.1.7' or '0.1.7.dev42'."
     value: ${{ steps.compute.outputs.version }}
   informational_version:
-    description: "Same as version with '+sha.<full-sha>' build metadata appended; suitable for AssemblyInformationalVersion."
+    description: "semver: same as version with '+sha.<full-sha>' build metadata appended (suitable for AssemblyInformationalVersion). pep440: same as version (no local segment, since PyPI rejects it)."
     value: ${{ steps.compute.outputs.informational_version }}
 
 runs:
@@ -41,8 +58,18 @@ runs:
         OVERRIDE_BRANCH: ${{ inputs.branch_name }}
         EVENT_BRANCH: ${{ github.head_ref || github.ref_name }}
         PATH_FILTER: ${{ inputs.path }}
+        FORMAT: ${{ inputs.format }}
+        RUN_NUMBER: ${{ inputs.run_number }}
       run: |
         set -euo pipefail
+
+        case "$FORMAT" in
+          semver|pep440) ;;
+          *)
+            echo "::error::Invalid format '${FORMAT}'. Expected 'semver' or 'pep440'."
+            exit 1
+            ;;
+        esac
 
         if TAG=$(git describe --tags --abbrev=0 --match='v[0-9]*.[0-9]*.[0-9]*' 2>/dev/null); then
           if [ -n "$PATH_FILTER" ]; then
@@ -71,33 +98,47 @@ runs:
         fi
 
         if [ "$IS_ALPHA" = "true" ]; then
-          BRANCH="$OVERRIDE_BRANCH"
-          [ -z "$BRANCH" ] && BRANCH="$EVENT_BRANCH"
-          if [ -z "$BRANCH" ]; then
-            echo "::error::is_alpha=true but no branch_name input and no github.head_ref/ref_name available."
-            exit 1
+          if [ "$FORMAT" = "pep440" ]; then
+            if [ -z "$RUN_NUMBER" ]; then
+              echo "::error::format=pep440 with is_alpha=true requires run_number (pass \${{ github.run_number }})."
+              exit 1
+            fi
+            VERSION="${STABLE}.dev${RUN_NUMBER}"
+          else
+            BRANCH="$OVERRIDE_BRANCH"
+            [ -z "$BRANCH" ] && BRANCH="$EVENT_BRANCH"
+            if [ -z "$BRANCH" ]; then
+              echo "::error::is_alpha=true but no branch_name input and no github.head_ref/ref_name available."
+              exit 1
+            fi
+            SHORT_SHA="${GITHUB_SHA:0:7}"
+            # SemVer prerelease identifiers: [0-9A-Za-z-]+, separated by '.'.
+            # Normalize: lower, replace '/'/'_' with '-', strip anything else, truncate, trim trailing '-'.
+            SAFE=$(echo "$BRANCH" | tr '/_' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+            SAFE=${SAFE:0:40}
+            SAFE=${SAFE%-}
+            if [ -z "$SAFE" ]; then
+              SAFE="branch"
+            fi
+            VERSION="${STABLE}-${SAFE}.${SHORT_SHA}"
           fi
-          SHORT_SHA="${GITHUB_SHA:0:7}"
-          # SemVer prerelease identifiers: [0-9A-Za-z-]+, separated by '.'.
-          # Normalize: lower, replace '/'/'_' with '-', strip anything else, truncate, trim trailing '-'.
-          SAFE=$(echo "$BRANCH" | tr '/_' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
-          SAFE=${SAFE:0:40}
-          SAFE=${SAFE%-}
-          if [ -z "$SAFE" ]; then
-            SAFE="branch"
-          fi
-          VERSION="${STABLE}-${SAFE}.${SHORT_SHA}"
         else
           VERSION="${STABLE}"
         fi
 
-        INFO="${VERSION}+sha.${GITHUB_SHA}"
+        if [ "$FORMAT" = "pep440" ]; then
+          # PyPI rejects PEP 440 local-version segments, so don't append +sha.
+          INFO="${VERSION}"
+        else
+          INFO="${VERSION}+sha.${GITHUB_SHA}"
+        fi
 
         echo "Base tag:               ${TAG}"
         echo "Path filter:            ${PATH_FILTER:-<none>}"
         echo "Commits past tag:       ${COMMITS}"
         echo "Stable version:         ${STABLE}"
         echo "is_alpha:               ${IS_ALPHA}"
+        echo "Format:                 ${FORMAT}"
         echo "Resolved version:       ${VERSION}"
         echo "Informational version:  ${INFO}"
 
