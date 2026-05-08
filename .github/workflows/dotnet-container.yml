@@ -72,6 +72,11 @@ on:
         required: false
         type: boolean
         default: true
+      attest_build_provenance_enabled:
+        description: "Generate a GitHub artifact attestation (actions/attest-build-provenance). Set to false on private repositories without GitHub Advanced Security / paid plan; Cosign-based signatures and attestations still run."
+        required: false
+        type: boolean
+        default: true
       primary_nuget_source:
         description: "Primary NuGet source URL passed to actions/setup-dotnet via source-url."
         required: false
@@ -198,6 +203,7 @@ jobs:
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
           cosign_sign_enabled: ${{ inputs.cosign_sign_enabled }}
           cosign_supply_chain_attest_enabled: ${{ inputs.cosign_supply_chain_attest_enabled }}
+          attest_build_provenance_enabled: ${{ inputs.attest_build_provenance_enabled }}
           sbom_cyclonedx_path: ${{ steps.scan.outputs.sbom_cyclonedx_path }}
           grype_json_path: ${{ steps.scan.outputs.grype_json_path }}
           version: ${{ needs.gitversion.outputs.version }}

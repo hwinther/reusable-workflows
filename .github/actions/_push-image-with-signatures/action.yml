@@ -52,6 +52,10 @@ inputs:
     required: false
     description: "Attach CycloneDX SBOM + Grype vuln attestations after sign."
     default: "true"
+  attest_build_provenance_enabled:
+    required: false
+    description: "Generate a GitHub artifact attestation via actions/attest-build-provenance and persist it via the repo Attestations API. Set to false on private repositories without GitHub Advanced Security / paid plan (the API responds `Feature not available for the <org> organization` otherwise). When false, only Cosign-based signatures and attestations are produced — `gh attestation verify` will not find anything, but `cosign verify` and Kyverno verifyImages still work."
+    default: "true"
   sbom_cyclonedx_path:
     required: false
     description: "Path to the CycloneDX SBOM, required when cosign_supply_chain_attest_enabled is true."
@@ -157,6 +161,7 @@ runs:
         echo "Pushed digest: $DIGEST"
 
     - name: Generate artifact attestation
+      if: ${{ inputs.attest_build_provenance_enabled == 'true' }}
       uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
       with:
         subject-name: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}
