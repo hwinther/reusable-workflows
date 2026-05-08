@@ -1,0 +1,376 @@
+name: "Python Build"
+description: "Python ruff/mypy/pytest/build pipeline. Mirrors node-build / dotnet-build: every step runs even when an earlier one fails, each emits a markdown fragment, the action concatenates them into a single pr-comment output, and a final fail-workflow step exits non-zero if any reported failure."
+
+inputs:
+  python_version:
+    required: true
+    description: "Python version, e.g. '3.13'."
+  working_directory:
+    required: true
+    description: "Working directory containing the pyproject.toml of the package being built."
+  local_path_dependencies:
+    required: false
+    description: "Newline-separated list of repo-relative paths. Each one is installed editable (`pip install -e <path>`) from the repo root before installing the package in working_directory. Use this when the package depends on a sibling package in the same repo (e.g. client → contracts) and a published wheel isn't available yet."
+    default: ""
+  extra_command:
+    required: false
+    description: "Optional shell command to run after install, before lint/test."
+    default: ""
+  test:
+    required: false
+    description: "Run pytest. Set to 'false' to skip."
+    default: "true"
+
+outputs:
+  pr-comment:
+    description: "Combined PR comment with build status."
+    value: ${{ steps.pr-comment-combiner.outputs.result }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create temp directory and set defaults
+      id: temp-dir
+      shell: bash
+      run: |
+        TEMP_DIR=$(mktemp -d)
+        # Hatchling backends (and similar) read HATCH_VERSION at metadata
+        # generation, which happens during 'pip install -e' — not just at
+        # 'python -m build'. Use a non-prerelease bootstrap value so cross-
+        # package '>=0.1' constraints resolve when a sibling package is
+        # installed editable. Real publish workflows set HATCH_VERSION to
+        # the computed version themselves and override this.
+        # Single grouped redirect with quoted "$GITHUB_ENV" — closes the
+        # zizmor 'dangerous use of environment file' finding.
+        {
+          printf '%s\n' "TEMP_DIR=$TEMP_DIR"
+          if [ -z "${HATCH_VERSION:-}" ]; then
+            printf '%s\n' "HATCH_VERSION=0.1.0"
+          fi
+        } >> "$GITHUB_ENV"
+
+    - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+      name: Set up Python
+      with:
+        python-version: ${{ inputs.python_version }}
+        cache: "pip"
+        cache-dependency-path: ${{ inputs.working_directory != '' && format('{0}/pyproject.toml', inputs.working_directory) || 'pyproject.toml' }}
+
+    # Local path dependencies: install editable from the repo root, before the
+    # main package install, so that pip resolves intra-repo deps to source
+    # rather than reaching for a published wheel that may not exist yet.
+    - name: Install local path dependencies
+      id: local-deps
+      if: inputs.local_path_dependencies != ''
+      shell: bash
+      env:
+        LOCAL_DEPS: ${{ inputs.local_path_dependencies }}
+      run: |
+        set -e
+        echo "::group::Install local path dependencies"
+        python -m pip install --upgrade pip
+        : > "$TEMP_DIR/local-deps.md"
+        echo "## ✅ Local path dependencies installed" >> "$TEMP_DIR/local-deps.md"
+        while IFS= read -r line; do
+          dep=$(echo "$line" | tr -d '[:space:]')
+          [ -z "$dep" ] && continue
+          echo "Installing editable: $dep"
+          pip install -e "$dep"
+          echo "- \`$dep\`" >> "$TEMP_DIR/local-deps.md"
+        done <<< "$LOCAL_DEPS"
+        echo "::endgroup::"
+
+    - name: Install dependencies
+      id: dependency-install
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Install dependencies"
+        set +e
+        python -m pip install --upgrade pip 1>$TEMP_DIR/dependency.out 2>&1
+        pip install -e ".[dev]" 1>>$TEMP_DIR/dependency.out 2>&1
+        exit_code=$?
+        set -e
+        echo "Dependency installation exit code: $exit_code"
+        cat $TEMP_DIR/dependency.out
+
+        if [ $exit_code -ne 0 ]; then
+          echo "::error::Dependency installation failed."
+          {
+            echo "## ❌ Dependency installation failed"
+            echo ""
+            echo "\`\`\`"
+            tail -n 50 $TEMP_DIR/dependency.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/dependency.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+          exit $exit_code
+        else
+          echo "## ✅ Dependency installation succeeded" > $TEMP_DIR/dependency.md
+        fi
+        echo "::endgroup::"
+
+    - name: Resolve coverage import name
+      id: cov-name
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        # Read [project].name from pyproject.toml and convert hyphens to
+        # underscores. This matches the standard distribution → import name
+        # mapping (e.g. "wshno-test-pypi-client" → "wshno_test_pypi_client").
+        # On failure (parse error, missing field), pytest will still run but
+        # without --cov.
+        set +e
+        cov_name=$(python -c "import sys, tomllib; sys.stdout.write(tomllib.loads(open('pyproject.toml','rb').read().decode()).get('project',{}).get('name','').replace('-','_'))" 2>/dev/null)
+        set -e
+        if [ -n "$cov_name" ]; then
+          echo "Coverage module: $cov_name"
+          echo "name=$cov_name" >> $GITHUB_OUTPUT
+        else
+          echo "Could not derive coverage module from pyproject.toml; pytest will run without --cov."
+          echo "name=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Run extra command
+      if: steps.dependency-install.outcome == 'success' && inputs.extra_command != ''
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        # Passed via env (not template expansion) to avoid the runner
+        # interpolating the input into the run-script source — closes a
+        # zizmor 'code injection via template expansion' finding. The
+        # command is still executed as shell since that's the input's
+        # documented contract.
+        EXTRA_COMMAND: ${{ inputs.extra_command }}
+      run: |
+        echo "::group::Extra command"
+        bash -c "$EXTRA_COMMAND"
+        echo "::endgroup::"
+
+    - name: Ruff lint
+      id: ruff-check
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Ruff check"
+        set +e
+        ruff check . 1>$TEMP_DIR/ruff-check.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/ruff-check.out
+        echo "::endgroup::"
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ Ruff lint reported issues"
+            echo ""
+            echo "\`\`\`"
+            cat $TEMP_DIR/ruff-check.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/ruff-check.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          echo "## ✅ Ruff lint clean" > $TEMP_DIR/ruff-check.md
+        fi
+
+    - name: Ruff format check
+      id: ruff-format
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Ruff format check"
+        set +e
+        ruff format --check . 1>$TEMP_DIR/ruff-format.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/ruff-format.out
+        echo "::endgroup::"
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ Ruff format check failed (run \`ruff format .\` locally)"
+            echo ""
+            echo "\`\`\`"
+            cat $TEMP_DIR/ruff-format.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/ruff-format.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          echo "## ✅ Ruff format clean" > $TEMP_DIR/ruff-format.md
+        fi
+
+    - name: Mypy
+      id: mypy
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Mypy"
+        # mypy targets src and tests if both exist; falls back to '.' otherwise.
+        targets=()
+        [ -d src ] && targets+=(src)
+        [ -d tests ] && targets+=(tests)
+        if [ ${#targets[@]} -eq 0 ]; then
+          targets=(.)
+        fi
+        set +e
+        mypy "${targets[@]}" 1>$TEMP_DIR/mypy.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/mypy.out
+        echo "::endgroup::"
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ Mypy reported issues"
+            echo ""
+            echo "\`\`\`"
+            cat $TEMP_DIR/mypy.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/mypy.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          echo "## ✅ Mypy clean" > $TEMP_DIR/mypy.md
+        fi
+
+    - name: Pytest
+      id: pytest
+      if: steps.dependency-install.outcome == 'success' && inputs.test == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        COV_NAME: ${{ steps.cov-name.outputs.name }}
+      run: |
+        echo "::group::Pytest"
+        if [ -n "$COV_NAME" ]; then
+          cov_args=(--cov="$COV_NAME" --cov-report=term --cov-report=xml)
+        else
+          cov_args=()
+        fi
+        set +e
+        pytest "${cov_args[@]}" 1>$TEMP_DIR/pytest.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/pytest.out
+        echo "::endgroup::"
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ Pytest failed (exit $exit_code)"
+            echo ""
+            echo "\`\`\`"
+            tail -n 200 $TEMP_DIR/pytest.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/pytest.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          # Extract pytest's own summary line (e.g. "5 passed in 0.42s") if present.
+          summary=$(grep -E "^=+ .* (passed|failed|error|skipped|xfailed|xpassed) .* =+$" $TEMP_DIR/pytest.out | tail -n 1 || true)
+          {
+            echo "## ✅ Pytest passed"
+            [ -n "$summary" ] && echo "" && echo "\`$summary\`"
+          } > $TEMP_DIR/pytest.md
+        fi
+
+    - name: Build smoke (python -m build)
+      id: build-smoke
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::Build sdist + wheel"
+        set +e
+        pip install --quiet build 1>>$TEMP_DIR/build.out 2>&1
+        python -m build --sdist --wheel 1>>$TEMP_DIR/build.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/build.out
+        echo "::endgroup::"
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ Build smoke failed"
+            echo ""
+            echo "\`\`\`"
+            tail -n 100 $TEMP_DIR/build.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/build.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          {
+            echo "## ✅ Build smoke succeeded"
+            echo ""
+            echo "Artifacts:"
+            ls dist/ 2>/dev/null | sed 's/^/- /' || echo "- (none)"
+          } > $TEMP_DIR/build.md
+        fi
+
+    - name: Check for uncommitted changes
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "Checking for uncommitted changes..."
+        git config core.fileMode false
+        git -c core.safecrlf=false status --porcelain
+
+        if [ -n "$(git -c core.safecrlf=false status --porcelain)" ]; then
+          echo "Found changes, staging files to see if they are normalized away..."
+          git add -A
+
+          if [ -n "$(git diff --cached)" ]; then
+            echo "::error::Actual content changes in files after install and build:"
+            git status
+            git diff --cached
+            {
+              echo "## ❌ Changes in files after install and build"
+              echo ""
+              echo "The following files have actual changes:"
+              echo "\`\`\`"
+              git diff --cached --name-only
+              echo "\`\`\`"
+            } > $TEMP_DIR/git-status.md
+            git reset HEAD
+            exit 1
+          else
+            echo "No actual changes - only line endings or file mode were normalized."
+            git reset HEAD
+            echo "## ✅ No changes in files after install and build were found" > $TEMP_DIR/git-status.md
+          fi
+        else
+          echo "No changes in files after install and build were found."
+          echo "## ✅ No changes in files after install and build were found" > $TEMP_DIR/git-status.md
+        fi
+
+    - name: Combine output into PR comment
+      id: pr-comment-combiner
+      if: always()
+      shell: bash
+      env:
+        # Passed via env (not template expansion) so the runner doesn't
+        # interpolate the input into the run-script source — closes a
+        # zizmor 'code injection via template expansion' finding.
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        echo "# Python build status ($WORKING_DIRECTORY)" > $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/local-deps.md ]   && cat $TEMP_DIR/local-deps.md   >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/dependency.md ]   && cat $TEMP_DIR/dependency.md   >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/ruff-check.md ]   && cat $TEMP_DIR/ruff-check.md   >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/ruff-format.md ]  && cat $TEMP_DIR/ruff-format.md  >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/mypy.md ]         && cat $TEMP_DIR/mypy.md         >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/pytest.md ]       && cat $TEMP_DIR/pytest.md       >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/build.md ]        && cat $TEMP_DIR/build.md        >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/git-status.md ]   && cat $TEMP_DIR/git-status.md   >> $TEMP_DIR/combined.md
+        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
+
+    - name: Fail workflow on lint/type/test/build errors
+      if: |
+        steps.dependency-install.outputs.failed == 'true'
+        || steps.ruff-check.outputs.failed == 'true'
+        || steps.ruff-format.outputs.failed == 'true'
+        || steps.mypy.outputs.failed == 'true'
+        || steps.pytest.outputs.failed == 'true'
+        || steps.build-smoke.outputs.failed == 'true'
+      shell: bash
+      run: |
+        echo "::error::One or more checks reported errors. See PR comment for details."
+        exit 1

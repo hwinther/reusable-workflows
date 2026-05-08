@@ -88,6 +88,30 @@ on:
         required: false
         type: string
         default: ''
+
+      # pypi ---------------------------------------------------------------
+      pypi_enabled:
+        required: false
+        type: boolean
+        default: false
+      pypi_working_directory:
+        required: false
+        type: string
+        default: '.'
+      pypi_python_version:
+        required: false
+        type: string
+        default: '3.13'
+      pypi_changes_regex:
+        description: "Regex matched against changed file paths. Empty means 'always run when pypi_enabled'."
+        required: false
+        type: string
+        default: ''
+      pypi_version_path:
+        description: "Optional path scope. Drives both version computation (only commits touching this path count toward the patch increment) and change-detection gating (publish only runs when this path has changes since the base). Empty (default) = all commits count, always run. Overridden by pypi_changes_regex when that input is set."
+        required: false
+        type: string
+        default: ''
     secrets:
       packages_pat:
         description: "PAT with read:packages scope used by nuget-deploy for restoring private dependencies. Falls back to GITHUB_TOKEN inside nuget-deploy when unset."
@@ -102,12 +126,24 @@ on:
       npm_version:
         description: "Computed npm package version (empty when npm_enabled=false)."
         value: ${{ jobs.detect-and-version.outputs.npm_version }}
+      pypi_version:
+        description: "Computed pypi package version (PEP 440; empty when pypi_enabled=false)."
+        value: ${{ jobs.detect-and-version.outputs.pypi_version }}
+      pypi_artifact_name:
+        description: "Name of the uploaded pypi distribution artifact. Caller uses this with actions/download-artifact + pypa/gh-action-pypi-publish in its own job to keep OIDC trust scope at the caller."
+        value: ${{ jobs.pypi.outputs.artifact_name }}
+      pypi_package_name:
+        description: "Distribution name read from the pypi package's pyproject.toml."
+        value: ${{ jobs.pypi.outputs.package_name }}
       nuget_published:
         description: "'true' if the nuget job ran (fanned out and not skipped)."
         value: ${{ jobs.nuget.result == 'success' }}
       npm_published:
         description: "'true' if the npm job ran (fanned out and not skipped)."
         value: ${{ jobs.npm.result == 'success' }}
+      pypi_built:
+        description: "'true' if the pypi build job ran (fanned out and not skipped). Caller still has to perform the OIDC publish step."
+        value: ${{ jobs.pypi.result == 'success' }}
 
 jobs:
   detect-and-version:
@@ -120,8 +156,11 @@ jobs:
       nuget_informational_version: ${{ steps.nuget_pkgver.outputs.informational_version }}
       npm_version: ${{ steps.npm_pkgver.outputs.version }}
       npm_informational_version: ${{ steps.npm_pkgver.outputs.informational_version }}
+      pypi_version: ${{ steps.pypi_pkgver.outputs.version }}
+      pypi_informational_version: ${{ steps.pypi_pkgver.outputs.informational_version }}
       nuget_changed: ${{ steps.changes.outputs.nuget_changed }}
       npm_changed: ${{ steps.changes.outputs.npm_changed }}
+      pypi_changed: ${{ steps.changes.outputs.pypi_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -149,15 +188,31 @@ jobs:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.npm_version_path }}
 
+      # pypi passes the format=pep440 / run_number inputs added to
+      # package-version in this same release. nuget/npm don't and stay
+      # on the same @v1 ref.
+      - name: Compute pypi version
+        id: pypi_pkgver
+        if: inputs.pypi_enabled
+        uses: hwinther/reusable-workflows/.github/actions/package-version@v1
+        with:
+          is_alpha: ${{ inputs.is_alpha }}
+          path: ${{ inputs.pypi_version_path }}
+          format: pep440
+          run_number: ${{ github.run_number }}
+
       - name: Detect changes per ecosystem
         id: changes
         env:
           NUGET_ENABLED: ${{ inputs.nuget_enabled }}
           NPM_ENABLED: ${{ inputs.npm_enabled }}
+          PYPI_ENABLED: ${{ inputs.pypi_enabled }}
           NUGET_REGEX: ${{ inputs.nuget_changes_regex }}
           NPM_REGEX: ${{ inputs.npm_changes_regex }}
+          PYPI_REGEX: ${{ inputs.pypi_changes_regex }}
           NUGET_PATH: ${{ inputs.nuget_version_path }}
           NPM_PATH: ${{ inputs.npm_version_path }}
+          PYPI_PATH: ${{ inputs.pypi_version_path }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -213,6 +268,7 @@ jobs:
 
           decide nuget "$NUGET_ENABLED" "$NUGET_REGEX" "$NUGET_PATH"
           decide npm "$NPM_ENABLED" "$NPM_REGEX" "$NPM_PATH"
+          decide pypi "$PYPI_ENABLED" "$PYPI_REGEX" "$PYPI_PATH"
 
   nuget:
     needs: detect-and-version
@@ -249,3 +305,20 @@ jobs:
       npm_registry_url: ${{ inputs.npm_registry_url }}
       package_version: ${{ needs.detect-and-version.outputs.npm_version }}
       is_alpha: ${{ inputs.is_alpha }}
+
+  # Build-only: produces sdist + wheel, runs twine check, uploads as a
+  # workflow artifact. The OIDC publish step lives in the caller's
+  # workflow so that the OIDC token's job_workflow_ref claim stays
+  # pointed at the caller — narrowing the trusted-publisher trust scope
+  # to (caller_repo, caller_filename) instead of widening it to
+  # (reusable_repo, reusable_filename).
+  pypi:
+    needs: detect-and-version
+    if: inputs.pypi_enabled && needs.detect-and-version.outputs.pypi_changed == 'true'
+    permissions:
+      contents: read
+    uses: hwinther/reusable-workflows/.github/workflows/pypi-deploy.yml@v1
+    with:
+      working-directory: ${{ inputs.pypi_working_directory }}
+      python_version: ${{ inputs.pypi_python_version }}
+      package_version: ${{ needs.detect-and-version.outputs.pypi_version }}

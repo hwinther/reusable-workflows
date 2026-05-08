@@ -1,0 +1,140 @@
+name: "Build a Python distribution and upload it as an Actions artifact for OIDC publishing in the caller"
+
+# Layer-1 PyPI build reusable. This workflow does NOT publish — it only
+# builds + checks the distribution and uploads it as a workflow artifact.
+# The caller is responsible for downloading the artifact and running
+# pypa/gh-action-pypi-publish itself.
+#
+# Why split: PyPI's trusted-publisher matching uses the OIDC token's
+# job_workflow_ref claim, which always points at the deepest workflow
+# in the call chain. If the publish step lived inside this reusable,
+# job_workflow_ref would be `hwinther/reusable-workflows/.github/
+# workflows/pypi-deploy.yml`, forcing every consumer to register their
+# trusted publisher against this repo + filename. That widens the trust
+# scope to "anyone who can call this reusable from any repo with the
+# right environment name" — undesirable for production publishing.
+#
+# By moving the OIDC publish step to the caller, job_workflow_ref stays
+# pinned to the caller's own workflow filename, and trusted publishers
+# can be registered against the caller's repo + caller's workflow file.
+# Caller boilerplate is one extra job; trust scope stays narrow.
+#
+# The package's pyproject.toml is expected to source its version from
+# HATCH_VERSION (hatchling: [tool.hatch.version] source = "env",
+# variable = "HATCH_VERSION"), or any backend with the same env-var
+# convention.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: true
+        type: string
+        description: "Directory containing the package's pyproject.toml."
+      python_version:
+        required: false
+        type: string
+        description: "Python version, e.g. '3.13'."
+        default: "3.13"
+      package_version:
+        required: true
+        type: string
+        description: "PEP 440 package version (e.g. '0.1.7' or '0.1.7.dev42'). Injected via HATCH_VERSION at build time."
+      artifact_name:
+        required: false
+        type: string
+        description: "Name of the uploaded artifact. Must be unique per workflow run; default derives from working_directory + package_version."
+        default: ""
+    outputs:
+      artifact_name:
+        description: "Name of the uploaded artifact. Caller uses this to actions/download-artifact and publish."
+        value: ${{ jobs.build.outputs.artifact_name }}
+      package_name:
+        description: "Distribution name read from pyproject.toml's [project].name."
+        value: ${{ jobs.build.outputs.package_name }}
+
+jobs:
+  build:
+    name: "Build pypi ${{ inputs.package_version }}"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HATCH_VERSION: ${{ inputs.package_version }}
+    outputs:
+      artifact_name: ${{ steps.resolve-artifact.outputs.name }}
+      package_name: ${{ steps.read-name.outputs.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        name: Set up Python
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: "pip"
+          cache-dependency-path: ${{ format('{0}/pyproject.toml', inputs.working-directory) }}
+
+      - name: Read distribution name
+        id: read-name
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          name=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['name'])")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve artifact name
+        id: resolve-artifact
+        env:
+          INPUT_NAME: ${{ inputs.artifact_name }}
+          PKG_NAME: ${{ steps.read-name.outputs.name }}
+          PKG_VERSION: ${{ inputs.package_version }}
+        run: |
+          if [ -n "$INPUT_NAME" ]; then
+            name="$INPUT_NAME"
+          else
+            name="pypi-dist-${PKG_NAME}-${PKG_VERSION}"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build sdist + wheel
+        working-directory: ${{ inputs.working-directory }}
+        run: python -m build --sdist --wheel
+
+      - name: Twine check
+        working-directory: ${{ inputs.working-directory }}
+        run: twine check dist/*
+
+      - name: Upload distribution artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.resolve-artifact.outputs.name }}
+          path: ${{ inputs.working-directory }}/dist/
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Summary
+        if: always()
+        env:
+          PKG_NAME: ${{ steps.read-name.outputs.name }}
+          PKG_VERSION: ${{ inputs.package_version }}
+          ARTIFACT_NAME: ${{ steps.resolve-artifact.outputs.name }}
+        run: |
+          {
+            echo "### PyPI artifact build"
+            echo ""
+            echo "- Package: \`${PKG_NAME}\`"
+            echo "- Version: \`${PKG_VERSION}\`"
+            echo "- Artifact: \`${ARTIFACT_NAME}\`"
+            echo "- Branch: \`${GITHUB_REF_NAME}\`"
+            echo "- SHA: \`${GITHUB_SHA:0:7}\`"
+            echo ""
+            echo "Caller workflow is responsible for the OIDC publish step \\"
+            echo "(actions/download-artifact + pypa/gh-action-pypi-publish)."
+          } >> "$GITHUB_STEP_SUMMARY"

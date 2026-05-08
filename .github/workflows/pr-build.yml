@@ -1,8 +1,10 @@
-# Build and lint in PR - supports node and dotnet
+# Build and lint in PR - supports node, dotnet, and python
 
 # Node expects a package lock from npm and the following scripts: typecheck (tsc), lint:ci (eslint -f json), build (npm run build), coverage:ci (test and generate coverage report)
 
 # Dotnet expects a solution file (sln/slnx) and: build (dotnet build)
+
+# Python expects a hatchling-style pyproject.toml in python_working_directory with a [project.optional-dependencies] dev group (ruff, mypy, pytest, pytest-cov, build). The action runs ruff check + ruff format --check + mypy + pytest + python -m build smoke.
 
 name: "Build and lint in PR"
 
@@ -108,6 +110,41 @@ on:
         type: boolean
         description: "Run jetbrains inspect code"
         default: true
+      python_enabled:
+        required: false
+        type: boolean
+        description: "Run python build and file change detection. Opt-in: callers must set this explicitly."
+        default: false
+      python_version:
+        required: false
+        type: string
+        description: "Python version, e.g. 3.13"
+        default: "3.13"
+      python_working_directory:
+        required: false
+        type: string
+        description: "Working directory for the python build. The pyproject.toml is expected to be in this directory."
+        default: ""
+      python_changes_regex:
+        required: false
+        type: string
+        description: "Regex for files to check for changes. When unset, derived from python_working_directory plus python_local_path_dependencies (so a same-repo dep change triggers a rebuild)."
+        default: ""
+      python_local_path_dependencies:
+        required: false
+        type: string
+        description: "Newline-separated repo-relative paths to install editable before the package itself. Use when this package depends on a sibling package in the same repo (e.g. client → contracts)."
+        default: ""
+      python_extra_command:
+        required: false
+        type: string
+        description: "Extra command to run after install, before lint/test"
+        default: ""
+      python_test_enabled:
+        required: false
+        type: boolean
+        description: "Run pytest with coverage"
+        default: true
       todo_comment_enabled:
         required: false
         type: boolean
@@ -138,6 +175,7 @@ jobs:
     outputs:
       node_changes: ${{ steps.node-check.outputs.changes_detected || 'false' }}
       dotnet_changes: ${{ steps.dotnet-check.outputs.changes_detected || 'false' }}
+      python_changes: ${{ steps.python-check.outputs.changes_detected || 'false' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -210,6 +248,57 @@ jobs:
             PATTERN="^${SOURCE_PATH}/"
           else
             PATTERN=".*"
+          fi
+
+          echo "Using regex pattern: $PATTERN"
+          echo "Files to check against:"
+          git diff --name-only "$BASE_REF"...HEAD
+
+          {
+            echo "## 🔍 ${LABEL} change check"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
+            echo "changes_detected=true" >> "$GITHUB_OUTPUT"
+            echo "Changes detected in pattern."
+            echo "✅ Changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changes_detected=false" >> "$GITHUB_OUTPUT"
+            echo "No changes detected in pattern."
+            echo "⏭️ No changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Check for python changes
+        id: python-check
+        if: inputs.python_enabled
+        env:
+          SOURCE_PATH: ${{ inputs.python_working_directory }}
+          REGEX: ${{ inputs.python_changes_regex }}
+          LOCAL_DEPS: ${{ inputs.python_local_path_dependencies }}
+          BASE_REF: ${{ steps.set-base.outputs.base_ref }}
+          LABEL: "Python"
+        run: |
+          set -euo pipefail
+          if [ -n "$REGEX" ]; then
+            PATTERN="$REGEX"
+          else
+            # Build "^(p1|p2|...)/" from working_directory plus each local_path_dependencies
+            # entry, so a change in a same-repo sibling dep triggers a rebuild.
+            paths=()
+            [ -n "$SOURCE_PATH" ] && paths+=("$SOURCE_PATH")
+            while IFS= read -r line; do
+              dep=$(echo "$line" | tr -d '[:space:]')
+              [ -n "$dep" ] && paths+=("$dep")
+            done <<< "$LOCAL_DEPS"
+            if [ ${#paths[@]} -eq 0 ]; then
+              PATTERN=".*"
+            elif [ ${#paths[@]} -eq 1 ]; then
+              PATTERN="^${paths[0]}/"
+            else
+              joined=$(IFS='|'; echo "${paths[*]}")
+              PATTERN="^(${joined})/"
+            fi
           fi
 
           echo "Using regex pattern: $PATTERN"
@@ -310,8 +399,42 @@ jobs:
           comment-identifier: "build-results-dotnet"
           comment-content: ${{ steps.dotnet-build.outputs.pr-comment }}
 
+  python-build:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.python_changes == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build python
+        id: python-build
+        uses: hwinther/reusable-workflows/.github/actions/python-build@v1
+        with:
+          python_version: ${{ inputs.python_version }}
+          working_directory: ${{ inputs.python_working_directory }}
+          local_path_dependencies: ${{ inputs.python_local_path_dependencies }}
+          extra_command: ${{ inputs.python_extra_command }}
+          test: ${{ inputs.python_test_enabled }}
+
+      - name: "Create or update PR comment for python"
+        uses: im-open/update-pr-comment@b782531000dfcf02162c0bd9e78639d82a13c3b5 # v1.2.2
+        if: always() && github.event_name == 'pull_request'
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-identifier: "build-results-python"
+          comment-content: ${{ steps.python-build.outputs.pr-comment }}
+
   pr-build:
-    needs: [detect-changes, node-build, dotnet-build]
+    needs: [detect-changes, node-build, dotnet-build, python-build]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -326,6 +449,7 @@ jobs:
           echo "|-------|------------------|--------------|" >> $GITHUB_STEP_SUMMARY
           NODE_RESULT="${{ needs.node-build.result }}"
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
+          PYTHON_RESULT="${{ needs.python-build.result }}"
           # Derive "changes detected" from whether the build ran (outputs can be empty when jobs are skipped + always())
           if [ "$NODE_RESULT" = "skipped" ]; then
             NODE_STATUS="No"
@@ -350,15 +474,29 @@ jobs:
               DOTNET_BUILD="❌ $DOTNET_RESULT"
             fi
           fi
+
+          if [ "$PYTHON_RESULT" = "skipped" ]; then
+            PYTHON_STATUS="No"
+            PYTHON_BUILD="— (skipped)"
+          else
+            PYTHON_STATUS="✅ Yes"
+            if [ "$PYTHON_RESULT" = "success" ]; then
+              PYTHON_BUILD="✅ Success"
+            else
+              PYTHON_BUILD="❌ $PYTHON_RESULT"
+            fi
+          fi
           echo "| Node (frontend) | $NODE_STATUS | $NODE_BUILD |" >> $GITHUB_STEP_SUMMARY
           echo "| Dotnet (backend) | $DOTNET_STATUS | $DOTNET_BUILD |" >> $GITHUB_STEP_SUMMARY
+          echo "| Python | $PYTHON_STATUS | $PYTHON_BUILD |" >> $GITHUB_STEP_SUMMARY
 
       - name: Check build status
         run: |
           NODE_RESULT="${{ needs.node-build.result }}"
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
+          PYTHON_RESULT="${{ needs.python-build.result }}"
 
-          if [ "$NODE_RESULT" = "skipped" ] && [ "$DOTNET_RESULT" = "skipped" ]; then
+          if [ "$NODE_RESULT" = "skipped" ] && [ "$DOTNET_RESULT" = "skipped" ] && [ "$PYTHON_RESULT" = "skipped" ]; then
             echo "✅ No relevant changes found for build or lint."
             exit 0
           fi
@@ -372,6 +510,10 @@ jobs:
             echo "❌ Dotnet build failed or did not run."
             FAILED=1
           fi
+          if [ "$PYTHON_RESULT" != "skipped" ] && [ "$PYTHON_RESULT" != "success" ]; then
+            echo "❌ Python build failed or did not run."
+            FAILED=1
+          fi
 
           if [ $FAILED -eq 1 ]; then
             exit 1
@@ -381,7 +523,7 @@ jobs:
 
       - name: "Create or update PR comment (no relevant changes)"
         uses: im-open/update-pr-comment@b782531000dfcf02162c0bd9e78639d82a13c3b5 # v1.2.2
-        if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped'
+        if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped'
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: "build-results"
@@ -434,7 +576,7 @@ jobs:
 
   todo-comments:
     needs: detect-changes
-    if: inputs.todo_comment_enabled && (needs.detect-changes.outputs.dotnet_changes == 'true' || needs.detect-changes.outputs.node_changes == 'true')
+    if: inputs.todo_comment_enabled && (needs.detect-changes.outputs.dotnet_changes == 'true' || needs.detect-changes.outputs.node_changes == 'true' || needs.detect-changes.outputs.python_changes == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
