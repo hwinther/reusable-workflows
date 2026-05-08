@@ -88,6 +88,40 @@ on:
         required: false
         type: string
         default: ''
+
+      # pypi ---------------------------------------------------------------
+      pypi_enabled:
+        required: false
+        type: boolean
+        default: false
+      pypi_working_directory:
+        required: false
+        type: string
+        default: '.'
+      pypi_python_version:
+        required: false
+        type: string
+        default: '3.13'
+      pypi_changes_regex:
+        description: "Regex matched against changed file paths. Empty means 'always run when pypi_enabled'."
+        required: false
+        type: string
+        default: ''
+      pypi_version_path:
+        description: "Optional path scope. Drives both version computation (only commits touching this path count toward the patch increment) and change-detection gating (publish only runs when this path has changes since the base). Empty (default) = all commits count, always run. Overridden by pypi_changes_regex when that input is set."
+        required: false
+        type: string
+        default: ''
+      pypi_repository_url:
+        description: "PyPI upload endpoint passed through to pypi-deploy. Defaults to test.pypi.org. Set to 'https://upload.pypi.org/legacy/' for production PyPI."
+        required: false
+        type: string
+        default: 'https://test.pypi.org/legacy/'
+      pypi_environment:
+        description: "GitHub environment name. Must match the environment registered with the PyPI trusted publisher. Required when pypi_enabled=true."
+        required: false
+        type: string
+        default: ''
     secrets:
       packages_pat:
         description: "PAT with read:packages scope used by nuget-deploy for restoring private dependencies. Falls back to GITHUB_TOKEN inside nuget-deploy when unset."
@@ -102,12 +136,18 @@ on:
       npm_version:
         description: "Computed npm package version (empty when npm_enabled=false)."
         value: ${{ jobs.detect-and-version.outputs.npm_version }}
+      pypi_version:
+        description: "Computed pypi package version (PEP 440; empty when pypi_enabled=false)."
+        value: ${{ jobs.detect-and-version.outputs.pypi_version }}
       nuget_published:
         description: "'true' if the nuget job ran (fanned out and not skipped)."
         value: ${{ jobs.nuget.result == 'success' }}
       npm_published:
         description: "'true' if the npm job ran (fanned out and not skipped)."
         value: ${{ jobs.npm.result == 'success' }}
+      pypi_published:
+        description: "'true' if the pypi job ran (fanned out and not skipped)."
+        value: ${{ jobs.pypi.result == 'success' }}
 
 jobs:
   detect-and-version:
@@ -120,8 +160,11 @@ jobs:
       nuget_informational_version: ${{ steps.nuget_pkgver.outputs.informational_version }}
       npm_version: ${{ steps.npm_pkgver.outputs.version }}
       npm_informational_version: ${{ steps.npm_pkgver.outputs.informational_version }}
+      pypi_version: ${{ steps.pypi_pkgver.outputs.version }}
+      pypi_informational_version: ${{ steps.pypi_pkgver.outputs.informational_version }}
       nuget_changed: ${{ steps.changes.outputs.nuget_changed }}
       npm_changed: ${{ steps.changes.outputs.npm_changed }}
+      pypi_changed: ${{ steps.changes.outputs.pypi_changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -149,15 +192,41 @@ jobs:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.npm_version_path }}
 
+      # Relative path: pypi requires the new format=pep440 / run_number inputs
+      # which only exist on this ref of package-version, not at @v1 yet.
+      # nuget/npm above keep @v1 because they don't pass the new inputs.
+      - name: Compute pypi version
+        id: pypi_pkgver
+        if: inputs.pypi_enabled
+        uses: ./.github/actions/package-version
+        with:
+          is_alpha: ${{ inputs.is_alpha }}
+          path: ${{ inputs.pypi_version_path }}
+          format: pep440
+          run_number: ${{ github.run_number }}
+
+      - name: Validate pypi inputs
+        if: inputs.pypi_enabled
+        env:
+          PYPI_ENVIRONMENT: ${{ inputs.pypi_environment }}
+        run: |
+          if [ -z "$PYPI_ENVIRONMENT" ]; then
+            echo "::error::pypi_enabled=true requires pypi_environment to be set (must match the GitHub environment bound to the PyPI trusted publisher)."
+            exit 1
+          fi
+
       - name: Detect changes per ecosystem
         id: changes
         env:
           NUGET_ENABLED: ${{ inputs.nuget_enabled }}
           NPM_ENABLED: ${{ inputs.npm_enabled }}
+          PYPI_ENABLED: ${{ inputs.pypi_enabled }}
           NUGET_REGEX: ${{ inputs.nuget_changes_regex }}
           NPM_REGEX: ${{ inputs.npm_changes_regex }}
+          PYPI_REGEX: ${{ inputs.pypi_changes_regex }}
           NUGET_PATH: ${{ inputs.nuget_version_path }}
           NPM_PATH: ${{ inputs.npm_version_path }}
+          PYPI_PATH: ${{ inputs.pypi_version_path }}
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -213,6 +282,7 @@ jobs:
 
           decide nuget "$NUGET_ENABLED" "$NUGET_REGEX" "$NUGET_PATH"
           decide npm "$NPM_ENABLED" "$NPM_REGEX" "$NPM_PATH"
+          decide pypi "$PYPI_ENABLED" "$PYPI_REGEX" "$PYPI_PATH"
 
   nuget:
     needs: detect-and-version
@@ -249,3 +319,22 @@ jobs:
       npm_registry_url: ${{ inputs.npm_registry_url }}
       package_version: ${{ needs.detect-and-version.outputs.npm_version }}
       is_alpha: ${{ inputs.is_alpha }}
+
+  # Relative path: pypi-deploy.yml is being introduced in this same change
+  # set and isn't on the @v1 tag yet. Once these workflows have a stabilized
+  # release that includes pypi support, this can switch to absolute @v1 to
+  # match the nuget/npm pattern.
+  pypi:
+    needs: detect-and-version
+    if: inputs.pypi_enabled && needs.detect-and-version.outputs.pypi_changed == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    uses: ./.github/workflows/pypi-deploy.yml
+    with:
+      working-directory: ${{ inputs.pypi_working_directory }}
+      python_version: ${{ inputs.pypi_python_version }}
+      package_version: ${{ needs.detect-and-version.outputs.pypi_version }}
+      is_alpha: ${{ inputs.is_alpha }}
+      repository_url: ${{ inputs.pypi_repository_url }}
+      environment: ${{ inputs.pypi_environment }}
