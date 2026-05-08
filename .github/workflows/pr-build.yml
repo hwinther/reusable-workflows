@@ -415,15 +415,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Pinned to the same ref this PR lives on so feature-branch
-      # verification works end-to-end before a v1 release that includes
-      # python-build exists. Flip to @v1 once the release is cut.
-      # Relative './.github/actions/...' would break here: when this
-      # reusable workflow is called from a different repo, GitHub resolves
-      # local-action paths against the *caller's* checkout, not this repo.
       - name: Build python
         id: python-build
-        uses: hwinther/reusable-workflows/.github/actions/python-build@feat/python-support
+        uses: hwinther/reusable-workflows/.github/actions/python-build@v1
         with:
           python_version: ${{ inputs.python_version }}
           working_directory: ${{ inputs.python_working_directory }}

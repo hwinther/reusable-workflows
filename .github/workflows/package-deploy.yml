@@ -188,17 +188,13 @@ jobs:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.npm_version_path }}
 
-      # Pinned to feat/python-support (this PR's ref): pypi requires the new
-      # format=pep440 / run_number inputs which only exist on this ref of
-      # package-version, not at @v1 yet. nuget/npm above keep @v1 because
-      # they don't pass the new inputs. Flip to @v1 once the release is cut.
-      # Relative './.github/actions/...' would break: when package-deploy.yml
-      # is called from a different repo, GitHub resolves local-action paths
-      # against the *caller's* checkout, not this repo.
+      # pypi passes the format=pep440 / run_number inputs added to
+      # package-version in this same release. nuget/npm don't and stay
+      # on the same @v1 ref.
       - name: Compute pypi version
         id: pypi_pkgver
         if: inputs.pypi_enabled
-        uses: hwinther/reusable-workflows/.github/actions/package-version@feat/python-support
+        uses: hwinther/reusable-workflows/.github/actions/package-version@v1
         with:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.pypi_version_path }}
@@ -316,16 +312,12 @@ jobs:
   # pointed at the caller — narrowing the trusted-publisher trust scope
   # to (caller_repo, caller_filename) instead of widening it to
   # (reusable_repo, reusable_filename).
-  #
-  # Pinned to feat/python-support (this PR's ref): pypi-deploy.yml is
-  # being introduced in this same change set and isn't on the @v1 tag
-  # yet. Flip to @v1 once the release is cut.
   pypi:
     needs: detect-and-version
     if: inputs.pypi_enabled && needs.detect-and-version.outputs.pypi_changed == 'true'
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/pypi-deploy.yml@feat/python-support
+    uses: hwinther/reusable-workflows/.github/workflows/pypi-deploy.yml@v1
     with:
       working-directory: ${{ inputs.pypi_working_directory }}
       python_version: ${{ inputs.pypi_python_version }}
