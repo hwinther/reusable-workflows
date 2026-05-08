@@ -64,6 +64,11 @@ on:
         required: false
         type: boolean
         default: true
+      code_scanning_upload_enabled:
+        description: "Upload the Grype SARIF to GitHub Code Scanning. Set to false on private repositories without GitHub Advanced Security; findings still go to the job summary, the PR comment, and the severity gate."
+        required: false
+        type: boolean
+        default: true
       generate_supply_chain_artifacts:
         description: "Generate CycloneDX SBOM and Grype JSON for downstream cosign attestations in image-push.yml"
         required: false
@@ -215,6 +220,7 @@ jobs:
           grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
           grype_fail_build: ${{ inputs.grype_fail_build }}
+          code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
           cosign_supply_chain_attest_enabled: ${{ inputs.generate_supply_chain_artifacts }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
