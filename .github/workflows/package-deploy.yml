@@ -112,16 +112,6 @@ on:
         required: false
         type: string
         default: ''
-      pypi_repository_url:
-        description: "PyPI upload endpoint passed through to pypi-deploy. Defaults to test.pypi.org. Set to 'https://upload.pypi.org/legacy/' for production PyPI."
-        required: false
-        type: string
-        default: 'https://test.pypi.org/legacy/'
-      pypi_environment:
-        description: "GitHub environment name. Must match the environment registered with the PyPI trusted publisher. Required when pypi_enabled=true."
-        required: false
-        type: string
-        default: ''
     secrets:
       packages_pat:
         description: "PAT with read:packages scope used by nuget-deploy for restoring private dependencies. Falls back to GITHUB_TOKEN inside nuget-deploy when unset."
@@ -139,14 +129,20 @@ on:
       pypi_version:
         description: "Computed pypi package version (PEP 440; empty when pypi_enabled=false)."
         value: ${{ jobs.detect-and-version.outputs.pypi_version }}
+      pypi_artifact_name:
+        description: "Name of the uploaded pypi distribution artifact. Caller uses this with actions/download-artifact + pypa/gh-action-pypi-publish in its own job to keep OIDC trust scope at the caller."
+        value: ${{ jobs.pypi.outputs.artifact_name }}
+      pypi_package_name:
+        description: "Distribution name read from the pypi package's pyproject.toml."
+        value: ${{ jobs.pypi.outputs.package_name }}
       nuget_published:
         description: "'true' if the nuget job ran (fanned out and not skipped)."
         value: ${{ jobs.nuget.result == 'success' }}
       npm_published:
         description: "'true' if the npm job ran (fanned out and not skipped)."
         value: ${{ jobs.npm.result == 'success' }}
-      pypi_published:
-        description: "'true' if the pypi job ran (fanned out and not skipped)."
+      pypi_built:
+        description: "'true' if the pypi build job ran (fanned out and not skipped). Caller still has to perform the OIDC publish step."
         value: ${{ jobs.pypi.result == 'success' }}
 
 jobs:
@@ -208,16 +204,6 @@ jobs:
           path: ${{ inputs.pypi_version_path }}
           format: pep440
           run_number: ${{ github.run_number }}
-
-      - name: Validate pypi inputs
-        if: inputs.pypi_enabled
-        env:
-          PYPI_ENVIRONMENT: ${{ inputs.pypi_environment }}
-        run: |
-          if [ -z "$PYPI_ENVIRONMENT" ]; then
-            echo "::error::pypi_enabled=true requires pypi_environment to be set (must match the GitHub environment bound to the PyPI trusted publisher)."
-            exit 1
-          fi
 
       - name: Detect changes per ecosystem
         id: changes
@@ -324,22 +310,23 @@ jobs:
       package_version: ${{ needs.detect-and-version.outputs.npm_version }}
       is_alpha: ${{ inputs.is_alpha }}
 
-  # Pinned to feat/python-support (this PR's ref): pypi-deploy.yml is being
-  # introduced in this same change set and isn't on the @v1 tag yet. Flip
-  # to @v1 once the release is cut. Relative './.github/workflows/...'
-  # doesn't work here: nested reusable workflow calls from another repo
-  # require an absolute owner/repo/path@ref reference.
+  # Build-only: produces sdist + wheel, runs twine check, uploads as a
+  # workflow artifact. The OIDC publish step lives in the caller's
+  # workflow so that the OIDC token's job_workflow_ref claim stays
+  # pointed at the caller — narrowing the trusted-publisher trust scope
+  # to (caller_repo, caller_filename) instead of widening it to
+  # (reusable_repo, reusable_filename).
+  #
+  # Pinned to feat/python-support (this PR's ref): pypi-deploy.yml is
+  # being introduced in this same change set and isn't on the @v1 tag
+  # yet. Flip to @v1 once the release is cut.
   pypi:
     needs: detect-and-version
     if: inputs.pypi_enabled && needs.detect-and-version.outputs.pypi_changed == 'true'
     permissions:
-      id-token: write
       contents: read
     uses: hwinther/reusable-workflows/.github/workflows/pypi-deploy.yml@feat/python-support
     with:
       working-directory: ${{ inputs.pypi_working_directory }}
       python_version: ${{ inputs.pypi_python_version }}
       package_version: ${{ needs.detect-and-version.outputs.pypi_version }}
-      is_alpha: ${{ inputs.is_alpha }}
-      repository_url: ${{ inputs.pypi_repository_url }}
-      environment: ${{ inputs.pypi_environment }}

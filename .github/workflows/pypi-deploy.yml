@@ -1,19 +1,28 @@
-name: "Deploy package to PyPI (or test.pypi.org) via OIDC trusted publishing"
+name: "Build a Python distribution and upload it as an Actions artifact for OIDC publishing in the caller"
 
-# Layer-1 PyPI publish reusable. Called from package-deploy.yml when the
-# pypi ecosystem is enabled and changes are detected. The caller passes in
-# a precomputed PEP 440 version string and the working directory of the
-# package to build. No long-lived secrets — auth is OIDC trusted publishing
-# (PEP 740) via pypa/gh-action-pypi-publish, which means the consumer must
-# register a trusted publisher on PyPI / test.pypi.org for the
-# (repo, workflow_filename, environment) tuple of the *caller* workflow
-# (the workflow_ref in the OIDC claim is the entry workflow, not this
-# reusable).
+# Layer-1 PyPI build reusable. This workflow does NOT publish — it only
+# builds + checks the distribution and uploads it as a workflow artifact.
+# The caller is responsible for downloading the artifact and running
+# pypa/gh-action-pypi-publish itself.
 #
-# The package's pyproject.toml is expected to source its version from the
-# HATCH_VERSION env var (hatchling: [tool.hatch.version] source = "env",
-# variable = "HATCH_VERSION"). Other backends with the same pattern work
-# the same way as long as they read the same env var.
+# Why split: PyPI's trusted-publisher matching uses the OIDC token's
+# job_workflow_ref claim, which always points at the deepest workflow
+# in the call chain. If the publish step lived inside this reusable,
+# job_workflow_ref would be `hwinther/reusable-workflows/.github/
+# workflows/pypi-deploy.yml`, forcing every consumer to register their
+# trusted publisher against this repo + filename. That widens the trust
+# scope to "anyone who can call this reusable from any repo with the
+# right environment name" — undesirable for production publishing.
+#
+# By moving the OIDC publish step to the caller, job_workflow_ref stays
+# pinned to the caller's own workflow filename, and trusted publishers
+# can be registered against the caller's repo + caller's workflow file.
+# Caller boilerplate is one extra job; trust scope stays narrow.
+#
+# The package's pyproject.toml is expected to source its version from
+# HATCH_VERSION (hatchling: [tool.hatch.version] source = "env",
+# variable = "HATCH_VERSION"), or any backend with the same env-var
+# convention.
 
 on:
   workflow_call:
@@ -30,32 +39,31 @@ on:
       package_version:
         required: true
         type: string
-        description: "PEP 440 package version to publish (e.g. '0.1.7' or '0.1.7.dev42'). Injected via HATCH_VERSION."
-      is_alpha:
+        description: "PEP 440 package version (e.g. '0.1.7' or '0.1.7.dev42'). Injected via HATCH_VERSION at build time."
+      artifact_name:
         required: false
         type: string
-        description: "Informational only — included in the job summary. PEP 440 ordering already encodes prerelease semantics in the version string itself, so PyPI does not need a 'tag alpha' equivalent."
-        default: 'false'
-      repository_url:
-        required: false
-        type: string
-        description: "Upload endpoint. Defaults to test.pypi.org. Set to 'https://upload.pypi.org/legacy/' for production PyPI."
-        default: "https://test.pypi.org/legacy/"
-      environment:
-        required: true
-        type: string
-        description: "GitHub environment name. Must match the environment registered with the PyPI trusted publisher entry; OIDC won't authenticate otherwise."
+        description: "Name of the uploaded artifact. Must be unique per workflow run; default derives from working_directory + package_version."
+        default: ""
+    outputs:
+      artifact_name:
+        description: "Name of the uploaded artifact. Caller uses this to actions/download-artifact and publish."
+        value: ${{ jobs.build.outputs.artifact_name }}
+      package_name:
+        description: "Distribution name read from pyproject.toml's [project].name."
+        value: ${{ jobs.build.outputs.package_name }}
 
 jobs:
-  deploy:
-    name: "Deploy pypi ${{ inputs.package_version }}"
+  build:
+    name: "Build pypi ${{ inputs.package_version }}"
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }}
     permissions:
-      id-token: write
       contents: read
     env:
       HATCH_VERSION: ${{ inputs.package_version }}
+    outputs:
+      artifact_name: ${{ steps.resolve-artifact.outputs.name }}
+      package_name: ${{ steps.read-name.outputs.name }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -68,6 +76,27 @@ jobs:
           python-version: ${{ inputs.python_version }}
           cache: "pip"
           cache-dependency-path: ${{ format('{0}/pyproject.toml', inputs.working-directory) }}
+
+      - name: Read distribution name
+        id: read-name
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          name=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['name'])")
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve artifact name
+        id: resolve-artifact
+        env:
+          INPUT_NAME: ${{ inputs.artifact_name }}
+          PKG_NAME: ${{ steps.read-name.outputs.name }}
+          PKG_VERSION: ${{ inputs.package_version }}
+        run: |
+          if [ -n "$INPUT_NAME" ]; then
+            name="$INPUT_NAME"
+          else
+            name="pypi-dist-${PKG_NAME}-${PKG_VERSION}"
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
 
       - name: Install build tooling
         run: |
@@ -82,51 +111,30 @@ jobs:
         working-directory: ${{ inputs.working-directory }}
         run: twine check dist/*
 
-      # TODO: pin pypa/gh-action-pypi-publish to a SHA. Currently tracking
-      # release/v1 to match what test-pypi was using inline. The SHA pin
-      # should land before the v1 release of these reusable workflows.
-      - name: Publish to PyPI (OIDC)
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Upload distribution artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          repository-url: ${{ inputs.repository_url }}
-          packages-dir: ${{ inputs.working-directory }}/dist/
-          skip-existing: true
+          name: ${{ steps.resolve-artifact.outputs.name }}
+          path: ${{ inputs.working-directory }}/dist/
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Summary
         if: always()
-        working-directory: ${{ inputs.working-directory }}
         env:
+          PKG_NAME: ${{ steps.read-name.outputs.name }}
           PKG_VERSION: ${{ inputs.package_version }}
-          IS_ALPHA: ${{ inputs.is_alpha }}
-          REPOSITORY_URL: ${{ inputs.repository_url }}
-          ENV_NAME: ${{ inputs.environment }}
+          ARTIFACT_NAME: ${{ steps.resolve-artifact.outputs.name }}
         run: |
-          # Read distribution name from pyproject.toml for the summary URL.
-          PKG_NAME=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['name'])" 2>/dev/null || echo "<unknown>")
-          # Derive the project page from the upload endpoint.
-          case "$REPOSITORY_URL" in
-            *test.pypi.org*) PROJECT_BASE="https://test.pypi.org/project" ;;
-            *)               PROJECT_BASE="https://pypi.org/project" ;;
-          esac
           {
-            echo "### PyPI publish"
+            echo "### PyPI artifact build"
             echo ""
             echo "- Package: \`${PKG_NAME}\`"
             echo "- Version: \`${PKG_VERSION}\`"
-            echo "- Alpha: \`${IS_ALPHA}\`"
+            echo "- Artifact: \`${ARTIFACT_NAME}\`"
             echo "- Branch: \`${GITHUB_REF_NAME}\`"
             echo "- SHA: \`${GITHUB_SHA:0:7}\`"
-            echo "- Environment: \`${ENV_NAME}\`"
-            echo "- Repository: \`${REPOSITORY_URL}\`"
-            echo "- URL: ${PROJECT_BASE}/${PKG_NAME}/${PKG_VERSION}/"
             echo ""
-            echo "Install:"
-            echo ""
-            echo '```sh'
-            if [ "${REPOSITORY_URL}" = "https://test.pypi.org/legacy/" ]; then
-              echo "pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ '${PKG_NAME}==${PKG_VERSION}'"
-            else
-              echo "pip install '${PKG_NAME}==${PKG_VERSION}'"
-            fi
-            echo '```'
+            echo "Caller workflow is responsible for the OIDC publish step \\"
+            echo "(actions/download-artifact + pypa/gh-action-pypi-publish)."
           } >> "$GITHUB_STEP_SUMMARY"
