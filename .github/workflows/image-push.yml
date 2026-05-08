@@ -45,6 +45,11 @@ on:
         required: false
         type: boolean
         default: true
+      attest_build_provenance_enabled:
+        description: "Generate a GitHub artifact attestation (actions/attest-build-provenance). Set to false on private repositories without GitHub Advanced Security / paid plan; Cosign-based signatures and attestations still run."
+        required: false
+        type: boolean
+        default: true
       sbom_artifact_name:
         description: "Workflow artifact holding the CycloneDX SBOM (build-and-scan-*.yml sbom_artifact). Required when cosign_supply_chain_attest_enabled is true."
         required: false
@@ -159,6 +164,7 @@ jobs:
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
           cosign_sign_enabled: ${{ inputs.cosign_sign_enabled }}
           cosign_supply_chain_attest_enabled: ${{ inputs.cosign_supply_chain_attest_enabled }}
+          attest_build_provenance_enabled: ${{ inputs.attest_build_provenance_enabled }}
           sbom_cyclonedx_path: ${{ steps.predicates.outputs.sbom_cyclonedx_path }}
           grype_json_path: ${{ steps.predicates.outputs.grype_json_path }}
           version: ${{ inputs.version }}
