@@ -79,6 +79,7 @@ runs:
           fi
         else
           TAG="v0.0.0"
+          BOOTSTRAP=1
           if [ -n "$PATH_FILTER" ]; then
             COMMITS=$(git rev-list HEAD --count -- "$PATH_FILTER")
           else
@@ -91,7 +92,14 @@ runs:
         MINOR=$(echo "$BASE" | cut -d. -f2)
         PATCH=$(echo "$BASE" | cut -d. -f3)
 
-        if [ "$COMMITS" = "0" ]; then
+        if [ "${BOOTSTRAP:-0}" = "1" ] && [ "$FORMAT" = "pep440" ]; then
+          # Bootstrap floor for pep440: start at 0.1.0 so cross-package
+          # >=0.1 constraints (the typical idiom) resolve before any tag
+          # exists. Doesn't apply to semver — npm/nuget consumers tolerate
+          # 0.0.N just fine, and changing their behavior would be a
+          # backwards-incompatible bump.
+          STABLE="0.1.0"
+        elif [ "$COMMITS" = "0" ]; then
           STABLE="${MAJOR}.${MINOR}.${PATCH}"
         else
           STABLE="${MAJOR}.${MINOR}.$((PATCH + COMMITS))"
