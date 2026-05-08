@@ -29,12 +29,21 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Create temp directory
+    - name: Create temp directory and set defaults
       id: temp-dir
       shell: bash
       run: |
         TEMP_DIR=$(mktemp -d)
         echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
+        # Hatchling backends (and similar) read HATCH_VERSION at metadata
+        # generation, which happens during 'pip install -e' — not just at
+        # 'python -m build'. Use a non-prerelease bootstrap value so cross-
+        # package '>=0.1' constraints resolve when a sibling package is
+        # installed editable. Real publish workflows set HATCH_VERSION to
+        # the computed version themselves and override this.
+        if [ -z "${HATCH_VERSION:-}" ]; then
+          echo "HATCH_VERSION=0.1.0" >> $GITHUB_ENV
+        fi
 
     - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
       name: Set up Python
@@ -256,11 +265,6 @@ runs:
       if: steps.dependency-install.outcome == 'success'
       shell: bash
       working-directory: ${{ inputs.working_directory }}
-      env:
-        # Use a non-prerelease bootstrap version so the build doesn't fail on a
-        # missing HATCH_VERSION when the package uses dynamic version=env.
-        # Real publish workflows override this with the computed version.
-        HATCH_VERSION: "0.0.0"
       run: |
         echo "::group::Build sdist + wheel"
         set +e
