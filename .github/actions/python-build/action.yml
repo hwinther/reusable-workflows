@@ -132,9 +132,16 @@ runs:
       if: steps.dependency-install.outcome == 'success' && inputs.extra_command != ''
       shell: bash
       working-directory: ${{ inputs.working_directory }}
+      env:
+        # Passed via env (not template expansion) to avoid the runner
+        # interpolating the input into the run-script source — closes a
+        # zizmor 'code injection via template expansion' finding. The
+        # command is still executed as shell since that's the input's
+        # documented contract.
+        EXTRA_COMMAND: ${{ inputs.extra_command }}
       run: |
         echo "::group::Extra command"
-        ${{ inputs.extra_command }}
+        bash -c "$EXTRA_COMMAND"
         echo "::endgroup::"
 
     - name: Ruff lint
@@ -333,8 +340,13 @@ runs:
       id: pr-comment-combiner
       if: always()
       shell: bash
+      env:
+        # Passed via env (not template expansion) so the runner doesn't
+        # interpolate the input into the run-script source — closes a
+        # zizmor 'code injection via template expansion' finding.
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
       run: |
-        echo "# Python build status (${{ inputs.working_directory }})" > $TEMP_DIR/combined.md
+        echo "# Python build status ($WORKING_DIRECTORY)" > $TEMP_DIR/combined.md
         [ -f $TEMP_DIR/local-deps.md ]   && cat $TEMP_DIR/local-deps.md   >> $TEMP_DIR/combined.md
         [ -f $TEMP_DIR/dependency.md ]   && cat $TEMP_DIR/dependency.md   >> $TEMP_DIR/combined.md
         [ -f $TEMP_DIR/ruff-check.md ]   && cat $TEMP_DIR/ruff-check.md   >> $TEMP_DIR/combined.md
