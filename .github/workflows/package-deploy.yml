@@ -192,13 +192,17 @@ jobs:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.npm_version_path }}
 
-      # Relative path: pypi requires the new format=pep440 / run_number inputs
-      # which only exist on this ref of package-version, not at @v1 yet.
-      # nuget/npm above keep @v1 because they don't pass the new inputs.
+      # Pinned to feat/python-support (this PR's ref): pypi requires the new
+      # format=pep440 / run_number inputs which only exist on this ref of
+      # package-version, not at @v1 yet. nuget/npm above keep @v1 because
+      # they don't pass the new inputs. Flip to @v1 once the release is cut.
+      # Relative './.github/actions/...' would break: when package-deploy.yml
+      # is called from a different repo, GitHub resolves local-action paths
+      # against the *caller's* checkout, not this repo.
       - name: Compute pypi version
         id: pypi_pkgver
         if: inputs.pypi_enabled
-        uses: ./.github/actions/package-version
+        uses: hwinther/reusable-workflows/.github/actions/package-version@feat/python-support
         with:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.pypi_version_path }}
@@ -320,17 +324,18 @@ jobs:
       package_version: ${{ needs.detect-and-version.outputs.npm_version }}
       is_alpha: ${{ inputs.is_alpha }}
 
-  # Relative path: pypi-deploy.yml is being introduced in this same change
-  # set and isn't on the @v1 tag yet. Once these workflows have a stabilized
-  # release that includes pypi support, this can switch to absolute @v1 to
-  # match the nuget/npm pattern.
+  # Pinned to feat/python-support (this PR's ref): pypi-deploy.yml is being
+  # introduced in this same change set and isn't on the @v1 tag yet. Flip
+  # to @v1 once the release is cut. Relative './.github/workflows/...'
+  # doesn't work here: nested reusable workflow calls from another repo
+  # require an absolute owner/repo/path@ref reference.
   pypi:
     needs: detect-and-version
     if: inputs.pypi_enabled && needs.detect-and-version.outputs.pypi_changed == 'true'
     permissions:
       id-token: write
       contents: read
-    uses: ./.github/workflows/pypi-deploy.yml
+    uses: hwinther/reusable-workflows/.github/workflows/pypi-deploy.yml@feat/python-support
     with:
       working-directory: ${{ inputs.pypi_working_directory }}
       python_version: ${{ inputs.pypi_python_version }}

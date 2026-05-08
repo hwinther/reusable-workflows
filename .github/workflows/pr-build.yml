@@ -415,13 +415,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      # Relative path so the action runs at the same ref as this workflow,
-      # which is required for end-to-end verification of the python pipeline
-      # on a feature branch before a v1 tag exists. Existing node/dotnet
-      # references use absolute @v1 because those actions have stabilized.
+      # Pinned to the same ref this PR lives on so feature-branch
+      # verification works end-to-end before a v1 release that includes
+      # python-build exists. Flip to @v1 once the release is cut.
+      # Relative './.github/actions/...' would break here: when this
+      # reusable workflow is called from a different repo, GitHub resolves
+      # local-action paths against the *caller's* checkout, not this repo.
       - name: Build python
         id: python-build
-        uses: ./.github/actions/python-build
+        uses: hwinther/reusable-workflows/.github/actions/python-build@feat/python-support
         with:
           python_version: ${{ inputs.python_version }}
           working_directory: ${{ inputs.python_working_directory }}
