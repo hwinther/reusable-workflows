@@ -40,6 +40,10 @@ inputs:
     required: false
     description: "When true, generates the CycloneDX SBOM and the Grype JSON for downstream cosign attestation."
     default: "true"
+  code_scanning_upload_enabled:
+    required: false
+    description: "Upload the Grype SARIF to GitHub Code Scanning. Set to false on private repositories without GitHub Advanced Security (the Code Scanning API rejects uploads with `Advanced Security must be enabled`). When false, the Grype scan still runs and findings still appear in the job summary and PR comment via _grype-summary; only the Code Scanning UI integration is skipped, and the severity gate is enforced from the Grype step's outcome regardless."
+    default: "true"
   github_token:
     required: false
     description: "Token for the Grype-summary PR comment."
@@ -115,7 +119,7 @@ runs:
         fail-build: ${{ inputs.grype_fail_build }}
 
     - name: Upload Grype SARIF to Code Scanning
-      if: ${{ always() && inputs.grype_scan_enabled == 'true' && steps.grype-scan.outcome != 'skipped' }}
+      if: ${{ always() && inputs.grype_scan_enabled == 'true' && inputs.code_scanning_upload_enabled == 'true' && steps.grype-scan.outcome != 'skipped' }}
       uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # v4.35.3
       with:
         sarif_file: ${{ steps.paths.outputs.sarif_path }}
