@@ -36,7 +36,7 @@ inputs:
     required: false
     default: 'semver'
   run_number:
-    description: "Workflow run number used as the .dev<N> counter for pep440 alpha versions. Required when format=pep440 and is_alpha=true. Pass ${{ github.run_number }}."
+    description: "Workflow run number used as the .dev<N> counter for pep440 alpha versions. Required when format=pep440 and is_alpha=true. Pass github.run_number from the calling workflow."
     required: false
     default: ''
 
