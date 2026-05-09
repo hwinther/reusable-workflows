@@ -1,0 +1,64 @@
+name: "Prune npm packages on GitHub Packages (reusable)"
+
+# Deletes prerelease versions of the form `X.Y.Z-<label>.<short-sha>` whose
+# `<label>` refers to a branch that no longer exists on origin. Stable
+# versions, unrecognised version strings, and (when respect_dist_tags=true)
+# any version a dist-tag points at are KEPT (fail-safe).
+#
+# Auth note:
+#   For USER-scoped GitHub Packages namespaces, the caller's GITHUB_TOKEN can
+#   DELETE versions only when each package has "Inherit access from source
+#   repository" enabled (the default when first published from a workflow).
+#   If deletion 403s, the caller should pass NPM_PRUNE_TOKEN — a PAT with
+#   `delete:packages` (and `read:packages` for auto-discovery and the
+#   dist-tag fetch).
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "When false, actually delete versions. When true, only print what would be deleted."
+        type: boolean
+        required: true
+      package_names:
+        description: "Comma-separated package names to prune (e.g. '@hwinther/foo,@hwinther/bar'). Blank = auto-discover via the API."
+        type: string
+        required: false
+        default: ""
+      package_namespace_prefix:
+        description: "When auto-discovering, filter to package names starting with this prefix (e.g. '@hwinther/'). Blank = no filter."
+        type: string
+        required: false
+        default: ""
+      respect_dist_tags:
+        description: "When true (default), additionally KEEP any version a dist-tag (latest/alpha/…) points at, even if the branch is dead. Protects `npm install foo@alpha` from breaking after prune."
+        type: boolean
+        required: false
+        default: true
+      npm_registry_url:
+        description: "Base URL for the dist-tag fetch. Default is GitHub Packages."
+        type: string
+        required: false
+        default: "https://npm.pkg.github.com"
+    secrets:
+      NPM_PRUNE_TOKEN:
+        description: "Optional PAT with delete:packages (and read:packages for discovery and dist-tag lookup). Falls back to GITHUB_TOKEN when not set."
+        required: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Prune
+        uses: hwinther/reusable-workflows/.github/actions/_prune-package-versions@v1
+        with:
+          package_type: npm
+          dry_run: ${{ inputs.dry_run }}
+          package_names: ${{ inputs.package_names }}
+          package_namespace_prefix: ${{ inputs.package_namespace_prefix }}
+          respect_dist_tags: ${{ inputs.respect_dist_tags }}
+          npm_registry_url: ${{ inputs.npm_registry_url }}
+          gh_token: ${{ secrets.NPM_PRUNE_TOKEN || secrets.GITHUB_TOKEN }}

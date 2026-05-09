@@ -63,6 +63,9 @@ jobs:
           echo "images_input=$IMAGES_INPUT"
           echo "namespace_prefix=$NAMESPACE_PREFIX"
           echo "token_source=${{ secrets.GHCR_PRUNE_TOKEN != '' && 'GHCR_PRUNE_TOKEN' || 'GITHUB_TOKEN' }}"
+          if [ -z "$IMAGES_INPUT" ] && [ -z "$NAMESPACE_PREFIX" ]; then
+            echo "::warning::package_namespace_prefix is empty — pruner will enumerate ALL container packages owned by $OWNER."
+          fi
 
       - name: Compute live branch labels
         id: live
@@ -71,12 +74,19 @@ jobs:
           OWNER_LC=$(echo "$OWNER" | tr '[:upper:]' '[:lower:]')
           gh api "repos/$REPO/branches" --paginate --jq '.[].name' > /tmp/live-branches.txt
           # Approximate GitVersion's branch -> prerelease-label sanitisation:
-          # lowercase, replace any character that isn't [a-z0-9-] with '-'.
-          # Anything that doesn't match this round-trip will fall through to
-          # the "unknown tag" branch and be KEPT, so over-conservative.
+          # lowercase, replace any character that isn't [a-z0-9-] with '-',
+          # strip a trailing '-', and fall back to literal 'branch' when the
+          # result is empty. Both extra steps only widen the live-label set
+          # (never narrow it) so they cannot introduce a false PRUNE relative
+          # to the prior behaviour. We deliberately do NOT length-truncate
+          # here — GitVersion's default config does not, so truncating would
+          # narrow the set and risk false PRUNE on long branches.
           : > /tmp/live-labels.txt
           while read -r b; do
-            echo "$b" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g'
+            s=$(echo "$b" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+            s=${s%-}
+            [ -z "$s" ] && s="branch"
+            echo "$s"
           done < /tmp/live-branches.txt | sort -u > /tmp/live-labels.txt
           echo "Live branches:"; cat /tmp/live-branches.txt
           echo "Live labels:";   cat /tmp/live-labels.txt

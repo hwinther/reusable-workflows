@@ -1,0 +1,56 @@
+name: "Prune NuGet packages on GitHub Packages (reusable)"
+
+# Deletes prerelease versions of the form `X.Y.Z-<label>.<short-sha>` whose
+# `<label>` refers to a branch that no longer exists on origin. Stable
+# versions and unrecognised version strings are KEPT (fail-safe). NuGet has
+# no dist-tag concept, so there is no extra dist-tag protection beyond the
+# regex.
+#
+# Note: GitHub Packages NuGet `DELETE /versions/{id}` is a true delete (not
+# "unlist" like nuget.org). Pruned versions are gone — consumers with
+# lockfile entries pinned to a deleted prerelease will fail their next
+# restore. The workflow only matches dead-branch prereleases to keep this
+# safe in practice.
+#
+# Auth note: same as prune-ghcr.yml. Caller's GITHUB_TOKEN works for
+# deletions when packages "Inherit access from source repository" (default).
+# Otherwise pass NUGET_PRUNE_TOKEN — a PAT with `delete:packages` (and
+# `read:packages` for auto-discovery).
+
+on:
+  workflow_call:
+    inputs:
+      dry_run:
+        description: "When false, actually delete versions. When true, only print what would be deleted."
+        type: boolean
+        required: true
+      package_names:
+        description: "Comma-separated package names to prune (e.g. 'Hwinther.Foo,Hwinther.Bar'). Blank = auto-discover via the API."
+        type: string
+        required: false
+        default: ""
+      package_namespace_prefix:
+        description: "When auto-discovering, filter to package names starting with this prefix (e.g. 'Hwinther.'). Blank = no filter."
+        type: string
+        required: false
+        default: ""
+    secrets:
+      NUGET_PRUNE_TOKEN:
+        description: "Optional PAT with delete:packages (and read:packages for discovery). Falls back to GITHUB_TOKEN when not set."
+        required: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Prune
+        uses: hwinther/reusable-workflows/.github/actions/_prune-package-versions@v1
+        with:
+          package_type: nuget
+          dry_run: ${{ inputs.dry_run }}
+          package_names: ${{ inputs.package_names }}
+          package_namespace_prefix: ${{ inputs.package_namespace_prefix }}
+          gh_token: ${{ secrets.NUGET_PRUNE_TOKEN || secrets.GITHUB_TOKEN }}
