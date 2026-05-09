@@ -20,6 +20,10 @@ description: |
       exists. Skip on private repos without GHAS where signing was done
       with `attest_build_provenance_enabled: false`.
 
+  All enabled checks run regardless of earlier failures (`continue-on-error`)
+  so the job summary shows a complete picture in one go. The action exits
+  non-zero at the end if any enabled check failed.
+
   Caller must `docker login` to the registry first (the cosign and
   imagetools commands read manifests, signatures, and referrers from the
   registry). No id-token / attestations permissions needed — verify is
@@ -77,30 +81,39 @@ runs:
           *) echo "::error::image_subject must be of the form registry/name@sha256:... (got: $SUBJECT)"; exit 1 ;;
         esac
         echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        # Per-step logs are written here and consumed by the summary step.
+        DIR="${RUNNER_TEMP}/verify-image-results"
+        mkdir -p "$DIR"
+        echo "results_dir=$DIR" >> "$GITHUB_OUTPUT"
 
     - name: Verify tag → digest resolution
+      id: verify-tag-digest
       if: ${{ inputs.container_tags != '' }}
+      continue-on-error: true
       shell: bash
       env:
         EXPECTED: ${{ steps.subject.outputs.digest }}
         CONTAINER_TAGS: ${{ inputs.container_tags }}
+        LOG: ${{ steps.subject.outputs.results_dir }}/tag-digest.log
       run: |
         set -euo pipefail
-        rc=0
-        echo "$CONTAINER_TAGS" | tr ',' '\n' | while read -r tag; do
+        all_passed=true
+        : > "$LOG"
+        while IFS= read -r tag; do
           tag=$(echo "$tag" | xargs)
           [ -z "$tag" ] && continue
-          actual=$(docker buildx imagetools inspect "$tag" | awk '/^Digest:[[:space:]]+/ {print $2; exit}')
+          actual=$(docker buildx imagetools inspect "$tag" 2>>"$LOG" | awk '/^Digest:[[:space:]]+/ {print $2; exit}' || true)
           if [ -z "$actual" ]; then
-            echo "::error::Could not resolve digest for tag $tag"
-            exit 1
+            echo "Could not resolve digest for tag $tag" | tee -a "$LOG"
+            all_passed=false
+          elif [ "$actual" != "$EXPECTED" ]; then
+            echo "$tag → $actual  (EXPECTED $EXPECTED)" | tee -a "$LOG"
+            all_passed=false
+          else
+            echo "$tag → $EXPECTED ✓" | tee -a "$LOG"
           fi
-          if [ "$actual" != "$EXPECTED" ]; then
-            echo "::error::Tag $tag resolves to $actual but image_subject pins $EXPECTED. The tag was overwritten between push and verify, or the verify input is wrong."
-            exit 1
-          fi
-          echo "$tag → $EXPECTED ✓"
-        done
+        done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
+        $all_passed || { echo "::error::One or more tags do not resolve to the expected digest. The tag was overwritten between push and verify, or the verify input is wrong."; exit 1; }
 
     - name: Install cosign
       if: ${{ inputs.verify_signature_enabled == 'true' || inputs.verify_cyclonedx_attestation_enabled == 'true' || inputs.verify_vuln_attestation_enabled == 'true' }}
@@ -109,67 +122,185 @@ runs:
         cosign-release: v2.4.3
 
     - name: Verify cosign signature
+      id: verify-signature
       if: ${{ inputs.verify_signature_enabled == 'true' }}
+      continue-on-error: true
       shell: bash
       env:
         IMAGE_REF: ${{ inputs.image_subject }}
         CERT_ID: ${{ inputs.cert_identity }}
         OIDC_ISSUER: ${{ inputs.cert_oidc_issuer }}
+        LOG: ${{ steps.subject.outputs.results_dir }}/cosign-verify.log
       run: |
         set -euo pipefail
-        cosign verify \
+        if cosign verify \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
           --certificate-identity "$CERT_ID" \
-          "$IMAGE_REF" \
-          > /dev/null
-        echo "cosign verify ✓ (identity: $CERT_ID)"
+          "$IMAGE_REF" > "$LOG" 2>&1; then
+          echo "cosign verify ✓ (identity: $CERT_ID)"
+        else
+          rc=$?
+          echo "::error::cosign verify failed (exit $rc):"
+          cat "$LOG"
+          exit $rc
+        fi
 
     - name: Verify CycloneDX SBOM attestation
+      id: verify-cyclonedx
       if: ${{ inputs.verify_cyclonedx_attestation_enabled == 'true' }}
+      continue-on-error: true
       shell: bash
       env:
         IMAGE_REF: ${{ inputs.image_subject }}
         CERT_ID: ${{ inputs.cert_identity }}
         OIDC_ISSUER: ${{ inputs.cert_oidc_issuer }}
+        LOG: ${{ steps.subject.outputs.results_dir }}/cosign-verify-cyclonedx.log
       run: |
         set -euo pipefail
-        cosign verify-attestation \
+        if cosign verify-attestation \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
           --certificate-identity "$CERT_ID" \
           --type cyclonedx \
-          "$IMAGE_REF" \
-          > /dev/null
-        echo "cosign verify-attestation --type cyclonedx ✓"
+          "$IMAGE_REF" > "$LOG" 2>&1; then
+          echo "cosign verify-attestation --type cyclonedx ✓"
+        else
+          rc=$?
+          echo "::error::cosign verify-attestation --type cyclonedx failed (exit $rc):"
+          cat "$LOG"
+          exit $rc
+        fi
 
     - name: Verify vuln attestation
+      id: verify-vuln
       if: ${{ inputs.verify_vuln_attestation_enabled == 'true' }}
+      continue-on-error: true
       shell: bash
       env:
         IMAGE_REF: ${{ inputs.image_subject }}
         CERT_ID: ${{ inputs.cert_identity }}
         OIDC_ISSUER: ${{ inputs.cert_oidc_issuer }}
+        LOG: ${{ steps.subject.outputs.results_dir }}/cosign-verify-vuln.log
       run: |
         set -euo pipefail
-        cosign verify-attestation \
+        if cosign verify-attestation \
           --certificate-oidc-issuer "$OIDC_ISSUER" \
           --certificate-identity "$CERT_ID" \
           --type vuln \
-          "$IMAGE_REF" \
-          > /dev/null
-        echo "cosign verify-attestation --type vuln ✓"
+          "$IMAGE_REF" > "$LOG" 2>&1; then
+          echo "cosign verify-attestation --type vuln ✓"
+        else
+          rc=$?
+          echo "::error::cosign verify-attestation --type vuln failed (exit $rc):"
+          cat "$LOG"
+          exit $rc
+        fi
 
     - name: Verify GitHub artifact-build-provenance attestation
+      id: verify-build-provenance
       if: ${{ inputs.verify_build_provenance_enabled == 'true' }}
+      continue-on-error: true
       shell: bash
       env:
         IMAGE_REF: ${{ inputs.image_subject }}
         REPO: ${{ github.repository }}
         GH_TOKEN: ${{ inputs.github_token }}
+        LOG: ${{ steps.subject.outputs.results_dir }}/gh-attestation-verify.log
       run: |
         set -euo pipefail
         if [ -z "${GH_TOKEN:-}" ]; then
-          echo "::error::verify_build_provenance_enabled=true requires github_token to be passed (composite actions don't inherit GITHUB_TOKEN automatically)."
+          echo "::error::verify_build_provenance_enabled=true requires github_token to be passed (composite actions don't inherit GITHUB_TOKEN automatically)." | tee "$LOG"
           exit 1
         fi
-        gh attestation verify "oci://$IMAGE_REF" --repo "$REPO"
-        echo "gh attestation verify ✓"
+        if gh attestation verify "oci://$IMAGE_REF" --repo "$REPO" > "$LOG" 2>&1; then
+          echo "gh attestation verify ✓"
+        else
+          rc=$?
+          echo "::error::gh attestation verify failed (exit $rc):"
+          cat "$LOG"
+          exit $rc
+        fi
+
+    - name: Render verification summary
+      if: ${{ always() }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_subject }}
+        CERT_ID: ${{ inputs.cert_identity }}
+        OIDC_ISSUER: ${{ inputs.cert_oidc_issuer }}
+        RESULTS_DIR: ${{ steps.subject.outputs.results_dir }}
+        OUTCOME_TAG_DIGEST: ${{ steps.verify-tag-digest.outcome }}
+        OUTCOME_SIGNATURE: ${{ steps.verify-signature.outcome }}
+        OUTCOME_CYCLONEDX: ${{ steps.verify-cyclonedx.outcome }}
+        OUTCOME_VULN: ${{ steps.verify-vuln.outcome }}
+        OUTCOME_BUILD_PROVENANCE: ${{ steps.verify-build-provenance.outcome }}
+      run: |
+        set -euo pipefail
+        # Emoji-mapped outcome rendering. Possible outcomes per docs:
+        # success | failure | cancelled | skipped | '' (step never reached).
+        render_status() {
+          case "$1" in
+            success)   echo "✅ passed"  ;;
+            failure)   echo "❌ failed"  ;;
+            skipped)   echo "⏭️ skipped" ;;
+            cancelled) echo "🚫 cancelled" ;;
+            *)         echo "⏭️ skipped" ;;  # treat unset as skipped
+          esac
+        }
+
+        {
+          echo "### 🔐 Image verification"
+          echo
+          echo "**Image:** \`$IMAGE_REF\`"
+          echo
+          echo "**Expected signing identity:** \`$CERT_ID\`"
+          echo
+          echo "| Check | Result |"
+          echo "| --- | --- |"
+          echo "| Tags resolve to expected digest | $(render_status "$OUTCOME_TAG_DIGEST") |"
+          echo "| Image signature (cosign) | $(render_status "$OUTCOME_SIGNATURE") |"
+          echo "| CycloneDX SBOM attestation | $(render_status "$OUTCOME_CYCLONEDX") |"
+          echo "| Vulnerability scan attestation | $(render_status "$OUTCOME_VULN") |"
+          echo "| GitHub build provenance | $(render_status "$OUTCOME_BUILD_PROVENANCE") |"
+          echo
+          echo "<details>"
+          echo "<summary>Technical details</summary>"
+          echo
+
+          render_log() {
+            local heading="$1" file="$2"
+            echo "#### $heading"
+            echo
+            if [ -f "$file" ] && [ -s "$file" ]; then
+              echo '```'
+              cat "$file"
+              echo '```'
+            else
+              echo "_(no output captured)_"
+            fi
+            echo
+          }
+
+          [ "$OUTCOME_TAG_DIGEST"        != "" ] && render_log "Tag → digest resolution"   "$RESULTS_DIR/tag-digest.log"
+          [ "$OUTCOME_SIGNATURE"         != "" ] && render_log "cosign verify"             "$RESULTS_DIR/cosign-verify.log"
+          [ "$OUTCOME_CYCLONEDX"         != "" ] && render_log "cosign verify-attestation --type cyclonedx" "$RESULTS_DIR/cosign-verify-cyclonedx.log"
+          [ "$OUTCOME_VULN"              != "" ] && render_log "cosign verify-attestation --type vuln"      "$RESULTS_DIR/cosign-verify-vuln.log"
+          [ "$OUTCOME_BUILD_PROVENANCE"  != "" ] && render_log "gh attestation verify"     "$RESULTS_DIR/gh-attestation-verify.log"
+
+          echo "</details>"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        # Fail the job if any enabled check actually failed (skipped is fine).
+        failed=false
+        for outcome in \
+          "$OUTCOME_TAG_DIGEST" \
+          "$OUTCOME_SIGNATURE" \
+          "$OUTCOME_CYCLONEDX" \
+          "$OUTCOME_VULN" \
+          "$OUTCOME_BUILD_PROVENANCE"
+        do
+          [ "$outcome" = "failure" ] && failed=true
+        done
+        if $failed; then
+          echo "::error::One or more image-verification checks failed. See the job summary for details."
+          exit 1
+        fi
