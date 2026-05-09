@@ -1,0 +1,304 @@
+name: "Prune GitHub Packages versions (internal)"
+description: |
+  Internal composite shared by `prune-npm.yml` and `prune-nuget.yml`. Deletes
+  prerelease versions of the form `X.Y.Z-<label>.<short-sha>` whose `<label>`
+  refers to a branch that no longer exists on origin. Stable versions
+  (`X.Y.Z`), unrecognised version strings, and (for npm, when
+  `respect_dist_tags=true`) versions any dist-tag points at are always KEPT.
+
+  Internal — leading underscore signals it's not part of the public surface.
+  Use the workflow shells (`prune-npm.yml` / `prune-nuget.yml`) instead.
+
+  The `<short-sha>` segment matches `[0-9a-f]{7}` because the `package-version`
+  composite emits `${GITHUB_SHA:0:7}` as the prerelease counter — this differs
+  from `prune-ghcr.yml`, where GitVersion emits a numeric counter.
+
+inputs:
+  package_type:
+    required: true
+    description: "GitHub Packages package type. Must be 'npm' or 'nuget'."
+  dry_run:
+    required: true
+    description: "When 'false', actually delete versions. When 'true', only print what would be deleted."
+  package_names:
+    required: false
+    default: ""
+    description: "Comma-separated package names. Blank = auto-discover via /users/{owner}/packages."
+  package_namespace_prefix:
+    required: false
+    default: ""
+    description: "When auto-discovering, filter the result to package names starting with this prefix. Blank = no filter."
+  respect_dist_tags:
+    required: false
+    default: "true"
+    description: "npm only. When 'true', also KEEP versions any dist-tag (latest/alpha/…) points at, even when the branch is dead."
+  npm_registry_url:
+    required: false
+    default: "https://npm.pkg.github.com"
+    description: "Base URL for the dist-tag fetch. Ignored when package_type=nuget or respect_dist_tags=false."
+  gh_token:
+    required: true
+    description: "Token used for `gh api` and the npm registry dist-tag fetch. Caller resolves the GITHUB_TOKEN fallback before passing."
+
+runs:
+  using: composite
+  steps:
+    - name: Show config
+      shell: bash
+      env:
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.repository }}
+        PACKAGE_TYPE: ${{ inputs.package_type }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        PACKAGE_NAMES: ${{ inputs.package_names }}
+        NAMESPACE_PREFIX: ${{ inputs.package_namespace_prefix }}
+        RESPECT_DIST_TAGS: ${{ inputs.respect_dist_tags }}
+        NPM_REGISTRY_URL: ${{ inputs.npm_registry_url }}
+      run: |
+        set -euo pipefail
+        case "$PACKAGE_TYPE" in
+          npm|nuget) ;;
+          *)
+            echo "::error::Invalid package_type '$PACKAGE_TYPE'. Expected 'npm' or 'nuget'."
+            exit 1
+            ;;
+        esac
+        echo "owner=$OWNER"
+        echo "repo=$REPO"
+        echo "package_type=$PACKAGE_TYPE"
+        echo "dry_run=$DRY_RUN"
+        echo "package_names=$PACKAGE_NAMES"
+        echo "namespace_prefix=$NAMESPACE_PREFIX"
+        if [ "$PACKAGE_TYPE" = "npm" ]; then
+          echo "respect_dist_tags=$RESPECT_DIST_TAGS"
+          echo "npm_registry_url=$NPM_REGISTRY_URL"
+        fi
+        if [ -z "$PACKAGE_NAMES" ] && [ -z "$NAMESPACE_PREFIX" ]; then
+          echo "::warning::package_namespace_prefix is empty — pruner will enumerate ALL ${PACKAGE_TYPE} packages owned by $OWNER."
+        fi
+
+    - name: Compute live branch labels
+      shell: bash
+      env:
+        REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ inputs.gh_token }}
+      run: |
+        set -euo pipefail
+        gh api "repos/$REPO/branches" --paginate --jq '.[].name' > /tmp/live-branches.txt
+        # Mirror the sanitiser in actions/package-version/action.yml exactly,
+        # so the live-label set is a superset of any label the publisher could
+        # have emitted: tr '/_' '-', strip non-[a-z0-9-], lowercase, truncate
+        # to 40, strip trailing '-', empty → 'branch'.
+        : > /tmp/live-labels.txt
+        while read -r b; do
+          s=$(echo "$b" | tr '/_' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+          s=${s:0:40}
+          s=${s%-}
+          [ -z "$s" ] && s="branch"
+          echo "$s"
+        done < /tmp/live-branches.txt | sort -u > /tmp/live-labels.txt
+        echo "Live branches:"; cat /tmp/live-branches.txt
+        echo "Live labels:";   cat /tmp/live-labels.txt
+
+    - name: Discover packages
+      shell: bash
+      env:
+        OWNER: ${{ github.repository_owner }}
+        PACKAGE_TYPE: ${{ inputs.package_type }}
+        PACKAGE_NAMES: ${{ inputs.package_names }}
+        NAMESPACE_PREFIX: ${{ inputs.package_namespace_prefix }}
+        GH_TOKEN: ${{ inputs.gh_token }}
+      run: |
+        set -euo pipefail
+        if [ -n "$PACKAGE_NAMES" ]; then
+          echo "$PACKAGE_NAMES" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -v '^$' > /tmp/packages.txt
+        else
+          # Auto-discover. The API returns the human-readable name (decoded
+          # for npm scoped packages, e.g. "@scope/name"). Filter prefix match.
+          gh api "/users/$OWNER/packages?package_type=$PACKAGE_TYPE" --paginate \
+            --jq '.[].name' \
+            | grep "^${NAMESPACE_PREFIX}" > /tmp/packages.txt || true
+        fi
+        if [ ! -s /tmp/packages.txt ]; then
+          echo "No packages in scope. Nothing to do."
+        else
+          echo "Packages in scope:"; cat /tmp/packages.txt
+        fi
+
+    - name: Prune
+      shell: bash
+      env:
+        OWNER: ${{ github.repository_owner }}
+        PACKAGE_TYPE: ${{ inputs.package_type }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        RESPECT_DIST_TAGS: ${{ inputs.respect_dist_tags }}
+        NPM_REGISTRY_URL: ${{ inputs.npm_registry_url }}
+        GH_TOKEN: ${{ inputs.gh_token }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -s /tmp/packages.txt ]; then
+          echo "No packages — skipping."
+          {
+            echo "## Prune summary ($PACKAGE_TYPE)"
+            echo
+            echo "- dry_run: \`$DRY_RUN\`"
+            echo "- trigger: \`${GITHUB_EVENT_NAME:-?}\`"
+            echo "- packages: 0"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        delete_version() {
+          local pkg="$1" id="$2" enc
+          enc=$(jq -rn --arg s "$pkg" '$s|@uri')
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "    DRY-RUN: would DELETE id=$id"
+            return 0
+          fi
+          if ! gh api -X DELETE "/users/$OWNER/packages/$PACKAGE_TYPE/$enc/versions/$id" 2>/tmp/del.err; then
+            echo "    ERROR deleting id=$id:" >&2
+            cat /tmp/del.err >&2
+            return 1
+          fi
+          echo "    DELETED id=$id"
+        }
+
+        TOTAL_KEEP=0
+        TOTAL_PRUNE=0
+        ANY_FAILED=0
+        DIST_TAG_MODE_GLOBAL="n/a"
+        if [ "$PACKAGE_TYPE" = "npm" ]; then
+          DIST_TAG_MODE_GLOBAL=$([ "$RESPECT_DIST_TAGS" = "true" ] && echo "respected" || echo "ignored")
+        fi
+        : > /tmp/summary.md
+
+        while read -r pkg; do
+          [ -z "$pkg" ] && continue
+          echo
+          echo "=== $pkg ==="
+          enc=$(jq -rn --arg s "$pkg" '$s|@uri')
+
+          # Dist-tag snapshot (npm + respect_dist_tags only).
+          DIST_TAGS_UNKNOWN=0
+          : > /tmp/dist-tag-versions.txt
+          if [ "$PACKAGE_TYPE" = "npm" ] && [ "$RESPECT_DIST_TAGS" = "true" ]; then
+            if dist_tags_json=$(curl -sS --fail \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/json" \
+                "$NPM_REGISTRY_URL/-/package/$enc/dist-tags" 2>/tmp/dt.err); then
+              if ! echo "$dist_tags_json" | jq -r 'to_entries[] | .value' > /tmp/dist-tag-versions.txt 2>/tmp/dt.err; then
+                echo "  WARN: could not parse dist-tags JSON for $pkg — failing safe (KEEP all prereleases for this package)."
+                cat /tmp/dt.err >&2 || true
+                : > /tmp/dist-tag-versions.txt
+                DIST_TAGS_UNKNOWN=1
+              else
+                echo "  Dist-tag pinned versions:"; sed 's/^/    /' /tmp/dist-tag-versions.txt || true
+              fi
+            else
+              echo "  WARN: dist-tag fetch failed for $pkg — failing safe (KEEP all prereleases for this package)."
+              cat /tmp/dt.err >&2 || true
+              DIST_TAGS_UNKNOWN=1
+            fi
+          fi
+
+          if ! gh api "/users/$OWNER/packages/$PACKAGE_TYPE/$enc/versions" --paginate \
+              --jq '.[] | {id, name}' \
+              > /tmp/versions.json 2>/tmp/versions.err; then
+            if grep -q 'HTTP 404' /tmp/versions.err; then
+              echo "  Package not found — skipping."
+              continue
+            fi
+            echo "  Error listing versions:" >&2
+            cat /tmp/versions.err >&2
+            exit 1
+          fi
+          COUNT=$(wc -l < /tmp/versions.json | tr -d ' ')
+          echo "  $COUNT versions"
+
+          : > /tmp/verdicts.tsv
+          # Layout: id<TAB>verdict<TAB>reason<TAB>name
+          while IFS= read -r v; do
+            id=$(echo "$v" | jq -r '.id')
+            name=$(echo "$v" | jq -r '.name')
+
+            # Stable release.
+            if echo "$name" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              printf '%s\t%s\t%s\t%s\n' "$id" "KEEP" "stable-release" "$name" >> /tmp/verdicts.tsv
+              continue
+            fi
+
+            # Prerelease X.Y.Z-LABEL.SHORTSHA (7-hex).
+            if echo "$name" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-.+\.[0-9a-f]{7}$'; then
+              label=$(echo "$name" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-(.+)\.[0-9a-f]{7}$/\1/')
+
+              if [ "$PACKAGE_TYPE" = "npm" ] && [ "$RESPECT_DIST_TAGS" = "true" ]; then
+                if [ "$DIST_TAGS_UNKNOWN" = "1" ]; then
+                  printf '%s\t%s\t%s\t%s\n' "$id" "KEEP" "dist-tags-unknown" "$name" >> /tmp/verdicts.tsv
+                  continue
+                fi
+                if grep -Fxq "$name" /tmp/dist-tag-versions.txt; then
+                  printf '%s\t%s\t%s\t%s\n' "$id" "KEEP" "dist-tag-pinned" "$name" >> /tmp/verdicts.tsv
+                  continue
+                fi
+              fi
+
+              if grep -Fxq "$label" /tmp/live-labels.txt; then
+                printf '%s\t%s\t%s\t%s\n' "$id" "KEEP" "live-branch($label)" "$name" >> /tmp/verdicts.tsv
+              else
+                printf '%s\t%s\t%s\t%s\n' "$id" "PRUNE" "dead-branch($label)" "$name" >> /tmp/verdicts.tsv
+              fi
+              continue
+            fi
+
+            # Anything else — fail-safe KEEP.
+            printf '%s\t%s\t%s\t%s\n' "$id" "KEEP" "unknown-format" "$name" >> /tmp/verdicts.tsv
+          done < /tmp/versions.json
+
+          keep_n=$(awk -F'\t' '$2=="KEEP"'  /tmp/verdicts.tsv | wc -l | tr -d ' ')
+          prune_n=$(awk -F'\t' '$2=="PRUNE"' /tmp/verdicts.tsv | wc -l | tr -d ' ')
+          echo "  KEEP=$keep_n PRUNE=$prune_n"
+          TOTAL_KEEP=$((TOTAL_KEEP + keep_n))
+          TOTAL_PRUNE=$((TOTAL_PRUNE + prune_n))
+
+          {
+            echo "### $pkg"
+            echo
+            echo "| | count |"
+            echo "|---|---:|"
+            echo "| Total | $COUNT |"
+            echo "| KEEP  | $keep_n |"
+            echo "| PRUNE | $prune_n |"
+            if [ "$PACKAGE_TYPE" = "npm" ] && [ "$RESPECT_DIST_TAGS" = "true" ] && [ "$DIST_TAGS_UNKNOWN" = "1" ]; then
+              echo "| dist-tag fetch | failed (fail-safe KEEP) |"
+            fi
+            echo
+          } >> /tmp/summary.md
+
+          while IFS=$'\t' read -r id verdict reason name; do
+            [ "$verdict" = "PRUNE" ] || continue
+            echo "  PRUNE id=$id name=$name reason=$reason"
+            if ! delete_version "$pkg" "$id"; then
+              ANY_FAILED=1
+            fi
+          done < /tmp/verdicts.tsv
+        done < /tmp/packages.txt
+
+        {
+          echo "## Prune summary ($PACKAGE_TYPE)"
+          echo
+          echo "- dry_run: \`$DRY_RUN\`"
+          echo "- trigger: \`${GITHUB_EVENT_NAME:-?}\`"
+          if [ "$PACKAGE_TYPE" = "npm" ]; then
+            echo "- dist_tag_mode: \`$DIST_TAG_MODE_GLOBAL\`"
+          fi
+          echo "- TOTAL KEEP: $TOTAL_KEEP"
+          echo "- TOTAL PRUNE: $TOTAL_PRUNE"
+          echo
+          cat /tmp/summary.md
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$ANY_FAILED" -ne 0 ]; then
+          echo "::error::One or more deletions failed."
+          exit 1
+        fi
