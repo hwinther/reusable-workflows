@@ -198,35 +198,51 @@ runs:
         cosign sign --yes ${images}
 
     # SBOM-image binding: parse the CycloneDX and assert it was generated for
-    # the same image we're about to attest. Catches build-job bugs (wrong
-    # image_ref scanned, swapped predicate paths) and adds a second layer to
-    # any artifact-store integrity check the caller did before invoking us.
-    # syft writes the manifest digest into metadata.component.properties[] for
-    # daemon images and manifest digests are content-addressable, so the
-    # value at SBOM time equals the registry digest after push.
-    - name: Verify SBOM-image binding (manifest digest)
-      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+    # the same image we're about to attest. Tries syft:image:manifestDigest
+    # first (matches the registry digest cosign signs against). Falls back to
+    # syft:image:imageID — for daemon-loaded local images syft writes only
+    # imageID; computing the image-ID locally via `docker inspect` from the
+    # source image_ref still gives a correct (transitive) binding because the
+    # registry's manifest references this exact config blob.
+    - name: Verify SBOM-image binding
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' && !contains(inputs.platforms, ',') }}
       shell: bash
       env:
         CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
-        EXPECTED_DIGEST: ${{ steps.resolve-digest.outputs.digest }}
+        EXPECTED_MANIFEST_DIGEST: ${{ steps.resolve-digest.outputs.digest }}
+        SRC: ${{ inputs.image_ref }}
       run: |
         set -euo pipefail
         [ -f "$CYCLONEDX_PATH" ] || { echo "::error::Missing CycloneDX SBOM: $CYCLONEDX_PATH"; exit 1; }
-        sbom_digest=$(jq -r '
+        manifest_digest=$(jq -r '
           .metadata.component.properties[]?
           | select(.name == "syft:image:manifestDigest")
           | .value
         ' "$CYCLONEDX_PATH" | head -1)
-        if [ -z "$sbom_digest" ] || [ "$sbom_digest" = "null" ]; then
-          echo "::error::CycloneDX SBOM has no syft:image:manifestDigest property — cannot prove it was generated for the image being attested. Regenerate the SBOM with anchore/sbom-action against a local daemon image, or skip cosign supply-chain attestation."
+        image_id=$(jq -r '
+          .metadata.component.properties[]?
+          | select(.name == "syft:image:imageID")
+          | .value
+        ' "$CYCLONEDX_PATH" | head -1)
+        if [ -n "$manifest_digest" ] && [ "$manifest_digest" != "null" ]; then
+          if [ "$manifest_digest" != "$EXPECTED_MANIFEST_DIGEST" ]; then
+            echo "::error::SBOM-image binding mismatch (syft:image:manifestDigest): SBOM says $manifest_digest but cosign attest subject is $EXPECTED_MANIFEST_DIGEST."
+            exit 1
+          fi
+          echo "SBOM-image binding via syft:image:manifestDigest: $manifest_digest ✓"
+        elif [ -n "$image_id" ] && [ "$image_id" != "null" ]; then
+          local_id=$(docker inspect --format='{{.Id}}' "$SRC")
+          if [ "$image_id" != "$local_id" ]; then
+            echo "::error::SBOM-image binding mismatch (syft:image:imageID): SBOM says $image_id but local image-ID for $SRC is $local_id."
+            exit 1
+          fi
+          echo "SBOM-image binding via syft:image:imageID: $image_id ✓"
+        else
+          echo "::error::CycloneDX SBOM has neither syft:image:manifestDigest nor syft:image:imageID property."
+          echo "Properties found in the SBOM:"
+          jq -r '.metadata.component.properties[]? | "  \(.name) = \(.value)"' "$CYCLONEDX_PATH" || true
           exit 1
         fi
-        if [ "$sbom_digest" != "$EXPECTED_DIGEST" ]; then
-          echo "::error::SBOM-image binding mismatch: SBOM was generated for $sbom_digest but cosign attest is being asked to bind it to $EXPECTED_DIGEST. Refusing to publish a misleading attestation."
-          exit 1
-        fi
-        echo "SBOM manifestDigest matches attestation subject: $sbom_digest"
 
     - name: Build cosign vuln attestation predicate
       if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}

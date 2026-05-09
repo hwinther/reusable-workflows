@@ -70,6 +70,10 @@ inputs:
     required: false
     description: "Expected sha256 of the Grype JSON file (build-and-scan-*.yml grype_json_sha256 output). Same semantics as sbom_cyclonedx_sha256."
     default: ""
+  expected_image_id:
+    required: false
+    description: "Expected docker image-ID (config-blob digest, sha256:...) of the image the SBOM was scanned against. Pass `needs.build.outputs.image_digest` from build-and-scan-*.yml. When set, the binding check matches this value against the SBOM's syft:image:imageID property. anchore/sbom-action emits imageID universally for daemon-source images; manifestDigest is only present when syft derives it from a registry pull or buildkit metadata, so imageID is the more reliable handle."
+    default: ""
   version:
     required: false
     description: "Application version (referenced in the cosign-vuln scanner.invocation parameters; informational)."
@@ -111,32 +115,59 @@ runs:
     # SBOM-image binding: parse the CycloneDX and assert it was generated for
     # the same image we're about to attest. Catches build-job bugs (wrong
     # image_ref scanned, swapped predicate paths) and adds a second layer to
-    # the artifact-store integrity check above. syft writes the manifest
-    # digest into metadata.component.properties[] for daemon images and
-    # manifest digests are content-addressable, so the value at SBOM time
-    # equals the registry digest after push.
-    - name: Verify SBOM-image binding (manifest digest)
+    # the artifact-store integrity check above.
+    #
+    # syft writes one or both of these into metadata.component.properties[]:
+    #   syft:image:manifestDigest — present when syft derives the digest from
+    #                               a registry pull or buildkit metadata
+    #   syft:image:imageID         — present for every daemon-source SBOM;
+    #                               equals `docker inspect '{{.Id}}'`
+    # We try manifestDigest first (it's the same handle cosign signs against).
+    # If only imageID is present, fall back to it — the byte-identity check in
+    # image-push.yml asserts the loaded image-ID equals the build's image-ID,
+    # so binding via imageID is transitive: SBOM ↔ image-ID (in registry's
+    # config blob) ↔ manifest digest (which references that config blob).
+    - name: Verify SBOM-image binding
       if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
       shell: bash
       env:
         CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
-        EXPECTED_DIGEST: ${{ inputs.image_digest }}
+        EXPECTED_MANIFEST_DIGEST: ${{ inputs.image_digest }}
+        EXPECTED_IMAGE_ID: ${{ inputs.expected_image_id }}
       run: |
         set -euo pipefail
-        sbom_digest=$(jq -r '
+        manifest_digest=$(jq -r '
           .metadata.component.properties[]?
           | select(.name == "syft:image:manifestDigest")
           | .value
         ' "$CYCLONEDX_PATH" | head -1)
-        if [ -z "$sbom_digest" ] || [ "$sbom_digest" = "null" ]; then
-          echo "::error::CycloneDX SBOM has no syft:image:manifestDigest property — cannot prove it was generated for the image being attested. Regenerate the SBOM with anchore/sbom-action against a local daemon image, or skip cosign supply-chain attestation."
+        image_id=$(jq -r '
+          .metadata.component.properties[]?
+          | select(.name == "syft:image:imageID")
+          | .value
+        ' "$CYCLONEDX_PATH" | head -1)
+        if [ -n "$manifest_digest" ] && [ "$manifest_digest" != "null" ]; then
+          if [ "$manifest_digest" != "$EXPECTED_MANIFEST_DIGEST" ]; then
+            echo "::error::SBOM-image binding mismatch (syft:image:manifestDigest): SBOM says $manifest_digest but cosign attest subject is $EXPECTED_MANIFEST_DIGEST."
+            exit 1
+          fi
+          echo "SBOM-image binding via syft:image:manifestDigest: $manifest_digest ✓"
+        elif [ -n "$image_id" ] && [ "$image_id" != "null" ]; then
+          if [ -z "$EXPECTED_IMAGE_ID" ]; then
+            echo "::error::SBOM identifies the scanned image only by syft:image:imageID, but no expected_image_id input was passed to sign-image. Pass build-and-scan-*.yml's image_digest output (the local image-ID) as expected_image_id."
+            exit 1
+          fi
+          if [ "$image_id" != "$EXPECTED_IMAGE_ID" ]; then
+            echo "::error::SBOM-image binding mismatch (syft:image:imageID): SBOM says $image_id but expected $EXPECTED_IMAGE_ID."
+            exit 1
+          fi
+          echo "SBOM-image binding via syft:image:imageID: $image_id ✓"
+        else
+          echo "::error::CycloneDX SBOM has neither syft:image:manifestDigest nor syft:image:imageID property — cannot prove it was generated for the image being attested."
+          echo "Properties found in the SBOM:"
+          jq -r '.metadata.component.properties[]? | "  \(.name) = \(.value)"' "$CYCLONEDX_PATH" || true
           exit 1
         fi
-        if [ "$sbom_digest" != "$EXPECTED_DIGEST" ]; then
-          echo "::error::SBOM-image binding mismatch: SBOM was generated for $sbom_digest but cosign attest is being asked to bind it to $EXPECTED_DIGEST. Refusing to publish a misleading attestation."
-          exit 1
-        fi
-        echo "SBOM manifestDigest matches attestation subject: $sbom_digest"
 
     - name: Generate artifact attestation
       if: ${{ inputs.attest_build_provenance_enabled == 'true' }}
