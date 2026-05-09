@@ -1,0 +1,175 @@
+name: "Verify pushed container image (signature, attestations, tag→digest)"
+description: |
+  Public composite. Read-only smoke test that confirms a pushed image is
+  actually signed and attested as expected, by pulling signature and
+  attestation metadata back from the registry. Useful as a CI step right
+  after build → push → sign so a broken verification chain (cert identity
+  drift, missing attestation, tag overwritten between push and sign) shows
+  up in the publishing pipeline instead of at the consumer's admission
+  controller.
+
+  Performs four independent checks (each individually toggleable):
+    - tag → digest resolution: every tag in `container_tags` resolves to
+      the digest in `image_subject`. Detects tag overwrites.
+    - cosign verify: signature exists and is signed by `cert_identity`
+      under `cert_oidc_issuer`. Pinned to cosign v2.4.3 to match
+      `_push-image-with-signatures` and `sign-image`.
+    - cosign verify-attestation --type cyclonedx / --type vuln: supply-
+      chain attestations exist and verify under the same identity.
+    - gh attestation verify: GitHub artifact-build-provenance attestation
+      exists. Skip on private repos without GHAS where signing was done
+      with `attest_build_provenance_enabled: false`.
+
+  Caller must `docker login` to the registry first (the cosign and
+  imagetools commands read manifests, signatures, and referrers from the
+  registry). No id-token / attestations permissions needed — verify is
+  pure read.
+
+inputs:
+  image_subject:
+    required: true
+    description: "Digest-pinned ref to verify, e.g. ghcr.io/owner/repo/postfix@sha256:..."
+  container_tags:
+    required: false
+    description: "Comma-separated full tag refs (registry/name:tag). Each is resolved against the registry and the resulting digest must equal image_subject's digest. Empty → tag check is skipped."
+    default: ""
+  cert_identity:
+    required: true
+    description: "Expected cosign certificate identity, e.g. https://github.com/<owner>/<repo>/.github/workflows/<file>@refs/heads/main"
+  cert_oidc_issuer:
+    required: false
+    description: "Expected OIDC issuer for the Fulcio cert."
+    default: "https://token.actions.githubusercontent.com"
+  verify_signature_enabled:
+    required: false
+    description: "Run `cosign verify` against image_subject."
+    default: "true"
+  verify_cyclonedx_attestation_enabled:
+    required: false
+    description: "Run `cosign verify-attestation --type cyclonedx`."
+    default: "true"
+  verify_vuln_attestation_enabled:
+    required: false
+    description: "Run `cosign verify-attestation --type vuln`."
+    default: "true"
+  verify_build_provenance_enabled:
+    required: false
+    description: "Run `gh attestation verify`. Set to false when attest_build_provenance_enabled was false at sign time (e.g. private repos without GitHub Advanced Security)."
+    default: "true"
+  github_token:
+    required: false
+    description: "Token used for `gh attestation verify`. Required when verify_build_provenance_enabled is true. Composite actions do not automatically inherit GITHUB_TOKEN from the calling job — the caller must pass it explicitly."
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Resolve digest from image_subject
+      id: subject
+      shell: bash
+      env:
+        SUBJECT: ${{ inputs.image_subject }}
+      run: |
+        set -euo pipefail
+        digest="${SUBJECT##*@}"
+        case "$digest" in
+          sha256:*) ;;
+          *) echo "::error::image_subject must be of the form registry/name@sha256:... (got: $SUBJECT)"; exit 1 ;;
+        esac
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+    - name: Verify tag → digest resolution
+      if: ${{ inputs.container_tags != '' }}
+      shell: bash
+      env:
+        EXPECTED: ${{ steps.subject.outputs.digest }}
+        CONTAINER_TAGS: ${{ inputs.container_tags }}
+      run: |
+        set -euo pipefail
+        rc=0
+        echo "$CONTAINER_TAGS" | tr ',' '\n' | while read -r tag; do
+          tag=$(echo "$tag" | xargs)
+          [ -z "$tag" ] && continue
+          actual=$(docker buildx imagetools inspect "$tag" | awk '/^Digest:[[:space:]]+/ {print $2; exit}')
+          if [ -z "$actual" ]; then
+            echo "::error::Could not resolve digest for tag $tag"
+            exit 1
+          fi
+          if [ "$actual" != "$EXPECTED" ]; then
+            echo "::error::Tag $tag resolves to $actual but image_subject pins $EXPECTED. The tag was overwritten between push and verify, or the verify input is wrong."
+            exit 1
+          fi
+          echo "$tag → $EXPECTED ✓"
+        done
+
+    - name: Install cosign
+      if: ${{ inputs.verify_signature_enabled == 'true' || inputs.verify_cyclonedx_attestation_enabled == 'true' || inputs.verify_vuln_attestation_enabled == 'true' }}
+      uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+      with:
+        cosign-release: v2.4.3
+
+    - name: Verify cosign signature
+      if: ${{ inputs.verify_signature_enabled == 'true' }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_subject }}
+        CERT_ID: ${{ inputs.cert_identity }}
+        OIDC_ISSUER: ${{ inputs.cert_oidc_issuer }}
+      run: |
+        set -euo pipefail
+        cosign verify \
+          --certificate-oidc-issuer "$OIDC_ISSUER" \
+          --certificate-identity "$CERT_ID" \
+          "$IMAGE_REF" \
+          > /dev/null
+        echo "cosign verify ✓ (identity: $CERT_ID)"
+
+    - name: Verify CycloneDX SBOM attestation
+      if: ${{ inputs.verify_cyclonedx_attestation_enabled == 'true' }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_subject }}
+        CERT_ID: ${{ inputs.cert_identity }}
+        OIDC_ISSUER: ${{ inputs.cert_oidc_issuer }}
+      run: |
+        set -euo pipefail
+        cosign verify-attestation \
+          --certificate-oidc-issuer "$OIDC_ISSUER" \
+          --certificate-identity "$CERT_ID" \
+          --type cyclonedx \
+          "$IMAGE_REF" \
+          > /dev/null
+        echo "cosign verify-attestation --type cyclonedx ✓"
+
+    - name: Verify vuln attestation
+      if: ${{ inputs.verify_vuln_attestation_enabled == 'true' }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_subject }}
+        CERT_ID: ${{ inputs.cert_identity }}
+        OIDC_ISSUER: ${{ inputs.cert_oidc_issuer }}
+      run: |
+        set -euo pipefail
+        cosign verify-attestation \
+          --certificate-oidc-issuer "$OIDC_ISSUER" \
+          --certificate-identity "$CERT_ID" \
+          --type vuln \
+          "$IMAGE_REF" \
+          > /dev/null
+        echo "cosign verify-attestation --type vuln ✓"
+
+    - name: Verify GitHub artifact-build-provenance attestation
+      if: ${{ inputs.verify_build_provenance_enabled == 'true' }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.image_subject }}
+        REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        set -euo pipefail
+        if [ -z "${GH_TOKEN:-}" ]; then
+          echo "::error::verify_build_provenance_enabled=true requires github_token to be passed (composite actions don't inherit GITHUB_TOKEN automatically)."
+          exit 1
+        fi
+        gh attestation verify "oci://$IMAGE_REF" --repo "$REPO"
+        echo "gh attestation verify ✓"

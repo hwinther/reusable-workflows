@@ -46,6 +46,8 @@ Reference as `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`.
 - **`python-build`** — ruff + mypy + pytest + `python -m build`. Same fail-late + `pr-comment` pattern.
 - **`gitversion`** — runs GitVersion and emits `version`, `is_alpha`, container `deploy_tag` / `container_image_tags` / `image_tags`. Branches on whether `github.ref_name` is `main`, a `v*` tag, or anything else (alpha).
 - **`package-version`** — computes a version from the latest reachable `v[X.Y.Z]` tag + commit count, in either `semver` or `pep440` format. Used by `package-deploy.yml` to share one version across ecosystems.
+- **`sign-image`** — runs cosign sign + cosign attest CycloneDX/vuln + `attest-build-provenance` against an already-pushed digest. Designed to be called from the **consumer's own job** so the OIDC-keyless cert identity (`job_workflow_ref`) is the consumer's workflow, not this reusable repo. Verifies cross-job predicate-hash integrity and SBOM-image binding (`syft:image:manifestDigest` on the CycloneDX must equal the digest being attested) before publishing.
+- **`verify-image`** — read-only end-to-end smoke test. Pulls signature + attestation metadata back from the registry and runs `cosign verify`, `cosign verify-attestation --type cyclonedx`, `cosign verify-attestation --type vuln`, `gh attestation verify`, plus a tag → digest resolution check. Useful as a final job in the publishing pipeline so signing/attestation breakage shows up in CI instead of at the consumer's admission controller.
 
 Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_dotnet-add-nuget-source`.
 
@@ -109,6 +111,128 @@ consumer caller workflow  (on: push to main / v*)
                     ├─ attest-build-provenance
                     ├─ cosign sign
                     └─ cosign attest CycloneDX + vuln
+```
+
+### Container release — consumer-signed (narrowed OIDC trust scope)
+
+The two flows above sign images from inside this reusable-workflows repo, so the cosign / Sigstore Fulcio cert SAN says `hwinther/reusable-workflows/.github/workflows/...@v1` regardless of who called it. That's fine for "trust anyone using v1" policies but coarse for per-consumer policies.
+
+This pattern moves the signing step into the **consumer's own job** — the `sign-image` composite runs inline in a job the consumer's workflow file owns, so the OIDC token's `job_workflow_ref` claim (and therefore the Fulcio cert's identity SAN) is the consumer repo's workflow ref.
+
+Why a composite, not another reusable workflow: reusable workflows (`uses:` at the job level) own the job they define and so own the OIDC identity. Composite actions (`uses:` at the step level) run inline in whatever job invokes them, so the OIDC token is minted under the calling job's identity. Same code shipped two ways, two different cert SANs.
+
+```
+consumer caller workflow  (on: push to main, etc.)
+        │
+        ├─ build job
+        │     uses: build-and-scan-{docker,dotnet}.yml@v1
+        │     outputs:
+        │       image_artifact, image_digest (image-ID)
+        │       sbom_artifact,  grype_artifact
+        │       sbom_cyclonedx_sha256, grype_json_sha256   ← cross-job hashes
+        │       container_image_tags
+        │
+        ├─ push job   (needs: build)
+        │     uses: image-push.yml@v1
+        │     with:                                ← all sign flags off:
+        │       cosign_sign_enabled: false             this workflow won't
+        │       cosign_supply_chain_attest_enabled: false sign anything;
+        │       attest_build_provenance_enabled: false   it just docker pushes
+        │     outputs:
+        │       pushed_digest (registry MANIFEST digest, ≠ image-ID)
+        │
+        ├─ sign job   (needs: build, push) ── runs in CONSUMER's repo, with
+        │     permissions:                       its own GITHUB_TOKEN/OIDC
+        │       id-token: write
+        │       attestations: write
+        │       packages: write
+        │     steps:
+        │       - docker login ghcr.io
+        │       - download SBOM + Grype artifacts
+        │       - uses: hwinther/.../actions/sign-image@v1   ← composite
+        │           image_digest: needs.push.outputs.pushed_digest
+        │           sbom_cyclonedx_sha256: needs.build.outputs.sbom_cyclonedx_sha256
+        │           grype_json_sha256:     needs.build.outputs.grype_json_sha256
+        │
+        │     internally sign-image will:
+        │       1. re-hash the predicate files, abort if ≠ build's hashes
+        │       2. parse CycloneDX, abort if syft:image:manifestDigest ≠ image_digest
+        │       3. attest-build-provenance @ image_digest
+        │       4. cosign sign  tag@image_digest                ← Fulcio SAN =
+        │       5. cosign attest --type cyclonedx + --type vuln    consumer's
+        │                                                          workflow ref
+        │
+        └─ verify job (needs: build, push, sign) ── pure read, no OIDC
+              uses: hwinther/.../actions/verify-image@v1
+              with:
+                image_subject:   ghcr.io/<repo>/<name>@<pushed_digest>
+                container_tags:  needs.build.outputs.container_image_tags
+                cert_identity:   https://github.com/${{ github.workflow_ref }}
+              checks:
+                - tag → digest resolution per tag (catches tag overwrites)
+                - cosign verify  (signature exists, signed by THIS workflow)
+                - cosign verify-attestation --type cyclonedx
+                - cosign verify-attestation --type vuln
+                - gh attestation verify oci://...   (when GHAS available)
+```
+
+#### Integrity chain across the four jobs
+
+Every cross-job handoff is pinned by a value carried through job outputs (which travel through the actions service plan, not artifact storage), so the only trust root is GitHub itself:
+
+```
+build                   push                       sign                              verify
+─────                   ────                       ────                              ──────
+docker save             docker load                 verify hashes ─┐                  cosign verify
+  ↓                       ↓                         verify SBOM   │                  ─────────────
+image-ID  ────────────▶ assert ==  ─┐               binding       │                  pull manifest
+                                    │                  ↓          │                    ↓
+                                    └▶  docker push ─▶ cosign     │                  digest == subject?
+                                          ↓             sign+attest│                    ↓
+                                          manifest    @manifest   │                  cosign verify
+                                          digest ────────────────▶│                  -attestation
+                                                                  │                    ↓
+sha256(SBOM)  ─────────────────────────────────────────────────────│──▶ matches?     verify-attestation
+sha256(Grype) ─────────────────────────────────────────────────────│──▶ matches?     succeeds = signed
+                                                                  │                  predicate intact
+SBOM contains      ──────────────────────────────────────────────▶ │
+syft:image:                                                       │
+manifestDigest ───────────────────────────────────────────────────▶│ matches digest
+                                                                  ▼
+                                                                cosign attest
+                                                                only proceeds if
+                                                                ALL above hold
+```
+
+What each checkpoint catches:
+
+| Checkpoint | Threat caught |
+|---|---|
+| **image-ID byte-identity** (push job) | Image artifact swapped between build and push |
+| **predicate sha256s** (sign job) | SBOM/Grype JSON swapped between build and sign |
+| **SBOM `syft:image:manifestDigest`** (sign job) | Wrong SBOM passed in (build-job bug) — predicate would pass the hash check but describes a different image |
+| **cosign signs `tag@digest`** | sha256-hard rebinding to a different image |
+| **tag → digest resolution** (verify job) | Tag overwritten in the registry between push and verify |
+| **`cosign verify`** (verify job) | Signature not actually published; cert identity drift; downstream verification recipe broken |
+
+#### Trust-scope comparison
+
+```
+Reusable signs (existing flow)              Consumer signs (this flow)
+──────────────────────────────              ──────────────────────────
+Fulcio cert SAN:                            Fulcio cert SAN:
+  hwinther/reusable-workflows/                <consumer-org>/<repo>/
+    .github/workflows/                          .github/workflows/
+    docker-container.yml@refs/tags/v1           release.yml@refs/heads/main
+
+Kyverno verifyImages target:                Kyverno verifyImages target:
+  one identity covers any repo                one identity per consumer
+  that calls v1                               (per-tenant trust)
+
+Compromise of v1 mints sigs for             Compromise of v1 cannot mint sigs
+  every consumer wholesale                    until each consumer pulls
+                                              the bad version into their
+                                              own workflow
 ```
 
 ### Package publishing fan-out

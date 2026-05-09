@@ -60,6 +60,16 @@ on:
         required: false
         type: string
         default: ""
+      sbom_cyclonedx_sha256:
+        description: "Expected sha256 of the CycloneDX SBOM file (build-and-scan-*.yml sbom_cyclonedx_sha256 output). When set, this job re-hashes the downloaded SBOM and aborts before push if the value does not match — closing the cross-job tampering window on the predicate. When empty, no integrity check is performed (preserves backward compatibility)."
+        required: false
+        type: string
+        default: ""
+      grype_json_sha256:
+        description: "Expected sha256 of the Grype JSON file (build-and-scan-*.yml grype_json_sha256 output). Same semantics as sbom_cyclonedx_sha256."
+        required: false
+        type: string
+        default: ""
     outputs:
       pushed_tags:
         description: "Comma-separated tags that were pushed."
@@ -152,6 +162,36 @@ jobs:
           [ -n "$GRYPE" ] || { echo "::error::No Grype JSON found under $GRYPE_DIR"; ls -la "$GRYPE_DIR"; exit 1; }
           echo "sbom_cyclonedx_path=$CYCLONEDX" >> "$GITHUB_OUTPUT"
           echo "grype_json_path=$GRYPE" >> "$GITHUB_OUTPUT"
+
+      # Cross-job integrity: when build-and-scan-*.yml passed the predicate
+      # hashes through, re-hash the downloaded files and bail before push +
+      # attest if either has been tampered with. Empty input → skipped.
+      - name: Verify predicate integrity (sha256)
+        if: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled && (inputs.sbom_cyclonedx_sha256 != '' || inputs.grype_json_sha256 != '') }}
+        shell: bash
+        env:
+          SBOM_PATH: ${{ steps.predicates.outputs.sbom_cyclonedx_path }}
+          GRYPE_PATH: ${{ steps.predicates.outputs.grype_json_path }}
+          EXPECTED_SBOM: ${{ inputs.sbom_cyclonedx_sha256 }}
+          EXPECTED_GRYPE: ${{ inputs.grype_json_sha256 }}
+        run: |
+          set -euo pipefail
+          if [ -n "$EXPECTED_SBOM" ]; then
+            actual=$(sha256sum "$SBOM_PATH" | cut -d' ' -f1)
+            if [ "$actual" != "$EXPECTED_SBOM" ]; then
+              echo "::error::CycloneDX SBOM hash mismatch (expected $EXPECTED_SBOM, got $actual). The predicate may have been swapped between jobs — refusing to attest."
+              exit 1
+            fi
+            echo "CycloneDX SBOM hash matches: $actual"
+          fi
+          if [ -n "$EXPECTED_GRYPE" ]; then
+            actual=$(sha256sum "$GRYPE_PATH" | cut -d' ' -f1)
+            if [ "$actual" != "$EXPECTED_GRYPE" ]; then
+              echo "::error::Grype JSON hash mismatch (expected $EXPECTED_GRYPE, got $actual). The predicate may have been swapped between jobs — refusing to attest."
+              exit 1
+            fi
+            echo "Grype JSON hash matches: $actual"
+          fi
 
       - name: Push image and attach signatures + attestations
         id: push

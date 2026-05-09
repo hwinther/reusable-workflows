@@ -112,6 +112,12 @@ on:
       grype_artifact:
         description: "Workflow artifact name holding the Grype JSON for cosign attestation (empty when generate_supply_chain_artifacts=false)."
         value: ${{ jobs['build-and-scan'].outputs.grype_artifact }}
+      sbom_cyclonedx_sha256:
+        description: "sha256 of the CycloneDX SBOM file uploaded under sbom_artifact. Pass to image-push.yml or sign-image so the consumer-side sign job can verify the predicate has not been swapped between jobs."
+        value: ${{ jobs['build-and-scan'].outputs.sbom_cyclonedx_sha256 }}
+      grype_json_sha256:
+        description: "sha256 of the Grype JSON file uploaded under grype_artifact. Pass to image-push.yml or sign-image for cross-job integrity verification."
+        value: ${{ jobs['build-and-scan'].outputs.grype_json_sha256 }}
       container_image_tags:
         description: "Full image refs that will be used when pushing (registry/name:tag, comma-separated)."
         value: ${{ jobs.gitversion.outputs.container_image_tags }}
@@ -163,6 +169,8 @@ jobs:
       image_digest: ${{ steps.save.outputs.image_digest }}
       sbom_artifact: ${{ steps.upload-sboms.outputs.artifact-id && format('build-and-scan-{0}-sboms', inputs.container_image_name_postfix) || '' }}
       grype_artifact: ${{ steps.upload-grype.outputs.artifact-id && format('build-and-scan-{0}-grype', inputs.container_image_name_postfix) || '' }}
+      sbom_cyclonedx_sha256: ${{ steps.predicate-hashes.outputs.sbom_cyclonedx_sha256 }}
+      grype_json_sha256: ${{ steps.predicate-hashes.outputs.grype_json_sha256 }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -240,3 +248,24 @@ jobs:
           path: ${{ steps.scan.outputs.grype_json_path }}
           retention-days: ${{ inputs.artifact_retention_days }}
           if-no-files-found: error
+
+      # Hash the SBOM and Grype JSON so a downstream sign job (image-push.yml
+      # or sign-image composite) can verify the predicate hasn't been swapped
+      # in transit. Job outputs travel through the actions service plan, not
+      # through artifact storage, so they share the same trust root as the
+      # image_digest assertion above.
+      - name: Hash supply-chain predicates
+        id: predicate-hashes
+        if: ${{ inputs.generate_supply_chain_artifacts }}
+        shell: bash
+        env:
+          CYCLONEDX_PATH: ${{ steps.scan.outputs.sbom_cyclonedx_path }}
+          GRYPE_PATH: ${{ steps.scan.outputs.grype_json_path }}
+        run: |
+          set -euo pipefail
+          sbom_sha=$(sha256sum "$CYCLONEDX_PATH" | cut -d' ' -f1)
+          grype_sha=$(sha256sum "$GRYPE_PATH" | cut -d' ' -f1)
+          echo "sbom_cyclonedx_sha256=$sbom_sha" >> "$GITHUB_OUTPUT"
+          echo "grype_json_sha256=$grype_sha" >> "$GITHUB_OUTPUT"
+          echo "CycloneDX SBOM sha256: $sbom_sha"
+          echo "Grype JSON sha256:     $grype_sha"

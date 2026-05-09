@@ -1,0 +1,227 @@
+name: "Sign and attest a pushed container image"
+description: |
+  Public composite. Attaches the same supply-chain artifacts as
+  `_push-image-with-signatures` does after its push step, but as a standalone
+  action a consumer's own job can call AFTER an already-pushed digest:
+    - GitHub artifact-build-provenance attestation (when enabled)
+    - Cosign keyless signature (when enabled)
+    - Cosign CycloneDX SBOM and Grype vuln attestations (when enabled)
+
+  Because this action runs inline in the caller's job, the OIDC token minted
+  for cosign and attest-build-provenance carries the CALLER's
+  `job_workflow_ref` — i.e. the consumer repo's own workflow, not this
+  reusable-workflows repo. Use this when you want each consumer's signatures
+  to be bound to their own workflow identity (so Kyverno / cosign verify
+  policies can pin to per-consumer identities instead of trusting any repo
+  that calls our reusable workflow).
+
+  Caveats and prerequisites:
+    - Caller must `docker login` to the registry before calling this action
+      (cosign attest pushes attestation manifests to the registry).
+    - Caller's job must declare permissions:
+        id-token: write
+        attestations: write     # only when attest_build_provenance_enabled
+        packages: write
+    - Cosign is pinned to v2.4.3 here for the same Kyverno 1.17 compat reason
+      explained in CLAUDE.md (legacy `sha256-….att` manifest path). Do NOT
+      bump to v3 without revisiting that constraint.
+
+inputs:
+  container_registry:
+    required: true
+    description: "Container registry, e.g. ghcr.io"
+  repository:
+    required: true
+    description: "Lowercased GITHUB_REPOSITORY (owner/repo)."
+  container_image_name_postfix:
+    required: true
+    description: "Image name postfix appended to repository for the subject ref."
+  image_digest:
+    required: true
+    description: "OCI manifest digest of the already-pushed image (sha256:...). Subject of attestations and the `tag@digest` form passed to cosign sign."
+  container_tags:
+    required: true
+    description: "Comma-separated full image refs (registry/name:tag) the digest was pushed under. Each is signed as `<tag>@<digest>` so verifiers resolving via tag find the signature."
+  cosign_sign_enabled:
+    required: false
+    description: "Sign with cosign keyless."
+    default: "true"
+  cosign_supply_chain_attest_enabled:
+    required: false
+    description: "Attach CycloneDX SBOM + Grype vuln attestations after sign."
+    default: "true"
+  attest_build_provenance_enabled:
+    required: false
+    description: "Generate a GitHub artifact-build-provenance attestation. Set to false on private repos without GitHub Advanced Security / paid plan."
+    default: "true"
+  sbom_cyclonedx_path:
+    required: false
+    description: "Path to the CycloneDX SBOM, required when cosign_supply_chain_attest_enabled."
+    default: ""
+  grype_json_path:
+    required: false
+    description: "Path to the Grype JSON report, required when cosign_supply_chain_attest_enabled."
+    default: ""
+  sbom_cyclonedx_sha256:
+    required: false
+    description: "Expected sha256 of the CycloneDX SBOM file (build-and-scan-*.yml sbom_cyclonedx_sha256 output). When set, the file at sbom_cyclonedx_path is re-hashed and the action fails if the digest does not match — closing the cross-job tampering window between the build job and this consumer-side sign job. Leave empty for in-job use where the predicate is not crossing a job boundary."
+    default: ""
+  grype_json_sha256:
+    required: false
+    description: "Expected sha256 of the Grype JSON file (build-and-scan-*.yml grype_json_sha256 output). Same semantics as sbom_cyclonedx_sha256."
+    default: ""
+  version:
+    required: false
+    description: "Application version (referenced in the cosign-vuln scanner.invocation parameters; informational)."
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    # Cross-job integrity: re-hash the predicate files passed in and bail
+    # before any signing if they don't match what the build job produced.
+    # Empty inputs → skipped (in-job callers don't need this).
+    - name: Verify predicate integrity (sha256)
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' && (inputs.sbom_cyclonedx_sha256 != '' || inputs.grype_json_sha256 != '') }}
+      shell: bash
+      env:
+        SBOM_PATH: ${{ inputs.sbom_cyclonedx_path }}
+        GRYPE_PATH: ${{ inputs.grype_json_path }}
+        EXPECTED_SBOM: ${{ inputs.sbom_cyclonedx_sha256 }}
+        EXPECTED_GRYPE: ${{ inputs.grype_json_sha256 }}
+      run: |
+        set -euo pipefail
+        if [ -n "$EXPECTED_SBOM" ]; then
+          actual=$(sha256sum "$SBOM_PATH" | cut -d' ' -f1)
+          if [ "$actual" != "$EXPECTED_SBOM" ]; then
+            echo "::error::CycloneDX SBOM hash mismatch (expected $EXPECTED_SBOM, got $actual). The predicate may have been swapped between jobs — refusing to attest."
+            exit 1
+          fi
+          echo "CycloneDX SBOM hash matches: $actual"
+        fi
+        if [ -n "$EXPECTED_GRYPE" ]; then
+          actual=$(sha256sum "$GRYPE_PATH" | cut -d' ' -f1)
+          if [ "$actual" != "$EXPECTED_GRYPE" ]; then
+            echo "::error::Grype JSON hash mismatch (expected $EXPECTED_GRYPE, got $actual). The predicate may have been swapped between jobs — refusing to attest."
+            exit 1
+          fi
+          echo "Grype JSON hash matches: $actual"
+        fi
+
+    # SBOM-image binding: parse the CycloneDX and assert it was generated for
+    # the same image we're about to attest. Catches build-job bugs (wrong
+    # image_ref scanned, swapped predicate paths) and adds a second layer to
+    # the artifact-store integrity check above. syft writes the manifest
+    # digest into metadata.component.properties[] for daemon images and
+    # manifest digests are content-addressable, so the value at SBOM time
+    # equals the registry digest after push.
+    - name: Verify SBOM-image binding (manifest digest)
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      shell: bash
+      env:
+        CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
+        EXPECTED_DIGEST: ${{ inputs.image_digest }}
+      run: |
+        set -euo pipefail
+        sbom_digest=$(jq -r '
+          .metadata.component.properties[]?
+          | select(.name == "syft:image:manifestDigest")
+          | .value
+        ' "$CYCLONEDX_PATH" | head -1)
+        if [ -z "$sbom_digest" ] || [ "$sbom_digest" = "null" ]; then
+          echo "::error::CycloneDX SBOM has no syft:image:manifestDigest property — cannot prove it was generated for the image being attested. Regenerate the SBOM with anchore/sbom-action against a local daemon image, or skip cosign supply-chain attestation."
+          exit 1
+        fi
+        if [ "$sbom_digest" != "$EXPECTED_DIGEST" ]; then
+          echo "::error::SBOM-image binding mismatch: SBOM was generated for $sbom_digest but cosign attest is being asked to bind it to $EXPECTED_DIGEST. Refusing to publish a misleading attestation."
+          exit 1
+        fi
+        echo "SBOM manifestDigest matches attestation subject: $sbom_digest"
+
+    - name: Generate artifact attestation
+      if: ${{ inputs.attest_build_provenance_enabled == 'true' }}
+      uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+      with:
+        subject-name: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}
+        subject-digest: ${{ inputs.image_digest }}
+        push-to-registry: true
+
+    # Kyverno 1.17 resolves Cosign attestations like Cosign v2 (sha256-….att manifest tags). Cosign v3+ often publishes via OCI referrers only → 404 on that path while local cosign v3 verify still works via /referrers/.
+    - name: Install Cosign
+      if: ${{ inputs.cosign_sign_enabled == 'true' }}
+      uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
+      with:
+        cosign-release: v2.4.3
+
+    - name: Sign container image (cosign, keyless)
+      if: ${{ inputs.cosign_sign_enabled == 'true' }}
+      shell: bash
+      env:
+        DIGEST: ${{ inputs.image_digest }}
+        CONTAINER_TAGS: ${{ inputs.container_tags }}
+      run: |
+        set -euo pipefail
+        images=""
+        while IFS= read -r tag; do
+          tag=$(echo "$tag" | xargs)
+          [ -z "$tag" ] && continue
+          if [ -z "$images" ]; then
+            images="${tag}@${DIGEST}"
+          else
+            images="${images} ${tag}@${DIGEST}"
+          fi
+        done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
+        [ -n "$images" ] || { echo "::error::No image refs to sign"; exit 1; }
+        echo "Signing images: ${images}"
+        cosign sign --yes ${images}
+
+    - name: Build cosign vuln attestation predicate
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      shell: bash
+      env:
+        RUN_URI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_ID: ${{ github.run_id }}
+        GRYPE_JSON: ${{ inputs.grype_json_path }}
+        OUT_PATH: ${{ runner.temp }}/cosign-vuln-predicate.json
+      run: |
+        set -euo pipefail
+        [ -f "$GRYPE_JSON" ] || { echo "::error::Missing Grype JSON for vuln attestation: $GRYPE_JSON"; exit 1; }
+        STARTED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        FINISHED="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        jq -n \
+          --slurpfile result "$GRYPE_JSON" \
+          --arg run_uri "$RUN_URI" \
+          --arg run_id "$RUN_ID" \
+          --arg started "$STARTED" \
+          --arg finished "$FINISHED" \
+          '{
+            invocation: {
+              parameters: ["sbom"],
+              uri: $run_uri,
+              event_id: $run_id,
+              "builder.id": "https://github.com/actions/runner"
+            },
+            scanner: {
+              uri: "https://github.com/anchore/grype",
+              version: "anchore/scan-action@v7",
+              db: {uri: "", version: ""},
+              result: $result[0]
+            },
+            metadata: {
+              scanStartedOn: $started,
+              scanFinishedOn: $finished
+            }
+          }' > "$OUT_PATH"
+
+    - name: Cosign attest CycloneDX and vulnerability scan (registry)
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ inputs.image_digest }}
+        CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
+        VULN_PREDICATE: ${{ runner.temp }}/cosign-vuln-predicate.json
+      run: |
+        set -euo pipefail
+        [ -f "$CYCLONEDX_PATH" ] || { echo "::error::Missing CycloneDX SBOM: $CYCLONEDX_PATH"; exit 1; }
+        cosign attest --yes --type cyclonedx --predicate "$CYCLONEDX_PATH" "$IMAGE_REF"
+        cosign attest --yes --type vuln --predicate "$VULN_PREDICATE" "$IMAGE_REF"

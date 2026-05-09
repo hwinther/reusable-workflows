@@ -197,6 +197,37 @@ runs:
         echo "Signing images: ${images}"
         cosign sign --yes ${images}
 
+    # SBOM-image binding: parse the CycloneDX and assert it was generated for
+    # the same image we're about to attest. Catches build-job bugs (wrong
+    # image_ref scanned, swapped predicate paths) and adds a second layer to
+    # any artifact-store integrity check the caller did before invoking us.
+    # syft writes the manifest digest into metadata.component.properties[] for
+    # daemon images and manifest digests are content-addressable, so the
+    # value at SBOM time equals the registry digest after push.
+    - name: Verify SBOM-image binding (manifest digest)
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      shell: bash
+      env:
+        CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
+        EXPECTED_DIGEST: ${{ steps.resolve-digest.outputs.digest }}
+      run: |
+        set -euo pipefail
+        [ -f "$CYCLONEDX_PATH" ] || { echo "::error::Missing CycloneDX SBOM: $CYCLONEDX_PATH"; exit 1; }
+        sbom_digest=$(jq -r '
+          .metadata.component.properties[]?
+          | select(.name == "syft:image:manifestDigest")
+          | .value
+        ' "$CYCLONEDX_PATH" | head -1)
+        if [ -z "$sbom_digest" ] || [ "$sbom_digest" = "null" ]; then
+          echo "::error::CycloneDX SBOM has no syft:image:manifestDigest property — cannot prove it was generated for the image being attested. Regenerate the SBOM with anchore/sbom-action against a local daemon image, or skip cosign supply-chain attestation."
+          exit 1
+        fi
+        if [ "$sbom_digest" != "$EXPECTED_DIGEST" ]; then
+          echo "::error::SBOM-image binding mismatch: SBOM was generated for $sbom_digest but cosign attest is being asked to bind it to $EXPECTED_DIGEST. Refusing to publish a misleading attestation."
+          exit 1
+        fi
+        echo "SBOM manifestDigest matches attestation subject: $sbom_digest"
+
     - name: Build cosign vuln attestation predicate
       if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
       shell: bash
