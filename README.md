@@ -30,7 +30,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 
 ### Maintenance & quality
 - **`stryker.yml`** — Stryker mutation testing for .NET (off by default — current MTP/dotnet-stryker hangs) and/or Node (on by default). Each is gated by an input flag.
-- **`resharper-cleanupcode.yml`** — runs `jb cleanupcode` against a .NET solution and opens a PR (`mode: cleanupcode`), or syncs `.git-blame-ignore-revs` from prior CleanupCode commits (`mode: blame-ignore-revs`).
+- **`format-and-create-pr.yml`** — multi-formatter helper. Runs `jb cleanupcode` against a .NET solution (`mode: cleanupcode`) or `ruff format` against a Python tree (`mode: ruff-format`) and opens a PR; a separate `mode: blame-ignore-revs` syncs `.git-blame-ignore-revs` from the matching merged commits.
 - **`dependabot-update-dotnet-lockfiles.yml`** — for `pull_request_target`: on labelled dependabot PRs, refreshes `packages.lock.json` files and pushes back to the PR branch via a caller-supplied `WORKFLOW_TOKEN`.
 
 ### Security scanning

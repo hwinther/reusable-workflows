@@ -1,7 +1,6 @@
 name: "Format-and-PR helper (gjenbrukbar)"
 
-# Multi-formatter helper (filename kept for backward compatibility — this
-# workflow originally only handled ReSharper CleanupCode):
+# Multi-formatter helper. Each mode is its own job, gated by `inputs.mode`:
 #   mode=cleanupcode       → run `jb cleanupcode` against a .NET solution and
 #                            open a PR with the diff.
 #   mode=ruff-format       → run `ruff format` against a Python tree and

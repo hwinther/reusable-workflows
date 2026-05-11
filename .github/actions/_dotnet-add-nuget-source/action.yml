@@ -6,7 +6,7 @@ description: |
 
   Internal — leading underscore signals it's not part of the public surface.
   Used by `dotnet-build`, `_build-image-dotnet`, `stryker.yml`,
-  `resharper-cleanupcode.yml`, and `dependabot-update-dotnet-lockfiles.yml`.
+  `format-and-create-pr.yml`, and `dependabot-update-dotnet-lockfiles.yml`.
 
   Does NOT include the `setup-dotnet` invocation or the `nuget.config`
   cleanup — those have different policies per caller (committed-vs-not,
