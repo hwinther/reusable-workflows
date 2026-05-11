@@ -1,11 +1,15 @@
-name: "ReSharper CleanupCode (gjenbrukbar)"
+name: "Format-and-PR helper (gjenbrukbar)"
 
-# Two-mode helper:
+# Multi-formatter helper (filename kept for backward compatibility — this
+# workflow originally only handled ReSharper CleanupCode):
 #   mode=cleanupcode       → run `jb cleanupcode` against a .NET solution and
 #                            open a PR with the diff.
-#   mode=blame-ignore-revs → after CleanupCode has merged to the default branch
-#                            (squash/rebase), sync .git-blame-ignore-revs from
-#                            that history and open a PR.
+#   mode=ruff-format       → run `ruff format` against a Python tree and
+#                            open a PR with the diff.
+#   mode=blame-ignore-revs → after a formatter PR has merged to the default
+#                            branch (squash/rebase), sync .git-blame-ignore-revs
+#                            from that history and open a PR. Formatter-agnostic;
+#                            matches commits by the caller-supplied `commit_subject`.
 #
 # Caller owns the trigger (workflow_dispatch with a `mode` choice input is the
 # expected shape); the job-level `if:` here gates which job runs.
@@ -16,24 +20,41 @@ on:
       mode:
         required: true
         type: string
-        description: "Hvilken jobb som skal kjøres: 'cleanupcode' eller 'blame-ignore-revs'."
+        description: "Hvilken jobb som skal kjøres: 'cleanupcode', 'ruff-format' eller 'blame-ignore-revs'."
       solution_path:
-        required: true
+        required: false
         type: string
-        description: "Mappen som inneholder .NET solution-filen."
+        description: "Mappen som inneholder .NET solution-filen (kun brukt av mode=cleanupcode)."
+        default: ''
       solution_name:
-        required: true
+        required: false
         type: string
-        description: "Navn på solution-filen (f.eks. Backend.slnx)."
+        description: "Navn på solution-filen, f.eks. Backend.slnx (kun brukt av mode=cleanupcode)."
+        default: ''
       dotnet_version:
         required: false
         type: string
-        description: ".NET versjon, f.eks. 10.0.x."
+        description: ".NET versjon, f.eks. 10.0.x (kun brukt av mode=cleanupcode)."
         default: "10.0.x"
+      python_version:
+        required: false
+        type: string
+        description: "Python-versjon (kun brukt av mode=ruff-format). Sendes til actions/setup-python."
+        default: "3.13"
+      ruff_version:
+        required: false
+        type: string
+        description: "Ruff-versjon å installere via pip (f.eks. '0.9.0'). Tom = pip henter siste tilgjengelige."
+        default: ''
+      target_path:
+        required: false
+        type: string
+        description: "Sti `ruff format` skal kjøre mot (kun brukt av mode=ruff-format)."
+        default: '.'
       commit_subject:
         required: false
         type: string
-        description: "Commit-subject brukt for CleanupCode-PR-en og som søkestreng i blame-ignore-revs-syncen."
+        description: "Commit-subject brukt for formatter-PR-en (cleanupcode / ruff-format) og som søkestreng i blame-ignore-revs-syncen. Ruff-callere overstyrer typisk til f.eks. 'chore: ruff format'."
         default: "chore: ReSharper CleanupCode"
       primary_nuget_source:
         required: false
@@ -140,6 +161,65 @@ jobs:
             --title "$COMMIT_SUBJECT" \
             --body "Automated changes from JetBrains [CleanupCode](https://www.jetbrains.com/help/resharper/CleanupCode.html) (\`jb cleanupcode\` via [JetBrains.ReSharper.GlobalTools](https://www.nuget.org/packages/JetBrains.ReSharper.GlobalTools))."
 
+  ruff-format:
+    if: ${{ inputs.mode == 'ruff-format' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ inputs.python_version }}
+
+      - name: Install Ruff
+        env:
+          RUFF_VERSION: ${{ inputs.ruff_version }}
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -n "$RUFF_VERSION" ]; then
+            pip install "ruff==$RUFF_VERSION"
+          else
+            pip install ruff
+          fi
+
+      - name: Run ruff format
+        env:
+          TARGET_PATH: ${{ inputs.target_path }}
+        run: ruff format "$TARGET_PATH"
+
+      - name: Branch, commit, and open pull request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          COMMIT_SUBJECT: ${{ inputs.commit_subject }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No changes after ruff format; skipping PR."
+            exit 0
+          fi
+          branch="ruff/format-${{ github.run_id }}"
+          git checkout -b "$branch"
+          git add -A
+          git commit -m "$COMMIT_SUBJECT"
+          git push origin "$branch"
+          base_branch="${{ github.ref_name }}"
+          if [ -z "$(git ls-remote origin "refs/heads/${base_branch}")" ]; then
+            base_branch="${{ github.event.repository.default_branch }}"
+            echo "::warning::Trigger branch ${{ github.ref_name }} is not on origin; opening PR against ${base_branch}."
+          fi
+          gh pr create \
+            --base "$base_branch" \
+            --head "$branch" \
+            --title "$COMMIT_SUBJECT" \
+            --body "Automated changes from [Ruff](https://docs.astral.sh/ruff/) (\`ruff format\`)."
+
   sync-git-blame-ignore-revs:
     if: ${{ inputs.mode == 'blame-ignore-revs' }}
     runs-on: ubuntu-latest
@@ -153,7 +233,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Sync .git-blame-ignore-revs from CleanupCode commits on default branch
+      - name: Sync .git-blame-ignore-revs from formatter commits on default branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMIT_SUBJECT: ${{ inputs.commit_subject }}
@@ -170,7 +250,7 @@ jobs:
           subject="$COMMIT_SUBJECT"
           mapfile -t cleanup_shas < <(git log "$default_branch" --reverse --fixed-strings --grep="$subject" --pretty=format:%H || true)
           if [ "${#cleanup_shas[@]}" -eq 0 ] || [ -z "${cleanup_shas[0]:-}" ]; then
-            echo "No commits on ${default_branch} match the CleanupCode message (merge the CleanupCode PR first, or ensure the squash/rebase title still contains: ${subject})."
+            echo "No commits on ${default_branch} match the formatter subject (merge the formatter PR first, or ensure the squash/rebase title still contains: ${subject})."
             exit 0
           fi
 
@@ -229,11 +309,13 @@ jobs:
           done
 
           if [ -f "$ignore_file" ] && cmp -s "$ignore_file" "$tmpfile"; then
-            echo ".git-blame-ignore-revs already lists all CleanupCode commits."
+            echo ".git-blame-ignore-revs already lists all matching formatter commits."
             rm -f "$tmpfile"
             exit 0
           fi
 
+          # Legacy branch prefix `jb/` kept to avoid churning consumer-side
+          # branch-protection patterns; this job is formatter-agnostic.
           branch="jb/blame-ignore-revs-${{ github.run_id }}"
           git checkout -b "$branch"
 
@@ -244,7 +326,7 @@ jobs:
             exit 0
           fi
 
-          msg="chore: sync .git-blame-ignore-revs with ReSharper CleanupCode commits"
+          msg="chore: sync .git-blame-ignore-revs"
           if [ "$added" -gt 0 ]; then
             git commit -m "$msg" -m "Added $added missing revision(s) matching: $subject"
           else
@@ -255,5 +337,5 @@ jobs:
           gh pr create \
             --base "$default_branch" \
             --head "$branch" \
-            --title "chore: sync .git-blame-ignore-revs with ReSharper CleanupCode commits" \
-            --body "Adds missing full SHAs for commits on \`${default_branch}\` whose message contains the CleanupCode subject (workflow input \`commit_subject\`). Merge after required checks (e.g. pr-build, CodeQL) pass."
+            --title "chore: sync .git-blame-ignore-revs" \
+            --body "Adds missing full SHAs for commits on \`${default_branch}\` whose message matches the workflow input \`commit_subject\` (\`${subject}\`). Merge after required checks (e.g. pr-build, CodeQL) pass."
