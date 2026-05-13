@@ -22,7 +22,7 @@ inputs:
     default: ""
   artifact_name_suffix:
     required: false
-    description: "Optional caller-supplied suffix that disambiguates scans of different image variants in the same workflow run (typically a matrix dimension — e.g. '${{ matrix.debian_release }}'). Applied additively alongside `arch_suffix` to SARIF category, SBOM workflow-artifact names, Grype JSON / SARIF filenames, and the PR-comment identifier. Without this, matrix callers that share `container_image_name_postfix` collide on `actions/upload-artifact` with HTTP 409. The image-name-postfix itself is not affected (matrix variants should still publish to the same image)."
+    description: "Optional caller-supplied suffix that disambiguates scans of different image variants in the same workflow run (typically a matrix dimension, e.g. the value of matrix.debian_release). Applied additively alongside `arch_suffix` to SARIF category, SBOM workflow-artifact names, Grype JSON / SARIF filenames, and the PR-comment identifier. Without this, matrix callers that share `container_image_name_postfix` collide on `actions/upload-artifact` with HTTP 409. The image-name-postfix itself is not affected (matrix variants should still publish to the same image)."
     default: ""
   grype_scan_enabled:
     required: false

@@ -80,7 +80,7 @@ on:
         type: number
         default: 1
       artifact_name_suffix:
-        description: "Optional suffix appended to scan-related artifact names inside `_scan-image` (SPDX/CycloneDX SBOM workflow artifacts, SARIF category, PR-comment identifier). Use when calling this workflow from a build matrix — pass `${{ matrix.<dimension> }}`. NOTE: the workflow-level `image_artifact`, `sbom_artifact`, and `grype_artifact` outputs are still derived from `container_image_name_postfix` alone, so matrix callers that also hand the image off to downstream jobs (e.g. image-push.yml) need to disambiguate those names themselves (typically by giving each matrix entry a distinct `container_image_name_postfix`)."
+        description: "Optional suffix appended to scan-related artifact names inside `_scan-image` (SPDX/CycloneDX SBOM workflow artifacts, SARIF category, PR-comment identifier). Use when calling this workflow from a build matrix — pass the matrix dimension value (for example the matrix.debian_release expression evaluated at the call site). NOTE: the workflow-level `image_artifact`, `sbom_artifact`, and `grype_artifact` outputs are still derived from `container_image_name_postfix` alone, so matrix callers that also hand the image off to downstream jobs (e.g. image-push.yml) need to disambiguate those names themselves (typically by giving each matrix entry a distinct `container_image_name_postfix`)."
         required: false
         type: string
         default: ""

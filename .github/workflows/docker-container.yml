@@ -90,7 +90,7 @@ on:
         type: boolean
         default: true
       artifact_name_suffix:
-        description: "Optional suffix appended to scan-related artifact names (SPDX/CycloneDX SBOM workflow artifacts, SARIF category, PR-comment identifier). Use when calling this workflow from a build matrix — pass `${{ matrix.<dimension> }}` so each matrix entry uploads under a unique artifact name. Without it, matrix entries that share `container_image_name_postfix` collide with HTTP 409 on `actions/upload-artifact`."
+        description: "Optional suffix appended to scan-related artifact names (SPDX/CycloneDX SBOM workflow artifacts, SARIF category, PR-comment identifier). Use when calling this workflow from a build matrix — pass the matrix dimension value (for example the matrix.debian_release expression evaluated at the call site) so each matrix entry uploads under a unique artifact name. Without it, matrix entries that share `container_image_name_postfix` collide with HTTP 409 on `actions/upload-artifact`."
         required: false
         type: string
         default: ""
