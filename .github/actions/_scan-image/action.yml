@@ -20,6 +20,10 @@ inputs:
     required: false
     description: "Optional architecture suffix (e.g. 'amd64', 'arm64'). When set, SARIF category, SBOM filenames, Grype JSON path, and PR-comment identifier all gain '-${arch_suffix}' so per-platform scans in the same job don't stomp on each other."
     default: ""
+  artifact_name_suffix:
+    required: false
+    description: "Optional caller-supplied suffix that disambiguates scans of different image variants in the same workflow run (typically a matrix dimension — e.g. '${{ matrix.debian_release }}'). Applied additively alongside `arch_suffix` to SARIF category, SBOM workflow-artifact names, Grype JSON / SARIF filenames, and the PR-comment identifier. Without this, matrix callers that share `container_image_name_postfix` collide on `actions/upload-artifact` with HTTP 409. The image-name-postfix itself is not affected (matrix variants should still publish to the same image)."
+    default: ""
   grype_scan_enabled:
     required: false
     description: "Run the Grype gate scan."
@@ -70,14 +74,20 @@ runs:
         RUNNER_TEMP_DIR: ${{ runner.temp }}
         POSTFIX: ${{ inputs.container_image_name_postfix }}
         ARCH_SUFFIX: ${{ inputs.arch_suffix }}
+        ARTIFACT_NAME_SUFFIX: ${{ inputs.artifact_name_suffix }}
       run: |
         set -euo pipefail
+        # Order: variant first (matrix dim), then arch. So matrix callers that also enable
+        # scan_all_platforms get e.g. `-bookworm-amd64` rather than `-amd64-bookworm`.
+        file_suffix=""
+        name_suffix=""
+        if [ -n "$ARTIFACT_NAME_SUFFIX" ]; then
+          file_suffix="${file_suffix}-${ARTIFACT_NAME_SUFFIX}"
+          name_suffix="${name_suffix}-${ARTIFACT_NAME_SUFFIX}"
+        fi
         if [ -n "$ARCH_SUFFIX" ]; then
-          file_suffix="-${ARCH_SUFFIX}"
-          name_suffix="-${ARCH_SUFFIX}"
-        else
-          file_suffix=""
-          name_suffix=""
+          file_suffix="${file_suffix}-${ARCH_SUFFIX}"
+          name_suffix="${name_suffix}-${ARCH_SUFFIX}"
         fi
         echo "sbom_spdx_path=${RUNNER_TEMP_DIR}/container-image${file_suffix}.spdx.json" >> "$GITHUB_OUTPUT"
         echo "sbom_cyclonedx_path=${RUNNER_TEMP_DIR}/container-image${file_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"

@@ -77,6 +77,11 @@ on:
         required: false
         type: boolean
         default: true
+      artifact_name_suffix:
+        description: "Optional suffix appended to scan-related artifact names (SPDX/CycloneDX SBOM workflow artifacts, SARIF category, PR-comment identifier). Use when calling this workflow from a build matrix — pass `${{ matrix.<dimension> }}` so each matrix entry uploads under a unique artifact name. Without it, matrix entries that share `container_image_name_postfix` collide with HTTP 409 on `actions/upload-artifact`."
+        required: false
+        type: string
+        default: ""
       primary_nuget_source:
         description: "Primary NuGet source URL passed to actions/setup-dotnet via source-url."
         required: false
@@ -184,6 +189,7 @@ jobs:
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          artifact_name_suffix: ${{ inputs.artifact_name_suffix }}
           grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
           grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
           grype_only_fixed: ${{ inputs.grype_only_fixed }}

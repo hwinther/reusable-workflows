@@ -89,6 +89,11 @@ on:
         required: false
         type: boolean
         default: true
+      artifact_name_suffix:
+        description: "Optional suffix appended to scan-related artifact names (SPDX/CycloneDX SBOM workflow artifacts, SARIF category, PR-comment identifier). Use when calling this workflow from a build matrix — pass `${{ matrix.<dimension> }}` so each matrix entry uploads under a unique artifact name. Without it, matrix entries that share `container_image_name_postfix` collide with HTTP 409 on `actions/upload-artifact`."
+        required: false
+        type: string
+        default: ""
     secrets:
       npm_auth_token:
         description: "When set, exposed to the Docker build (both single-arch scan build and multi-arch manifest push) as a BuildKit secret with id `npm_auth_token`. Consume in the Dockerfile via `RUN --mount=type=secret,id=npm_auth_token`."
@@ -216,6 +221,7 @@ jobs:
           image_ref: ${{ steps.build-amd64.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
           arch_suffix: ${{ (inputs.scan_all_platforms && contains(inputs.platforms, ',')) && 'amd64' || '' }}
+          artifact_name_suffix: ${{ inputs.artifact_name_suffix }}
           grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
           grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
@@ -247,6 +253,7 @@ jobs:
           image_ref: ${{ steps.build-arm64.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
           arch_suffix: arm64
+          artifact_name_suffix: ${{ inputs.artifact_name_suffix }}
           grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
           grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
           grype_only_fixed: ${{ inputs.grype_only_fixed }}

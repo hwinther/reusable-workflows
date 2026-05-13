@@ -79,6 +79,11 @@ on:
         required: false
         type: number
         default: 1
+      artifact_name_suffix:
+        description: "Optional suffix appended to scan-related artifact names inside `_scan-image` (SPDX/CycloneDX SBOM workflow artifacts, SARIF category, PR-comment identifier). Use when calling this workflow from a build matrix — pass `${{ matrix.<dimension> }}`. NOTE: the workflow-level `image_artifact`, `sbom_artifact`, and `grype_artifact` outputs are still derived from `container_image_name_postfix` alone, so matrix callers that also hand the image off to downstream jobs (e.g. image-push.yml) need to disambiguate those names themselves (typically by giving each matrix entry a distinct `container_image_name_postfix`)."
+        required: false
+        type: string
+        default: ""
     secrets:
       npm_auth_token:
         description: "When set, exposed to the Docker build as a BuildKit secret with id `npm_auth_token`. Consume in the Dockerfile via `RUN --mount=type=secret,id=npm_auth_token`. When unset, no secret is mounted."
@@ -224,6 +229,7 @@ jobs:
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          artifact_name_suffix: ${{ inputs.artifact_name_suffix }}
           grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
           grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
