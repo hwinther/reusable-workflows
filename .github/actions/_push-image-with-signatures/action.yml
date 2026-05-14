@@ -239,13 +239,16 @@ runs:
 
         local_id=$(docker inspect --format='{{.Id}}' "$SRC" 2>/dev/null || true)
 
-        # Try matches in order of strength. Any one of these is a sufficient
-        # binding; we only fail if every identifier the SBOM exposes mismatches.
-        # syft:image:manifestDigest is the pre-push manifest digest; when buildx
-        # adds a provenance attestation on push the registry manifest is rewritten,
-        # so syft's manifestDigest will not match EXPECTED_MANIFEST_DIGEST and the
-        # check has to fall back to syft:image:imageID ↔ local_id (the config ID
-        # is stable across the provenance rewrite).
+        # Try matches in order of strength. Strong matches (manifestDigest =
+        # registry digest, or imageID = local config-ID) exit 0. A present-but-
+        # mismatched imageID is a real failure — the config-ID is stable across
+        # push so a mismatch indicates SBOM/image divergence. A present-but-
+        # mismatched manifestDigest WITHOUT an imageID to cross-check is treated
+        # as a warning: buildx adds a provenance attestation on push, which
+        # rewrites the registry manifest, so syft's pre-push manifestDigest is
+        # expected to differ from EXPECTED_MANIFEST_DIGEST in any normal flow.
+        # The cosign signature still binds to the registry digest — that's the
+        # load-bearing gate; this step is best-effort.
         if [ -n "$manifest_digest" ] && [ "$manifest_digest" != "null" ] \
           && [ "$manifest_digest" = "$EXPECTED_MANIFEST_DIGEST" ]; then
           echo "SBOM-image binding via manifest digest: $manifest_digest ✓"
@@ -265,12 +268,13 @@ runs:
             echo "SBOM-image binding via syft:image:imageID: $image_id ✓"
             exit 0
           fi
+          echo "::error::SBOM-image binding mismatch (syft:image:imageID): SBOM says $image_id but local image-ID for $SRC is $local_id."
+          exit 1
         fi
 
-        if [ -n "$manifest_digest" ] && [ "$manifest_digest" != "null" ] \
-          || { [ -n "$image_id" ] && [ "$image_id" != "null" ]; }; then
-          echo "::error::SBOM-image binding mismatch: SBOM manifestDigest=${manifest_digest:-<absent>}, imageID=${image_id:-<absent>}; registry digest=$EXPECTED_MANIFEST_DIGEST, local image-ID=${local_id:-<unknown>}."
-          exit 1
+        if [ -n "$manifest_digest" ] && [ "$manifest_digest" != "null" ]; then
+          echo "::warning::SBOM manifestDigest=$manifest_digest does not match registry digest $EXPECTED_MANIFEST_DIGEST (expected when buildx adds a provenance attestation on push) and the SBOM has no syft:image:imageID to cross-check. Cosign signature still binds the SBOM attestation to the registry digest."
+          exit 0
         fi
 
         echo "::warning::Could not locate an image identifier in the CycloneDX SBOM (checked metadata.component.properties, metadata.properties, metadata.component.version, metadata.component.bom-ref). Skipping binding check — cosign signature still binds to the registry-resolved manifest digest."
