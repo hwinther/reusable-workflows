@@ -1,18 +1,18 @@
-name: "Avgjør pakkeversjon og container image tag"
-description: "Avgjør pakkeversjon og container image tag basert på GitVersion"
+name: "Determine package version and container image tag"
+description: "Determine package version and container image tag based on GitVersion"
 
 inputs:
   container_registry:
-    description: 'Container registry, f.eks. egenacr.azurecr.io'
-    default: 'egenacr.azurecr.io'
+    description: 'Container registry, e.g. ghcr.io'
+    default: 'ghcr.io'
   container_image_name:
-    description: 'Container image navn, f.eks. mappe/undermappe/frontend'
+    description: 'Container image name, e.g. owner/repo/frontend'
     default: ''
   override_config:
     description: |
-      Overstyring av GitVersion konfigurasjonselementer i YAML format.
-      Append-es etter et innebygd default som setter pull-request label til "{BranchName}",
-      så consumer-overstyringer for samme nøkkel vinner.
+      GitVersion configuration overrides in YAML format.
+      Appended after a built-in default that sets the pull-request label to "{BranchName}",
+      so consumer overrides for the same key win.
     default: ''
   persist_checkout_credentials:
     description: 'actions/checkout persist-credentials; set true only if a later step in the same job runs git push using this clone.'
@@ -21,47 +21,47 @@ inputs:
 
 outputs:
   deploy_tag:
-    description: "Deploy tag: registry, image navn og tag som skal deployes til miljø"
+    description: "Deploy tag: registry, image name and tag to deploy to an environment"
     value: ${{ steps.determine_version_and_tag_values.outputs.deploy_tag }}
   container_image_tags:
-    description: "Registry, image navn og tags som skal pushes til container registry"
+    description: "Registry, image name and tags to push to the container registry"
     value: ${{ steps.determine_version_and_tag_values.outputs.container_image_tags }}
   image_tags:
-    description: "Kun image tags (uten registry og image navn)"
+    description: "Image tags only (without registry and image name)"
     value: ${{ steps.determine_version_and_tag_values.outputs.image_tags }}
   version:
-    description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
+    description: "Package version to use when deploying to a package registry"
     value: ${{ steps.determine_version_and_tag_values.outputs.version }}
   is_alpha:
-    description: "Boolsk verdi som indikerer om versjonen er en alpha/prerelease versjon"
+    description: "Boolean indicating whether the version is an alpha/prerelease"
     value: ${{ steps.determine_version_and_tag_values.outputs.is_alpha }}
   git_version_major_minor_patch:
-    description: "GitVersion Major.Minor.Patch versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
+    description: "GitVersion Major.Minor.Patch version — useful for debugging or handling edge cases"
     value: ${{ steps.determine_version_values.outputs.majorMinorPatch }}
   git_version_semver:
-    description: "GitVersion SemVer versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
+    description: "GitVersion SemVer version — useful for debugging or handling edge cases"
     value: ${{ steps.determine_version_values.outputs.semVer }}
 
 runs:
   using: "composite"
   steps:
-  - name: Hent kode
+  - name: Checkout code
     uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
     with:
       fetch-depth: 0
       fetch-tags: true
       persist-credentials: ${{ inputs.persist_checkout_credentials == 'true' }}
 
-  - name: Installer GitVersion
+  - name: Install GitVersion
     uses: gittools/actions/gitversion/setup@bc6623af8fc07d5a8903052dd46da33403eec8e8 # v4.5.0
     with:
       versionSpec: '6.6.x'
 
-  # Pull-request bygg får som standard en label utledet fra source-branchen, slik at
-  # container- og pakketagger blir f.eks. "0.20.1-feature-login-fix.2" i stedet for
-  # GitVersion-defaulten "0.20.1-PullRequest151.2". Consumer kan overstyre ved å sende
-  # sin egen `pull-request:` blokk via `override_config:` (siste blokk vinner).
-  - name: Bygg GitVersion override-konfigurasjon
+  # Pull-request builds get a label derived from the source branch by default, so that
+  # container and package tags look like e.g. "0.20.1-feature-login-fix.2" instead of
+  # the GitVersion default "0.20.1-PullRequest151.2". Consumers can override by passing
+  # their own `pull-request:` block via `override_config:` (last block wins).
+  - name: Build GitVersion override config
     id: gitversion-override
     shell: bash
     env:
@@ -79,13 +79,13 @@ runs:
         echo 'GITVERSION_OVERRIDE_EOF'
       } >> "$GITHUB_OUTPUT"
 
-  - name: Finn neste versjon
+  - name: Determine next version
     id: determine_version_values
     uses: gittools/actions/gitversion/execute@bc6623af8fc07d5a8903052dd46da33403eec8e8 # v4.5.0
     with:
       overrideConfig: ${{ steps.gitversion-override.outputs.config }}
 
-  - name: Avgjør versjon og tag verdier
+  - name: Determine version and tag values
     id: determine_version_and_tag_values
     shell: bash
     run: |
@@ -124,44 +124,44 @@ runs:
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-          echo "Bruker tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
+          echo "Using tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
         echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-        echo "Setter version til ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+        echo "Setting version to ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
         echo "is_alpha=false" >> $GITHUB_OUTPUT
-        echo "Setter is_alpha til false"
+        echo "Setting is_alpha to false"
       elif [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
         if [ -n "${{ inputs.container_image_name }}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           if [ "$INCLUDE_LATEST" = "true" ]; then
             echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
             echo "image_tags=latest;${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-            echo "Bruker tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
+            echo "Using tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
           else
             echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
             echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-            echo "Bruker tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
+            echo "Using tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
           fi
         fi
 
         echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-        echo "Setter version til ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+        echo "Setting version to ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
         echo "is_alpha=false" >> $GITHUB_OUTPUT
-        echo "Setter is_alpha til false"
+        echo "Setting is_alpha to false"
       else
         if [ -n "${{ inputs.container_image_name }}" ]; then
-          # Feature/bugfix branch — bruk SemVer (inkluderer prerelease-label utledet fra
-          # branch-navnet, f.eks. "1.2.1-mybranch.5") slik at container-taggen matcher
-          # pakkeversjonen og unikt identifiserer hvilken branch byggene kommer fra.
+          # Feature/bugfix branch — use SemVer (which includes the prerelease label derived
+          # from the branch name, e.g. "1.2.1-mybranch.5") so the container tag matches the
+          # package version and uniquely identifies which branch the build came from.
           echo "deploy_tag=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
           echo "image_tags=${{ steps.determine_version_values.outputs.semVer }}" >> $GITHUB_OUTPUT
-          echo "Bruker tag med prerelease label: $GITVERSION_SEMVER_TAG"
+          echo "Using tag with prerelease label: $GITVERSION_SEMVER_TAG"
         fi
 
         echo "version=${{ steps.determine_version_values.outputs.semVer }}" >> $GITHUB_OUTPUT
-        echo "Setter version til ${{ steps.determine_version_values.outputs.semVer }}"
+        echo "Setting version to ${{ steps.determine_version_values.outputs.semVer }}"
         echo "is_alpha=true" >> $GITHUB_OUTPUT
-        echo "Setter is_alpha til true"
+        echo "Setting is_alpha to true"
       fi

@@ -63,6 +63,15 @@ outputs:
   grype_json_path:
     description: "Path to the Grype JSON for cosign vuln attestation (only when cosign_supply_chain_attest_enabled is true)."
     value: ${{ steps.paths.outputs.grype_json_path }}
+  spdx_artifact_name:
+    description: "Workflow-artifact name under which the SPDX SBOM is uploaded by anchore/sbom-action. Use with actions/download-artifact in a downstream consumer-side sign job."
+    value: ${{ steps.paths.outputs.spdx_artifact_name }}
+  cyclonedx_artifact_name:
+    description: "Workflow-artifact name under which the CycloneDX SBOM is uploaded (only when cosign_supply_chain_attest_enabled is true). Use with actions/download-artifact in a downstream consumer-side sign job."
+    value: ${{ steps.paths.outputs.cyclonedx_artifact_name }}
+  grype_artifact_name:
+    description: "Workflow-artifact name under which the Grype JSON is uploaded (only when cosign_supply_chain_attest_enabled is true). Use with actions/download-artifact in a downstream consumer-side sign job."
+    value: ${{ steps.paths.outputs.grype_artifact_name }}
 
 runs:
   using: "composite"

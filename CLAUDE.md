@@ -10,7 +10,7 @@ A library of **reusable GitHub Actions workflows and composite actions** consume
 
 The whole repo ships under one semver line. The current major lives in `.version-major` (currently `1`). Internal `uses:` references inside this repo must all point at that same major (`@v1`), and floating refs (`@main`, `@HEAD`) are forbidden. This is enforced by `scripts/validate-version-refs.mjs`, run by `.github/workflows/validate-version.yml` on every PR.
 
-- **Non-breaking change**: edit, merge, optionally run the `Opprett tag og release` workflow. The `v1` floating tag gets moved to the new commit.
+- **Non-breaking change**: edit, merge, optionally run the `Create tag and release` workflow. The `v1` floating tag gets moved to the new commit.
 - **Breaking change**: bump `.version-major` (e.g. `1` → `2`), update internal `uses: …@v1` → `…@v2` everywhere in `.github/`, then release `v2.0.0` and create the `v2` floating tag.
 
 `tag-and-release.yml` in `auto` mode bumps **minor** from the latest `vX.Y.Z` tag (resets patch to `0`) and force-pushes the floating `vX.Y` and `vX` tags.
@@ -70,7 +70,7 @@ If two actions need to share the same script, the way to do it is a third intern
 - **`persist-credentials: false` on every `actions/checkout`** unless a later step in the same job needs to `git push` (then set it explicitly, as `gitversion/action.yml` does via the `persist_checkout_credentials` input). This is required for zizmor to pass.
 - **Bash steps must `set +e` around the tool invocation, capture exit code, then act on it.** The node-build/dotnet-build actions deliberately don't fail fast — they collect typecheck/build/lint/test output into per-step markdown files in `$TEMP_DIR`, emit `::error file=…,line=…::` annotations, and combine everything into one `pr-comment` output before failing the step. Preserve this pattern when adding new checks.
 - **Don't pass user-controlled values directly into shell `run:` blocks** without the `# zizmor: ignore[template-injection]` justification or routing through `env:`. See `docker-container.yml` for the established pattern of using `env:` for repo-controlled inputs and the `# zizmor: ignore` comment only for `inputs.*` that are paths/names.
-- Many workflow names and descriptions are in **Norwegian** (e.g. `Opprett tag og release`, `Avgjør pakkeversjon`). Keep new strings in the same language as the file you're editing.
+- All workflow names and descriptions are in **English** (v1.55.0 translated the holdovers in `gitversion.yml`, `tag-and-release.yml`, and a handful of dotnet input descriptions). Keep new strings in English to match.
 - Cosign is intentionally pinned to `v2.4.3` in the container workflows. Do not bump to v3 — the comment in `docker-container.yml` explains that Kyverno 1.17 `verifyImages` resolves attestations via the legacy `sha256-….att` manifest path that v3 publishes only as OCI referrers.
 - `pr-build.yml` declares its own `concurrency:` block with `cancel-in-progress` for PR events, but that scopes only the inner reusable-workflow run. Consumers should also add `concurrency:` on their **caller** workflow if they want superseded runs cancelled at their level too — group keys like `${{ github.workflow }}-${{ github.ref }}` are typical.
 

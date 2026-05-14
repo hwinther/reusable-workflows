@@ -1,45 +1,45 @@
-name: "Avgjør pakkeversjon og container image tag"
+name: "Determine package version and container image tag"
 
 on:
   workflow_call:
     inputs:
       container_registry:
-        description: 'Container registry, f.eks. egenacr.azurecr.io'
-        default: 'egenacr.azurecr.io'
+        description: 'Container registry, e.g. ghcr.io'
+        default: 'ghcr.io'
         type: string
       container_image_name:
-        description: 'Container image navn, f.eks. mappe/undermappe/frontend'
+        description: 'Container image name, e.g. owner/repo/frontend'
         default: ''
         type: string
       override_config:
-        description: 'Overstyring av GitVersion konfigurasjonselementer i YAML format'
+        description: 'GitVersion configuration overrides in YAML format'
         default: ''
         type: string
     outputs:
       deploy_tag:
-        description: "Deploy tag: registry, image navn og tag som skal deployes til miljø"
-        value: ${{ jobs.finn-versjon.outputs.deploy_tag }}
+        description: "Deploy tag: registry, image name and tag to deploy to an environment"
+        value: ${{ jobs.determine-version.outputs.deploy_tag }}
       container_image_tags:
-        description: "Registry, image navn og tags som skal pushes til container registry"
-        value: ${{ jobs.finn-versjon.outputs.container_image_tags }}
+        description: "Registry, image name and tags to push to the container registry"
+        value: ${{ jobs.determine-version.outputs.container_image_tags }}
       image_tags:
-        description: "Kun image tags (uten registry og image navn)"
-        value: ${{ jobs.finn-versjon.outputs.image_tags }}
+        description: "Image tags only (without registry and image name)"
+        value: ${{ jobs.determine-version.outputs.image_tags }}
       version:
-        description: "Pakkeversjon som skal brukes ved deploy til pakke registry"
-        value: ${{ jobs.finn-versjon.outputs.version }}
+        description: "Package version to use when deploying to a package registry"
+        value: ${{ jobs.determine-version.outputs.version }}
       is_alpha:
-        description: "Boolsk verdi som indikerer om versjonen er en alpha/prerelease versjon"
-        value: ${{ jobs.finn-versjon.outputs.is_alpha }}
+        description: "Boolean indicating whether the version is an alpha/prerelease"
+        value: ${{ jobs.determine-version.outputs.is_alpha }}
       git_version_major_minor_patch:
-        description: "GitVersion Major.Minor.Patch versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
-        value: ${{ jobs.finn-versjon.outputs.git_version_major_minor_patch }}
+        description: "GitVersion Major.Minor.Patch version — useful for debugging or handling edge cases"
+        value: ${{ jobs.determine-version.outputs.git_version_major_minor_patch }}
       git_version_semver:
-        description: "GitVersion SemVer versjon - kan brukes for å debugge eller håndtere unntakstilfeller"
-        value: ${{ jobs.finn-versjon.outputs.git_version_semver }}
+        description: "GitVersion SemVer version — useful for debugging or handling edge cases"
+        value: ${{ jobs.determine-version.outputs.git_version_semver }}
 
 jobs:
-  finn-versjon:
+  determine-version:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,7 +52,7 @@ jobs:
       git_version_major_minor_patch: ${{ steps.gitversion.outputs.git_version_major_minor_patch }}
       git_version_semver: ${{ steps.gitversion.outputs.git_version_semver }}
     steps:
-      - name: Avgjør pakkeversjon og container image tag
+      - name: Determine package version and container image tag
         id: gitversion
         uses: hwinther/reusable-workflows/.github/actions/gitversion@v1
         with:
