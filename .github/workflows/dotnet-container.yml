@@ -223,6 +223,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.push.outputs.image_digest }}
           APP_VERSION: ${{ needs.gitversion.outputs.version }}
           GIT_SHA: ${{ github.sha }}
+          LOCAL_REF: ${{ steps.build.outputs.local_ref }}
           COSIGN_SUPPLY_CHAIN_ATTEST: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
         run: |
           echo "### 📦 Container image" >> $GITHUB_STEP_SUMMARY
@@ -236,9 +237,15 @@ jobs:
           done
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Image digest: \`${IMAGE_DIGEST}\`" >> $GITHUB_STEP_SUMMARY
+          IMAGE_SIZE_BYTES=$(docker image inspect --format='{{.Size}}' "$LOCAL_REF" 2>/dev/null || true)
+          if [ -n "${IMAGE_SIZE_BYTES:-}" ]; then
+            IMAGE_SIZE_HR=$(numfmt --to=iec --suffix=B --format="%.2f" "$IMAGE_SIZE_BYTES")
+            echo "Image size (uncompressed): \`${IMAGE_SIZE_HR}\` (${IMAGE_SIZE_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "Publish properties: \`ContainerVersion\` / \`InformationalVersion\` = \`${APP_VERSION}\`, \`SourceRevisionId\` = \`${GIT_SHA}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "### Verify digest, signature, and attestation" >> "$GITHUB_STEP_SUMMARY"
+          echo "<details>" >> "$GITHUB_STEP_SUMMARY"
+          echo "<summary><strong>Verify digest, signature, and attestation</strong></summary>" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "GHCR may list several manifests in one package (image, cosign \`sha256-…\` signature tags, build attestations). They refer to the **same** image identity via digest:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -288,3 +295,5 @@ jobs:
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "If \`gh\` errors with \`PKIX_ED25519\` / trusted root / Sigstore, upgrade the GitHub CLI to the latest release (older \`gh\` builds cannot load the current Sigstore trust bundle)." >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "</details>" >> "$GITHUB_STEP_SUMMARY"
