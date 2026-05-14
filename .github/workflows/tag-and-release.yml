@@ -181,12 +181,17 @@ jobs:
 
       - name: Show release link for ${{ steps.determine_tag.outputs.tag_name }}
         if: github.event.inputs.create_release == 'true'
+        env:
+          TAG_NAME: ${{ steps.determine_tag.outputs.tag_name }}
+          RELEASE_URL: ${{ steps.create_release.outputs.url }}
         run: |
-          echo "## ✅ Release created" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag:** ${{ steps.determine_tag.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [Go to release for review](${{ steps.create_release.outputs.url }})" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## ✅ Release created"
+            echo ""
+            echo "**Tag:** $TAG_NAME"
+            echo ""
+            echo "🔗 [Go to release for review]($RELEASE_URL)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Show pinned uses references for ${{ steps.determine_tag.outputs.tag_name }}
         if: env.EMIT_PINNED_USES_SUMMARY == 'true'
