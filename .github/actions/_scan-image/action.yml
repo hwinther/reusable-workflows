@@ -96,6 +96,7 @@ runs:
         echo "sarif_category=grype-container-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
         echo "spdx_artifact_name=container-image-${POSTFIX}${name_suffix}.spdx.json" >> "$GITHUB_OUTPUT"
         echo "cyclonedx_artifact_name=container-image-${POSTFIX}${name_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"
+        echo "grype_artifact_name=container-image-${POSTFIX}${name_suffix}.grype.json" >> "$GITHUB_OUTPUT"
         echo "pr_comment_identifier=grype-summary-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
 
     - name: Generate SBOM (SPDX)
@@ -180,3 +181,20 @@ runs:
         severity-cutoff: negligible
         only-fixed: false
         fail-build: false
+
+    # Mirrors the SBOM upload pattern (anchore/sbom-action's `artifact-name` field): the
+    # Grype JSON is uploaded as a workflow artifact whenever it's generated, so matrix
+    # callers running a consumer-signed downstream sign job can `actions/download-artifact`
+    # it instead of regenerating Grype against the registry image. Matrix safety comes from
+    # `artifact_name_suffix` already being included in `grype_artifact_name`.
+    #
+    # build-and-scan-{docker,dotnet}.yml retains its own `build-and-scan-${postfix}-grype`
+    # upload step under a different name — this artifact is additive and harmless to
+    # existing consumers (image-push.yml, test-ghcr web-container-consumer-signs.yml).
+    - name: Upload Grype JSON artifact
+      if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.paths.outputs.grype_artifact_name }}
+        path: ${{ steps.paths.outputs.grype_json_path }}
+        if-no-files-found: error
