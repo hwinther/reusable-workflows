@@ -26,8 +26,9 @@ on:
         default: true
       container_registry:
         description: "Container registry, e.g. ghcr.io"
-        required: true
+        required: false
         type: string
+        default: "ghcr.io"
       container_image_name_postfix:
         description: "Container image name postfix, e.g. api"
         required: true
@@ -94,6 +95,12 @@ on:
         required: false
         type: string
         default: ""
+      tag_suffix:
+        description: |
+          Optional suffix appended to every gitversion-derived image tag. With gitversion producing e.g. `:1.2.3 :1.2 :1 :main`, setting `tag_suffix: api` makes them `:1.2.3-api :1.2-api :1-api :main-api`. Use for matrix callers that want per-entry tagging without races on the shared gitversion tags.
+        required: false
+        type: string
+        default: ""
       primary_nuget_source:
         description: "Primary NuGet source URL passed to actions/setup-dotnet via source-url."
         required: false
@@ -120,8 +127,8 @@ on:
         required: false
     outputs:
       container_image_tags:
-        description: "Full image refs pushed (registry/name:tag, comma-separated)"
-        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+        description: "Full image refs pushed (registry/name:tag, comma-separated). Reflects any tag_suffix applied during composition."
+        value: ${{ jobs['build-and-push'].outputs.container_tags }}
       image_digest:
         description: "OCI manifest digest for the pushed image (sha256:...)"
         value: ${{ jobs['build-and-push'].outputs.image_digest }}
@@ -161,6 +168,7 @@ jobs:
       pull-requests: write  # for the Grype findings PR comment via _grype-summary
     outputs:
       image_digest: ${{ steps.push.outputs.image_digest }}
+      container_tags: ${{ steps.tags.outputs.container_tags }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -215,12 +223,38 @@ jobs:
           cosign_supply_chain_attest_enabled: ${{ inputs.cosign_supply_chain_attest_enabled }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compose final container tags
+        id: tags
+        shell: bash
+        env:
+          GITVERSION_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
+          TAG_SUFFIX: ${{ inputs.tag_suffix }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG_SUFFIX" ]; then
+            # Each gitversion entry is "registry/repo/postfix:tag" — append "-${TAG_SUFFIX}" to ":tag".
+            final_tags=""
+            while IFS= read -r ref; do
+              ref=$(echo "$ref" | xargs)
+              [ -z "$ref" ] && continue
+              suffixed="${ref}-${TAG_SUFFIX}"
+              if [ -z "$final_tags" ]; then
+                final_tags="$suffixed"
+              else
+                final_tags="${final_tags},${suffixed}"
+              fi
+            done < <(echo "$GITVERSION_TAGS" | tr ',' '\n')
+          else
+            final_tags="$GITVERSION_TAGS"
+          fi
+          echo "container_tags=$final_tags" >> "$GITHUB_OUTPUT"
+
       - name: Push image and attach signatures + attestations
         id: push
         uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v1
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
-          container_tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          container_tags: ${{ steps.tags.outputs.container_tags }}
           container_registry: ${{ inputs.container_registry }}
           repository: ${{ needs.prepare-repository-name.outputs.repository }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}

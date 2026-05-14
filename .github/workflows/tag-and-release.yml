@@ -1,58 +1,61 @@
-# Lager tag og release basert på brukerinput eller automatisk versjonsøkning
-# Hvis navnet settes til auto så blir den nyeste taggen funnet i repoet økt med 1 på minor versjonen
-# Floating tags (vX og vX.Y) oppdateres med git push -f; nyttig i reusable workflow scenarioer.
-# Canonical release-tag er alltid full semver (vX.Y.Z) i auto-modus — det er mest optimalt for GitVersion og immutable releases.
-name: "Opprett tag og release"
+# Creates a tag and release based on user input or automatic version increment.
+# When tag_name is set to "auto", the latest semver tag in the repo is found and
+# incremented by 1 on the minor version (patch reset to 0).
+# Floating tags (vX and vX.Y) are updated with `git push -f`; useful for reusable
+# workflow scenarios where consumers pin to floating major/minor refs.
+# The canonical release tag is always full semver (vX.Y.Z) in auto mode — that's
+# what GitVersion expects and what immutable releases need.
+name: "Create tag and release"
 
 on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Navn på tag (f.eks. v1.2.3)"
+        description: "Tag name (e.g. v1.2.3), or 'auto' to bump minor from the latest tag"
         required: false
         default: "auto"
       release_notes:
-        description: "Utgivelsesnotater for denne taggen"
+        description: "Release notes for this tag"
         required: false
       create_release:
-        description: "Opprett en GitHub Release for denne taggen"
+        description: "Create a GitHub Release for this tag"
         required: false
         type: boolean
         default: true
       floating_tags:
-        description: "Opprett/oppdater floating tags (vX og vX.Y) på samme commit"
+        description: "Create/update floating tags (vX and vX.Y) on the same commit"
         required: false
         type: boolean
         default: true
   workflow_call:
     inputs:
       tag_name:
-        description: "Navn på tag (f.eks. v1.2.3)"
+        description: "Tag name (e.g. v1.2.3), or 'auto' to bump minor from the latest tag"
         type: string
         required: false
         default: "auto"
       release_notes:
-        description: "Utgivelsesnotater for denne taggen"
+        description: "Release notes for this tag"
         type: string
         required: false
       create_release:
-        description: "Opprett en GitHub Release for denne taggen"
+        description: "Create a GitHub Release for this tag"
         type: string
         required: false
         default: "true"
       floating_tags:
-        description: "Opprett/oppdater floating tags (vX og vX.Y) på samme commit"
+        description: "Create/update floating tags (vX and vX.Y) on the same commit"
         type: string
         required: false
         default: "false"
       emit_pinned_uses_summary:
-        description: "Skriv en liste over pinnede `uses:` referanser (alle workflows + composite actions i .github/) til job summary. Slå på for repos som distribuerer reusable workflows/actions; la den stå av for repos som først og fremst publiserer andre artefakter (containere, pakker)."
+        description: "Write a list of pinned `uses:` references (all workflows + composite actions under .github/) to the job summary. Turn on for repos that publish reusable workflows/actions; leave off for repos that primarily publish other artifacts (containers, packages)."
         type: string
         required: false
         default: "false"
     outputs:
       tag_name:
-        description: "Navn på den opprettede taggen"
+        description: "Name of the created tag"
         value: ${{ jobs.tag.outputs.tag_name }}
 
 jobs:
@@ -72,14 +75,14 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Avgjør pakkeversjon og container image tag
+      - name: Determine package version and container image tag
         id: gitversion
         if: github.event.inputs.tag_name == 'auto'
         uses: hwinther/reusable-workflows/.github/actions/gitversion@v1
         with:
           persist_checkout_credentials: 'true'
 
-      - name: Bestem tag navn
+      - name: Determine tag name
         id: determine_tag
         run: |
           TAG_INPUT="${{ github.event.inputs.tag_name }}"
@@ -89,10 +92,10 @@ jobs:
             MAJOR=${VERSION_PARTS[0]}
             MINOR=${VERSION_PARTS[1]:-0}
             PATCH=${VERSION_PARTS[2]:-0}
-            
+
             MINOR=$((MINOR + 1))
             PATCH=0
-            
+
             FULL_TAG="v${MAJOR}.${MINOR}.${PATCH}"
             MINOR_TAG="v${MAJOR}.${MINOR}"
             MAJOR_TAG="v${MAJOR}"
@@ -108,36 +111,37 @@ jobs:
               echo "tag_name_major=" >> $GITHUB_OUTPUT
             fi
 
-            echo "Ny tag (semver): $FULL_TAG"
+            echo "New tag (semver): $FULL_TAG"
             if [ "$CREATE_FLOATING_TAGS" = "true" ]; then
               echo "Floating tags: $MINOR_TAG, $MAJOR_TAG"
             fi
           else
             echo "tag_name=$TAG_INPUT" >> $GITHUB_OUTPUT
             echo "tag_name_full=$TAG_INPUT" >> $GITHUB_OUTPUT
-            echo "Bruker angitt tag: $TAG_INPUT"
+            echo "Using supplied tag: $TAG_INPUT"
           fi
 
-      # I auto-modus: unngå ny tag/release på samme commit som siste semver-tag (ingen nye commits).
-      - name: Sjekk nye commits siden siste tag (auto)
+      # In auto mode: avoid creating a new tag/release on the same commit as the latest
+      # semver tag (no new commits since the previous release).
+      - name: Check for new commits since last tag (auto)
         if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name == 'auto') || (github.event_name == 'workflow_call' && inputs.tag_name == 'auto')
         shell: bash
         run: |
           set -euo pipefail
           LATEST=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)
           if [ -z "$LATEST" ]; then
-            echo "Ingen eksisterende semver-tag (vX.Y.Z) — fortsetter."
+            echo "No existing semver tag (vX.Y.Z) — continuing."
             exit 0
           fi
           HEAD_SHA=$(git rev-parse HEAD)
           TAG_SHA=$(git rev-parse "$LATEST^{commit}")
           if [ "$HEAD_SHA" = "$TAG_SHA" ]; then
-            echo "::error::Ingen nye commits siden siste tag ($LATEST). HEAD og taggen peker på samme commit. Avbryter for å unngå duplikat-tag og -release."
+            echo "::error::No new commits since last tag ($LATEST). HEAD and the tag point to the same commit. Aborting to avoid a duplicate tag and release."
             exit 1
           fi
-          echo "OK: Det finnes commits etter $LATEST (HEAD er ikke lik taggens commit)."
+          echo "OK: commits exist after $LATEST (HEAD is not at the tag's commit)."
 
-      - name: Opprett tag(er) ${{ steps.determine_tag.outputs.tag_name }}
+      - name: Create tag(s) ${{ steps.determine_tag.outputs.tag_name }}
         id: create_tag
         run: |
           git config user.name "${{ github.actor }}"
@@ -151,7 +155,7 @@ jobs:
             git push origin "$FULL_TAG"
           fi
 
-          # Floating vX.Y og vX — kun når floating_tags er aktivert (krever push -f)
+          # Floating vX.Y and vX — only when floating_tags is enabled (requires push -f).
           if [ -n "$MINOR_TAG" ] && [ "$CREATE_FLOATING_TAGS" = "true" ]; then
             git tag -f "$MINOR_TAG"
             git push -f origin "$MINOR_TAG"
@@ -161,7 +165,7 @@ jobs:
             git push -f origin "$MAJOR_TAG"
           fi
 
-      - name: Opprett release ${{ steps.determine_tag.outputs.tag_name }}
+      - name: Create release ${{ steps.determine_tag.outputs.tag_name }}
         id: create_release
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3.0.0
         if: github.event.inputs.create_release == 'true'
@@ -175,16 +179,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Vis lenke til release ${{ steps.determine_tag.outputs.tag_name }}
+      - name: Show release link for ${{ steps.determine_tag.outputs.tag_name }}
         if: github.event.inputs.create_release == 'true'
+        env:
+          TAG_NAME: ${{ steps.determine_tag.outputs.tag_name }}
+          RELEASE_URL: ${{ steps.create_release.outputs.url }}
         run: |
-          echo "## ✅ Release opprettet" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Tag:** ${{ steps.determine_tag.outputs.tag_name }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "🔗 [Gå til release for gjennomgang](${{ steps.create_release.outputs.url }})" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## ✅ Release created"
+            echo ""
+            echo "**Tag:** $TAG_NAME"
+            echo ""
+            echo "🔗 [Go to release for review]($RELEASE_URL)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Vis pinned uses-referanser for ${{ steps.determine_tag.outputs.tag_name }}
+      - name: Show pinned uses references for ${{ steps.determine_tag.outputs.tag_name }}
         if: env.EMIT_PINNED_USES_SUMMARY == 'true'
         shell: bash
         env:
@@ -194,9 +203,9 @@ jobs:
           SHA=$(git rev-parse HEAD)
           {
             echo ""
-            echo "## 📌 Pinnede \`uses:\` referanser for ${TAG_NAME}"
+            echo "## 📌 Pinned \`uses:\` references for ${TAG_NAME}"
             echo ""
-            echo "Lim inn én av linjene under i din egen workflow for å pinne mot denne nøyaktige commit-en (Dependabot oppdaterer \`# ${TAG_NAME}\`-kommentaren automatisk):"
+            echo "Paste one of the lines below into your own workflow to pin to this exact commit (Dependabot updates the \`# ${TAG_NAME}\` comment automatically):"
             echo ""
             echo '```yaml'
             for f in .github/workflows/*.yml; do

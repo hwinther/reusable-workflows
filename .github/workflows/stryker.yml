@@ -99,7 +99,7 @@ on:
       extra_nuget_source_username:
         required: false
         type: string
-        description: "Brukernavn for `dotnet nuget add source` på ekstra kilde."
+        description: "Username for `dotnet nuget add source` on the extra source."
         default: 'az'
     secrets:
       npm_auth_token:

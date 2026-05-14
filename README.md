@@ -299,14 +299,14 @@ When a breaking change is introduced, the major in `.version-major` is increment
 
 - **Non-breaking changes (same major)**:
   - Implement and merge the change to `main`.
-  - Optionally run the `Opprett tag og release` workflow to create a new `vMAJOR.MINOR.PATCH` tag and GitHub Release.
+  - Optionally run the `Create tag and release` workflow to create a new `vMAJOR.MINOR.PATCH` tag and GitHub Release.
   - Move the moving major tag (for example `v1`) to the latest stable commit.
 
 - **Breaking changes (new major)**:
   - Update `.version-major` to the new major (for example from `1` to `2`).
   - Update any documentation examples that reference the old major tag if needed.
   - Merge the change to `main`.
-  - Run the `Opprett tag og release` workflow to create an initial `vMAJOR.0.0` tag (for example `v2.0.0`).
+  - Run the `Create tag and release` workflow to create an initial `vMAJOR.0.0` tag (for example `v2.0.0`).
   - Create or move the moving major tag (for example `v2`) to point at this release commit.
 
 The `Validate version references` workflow runs on pull requests to `main` and ensures that any `uses: hwinther/reusable-workflows/.github/...@vX` references inside `.github/workflows` and `.github/actions` stay compatible with the declared major in `.version-major` and do not use floating refs like `@main` or `@HEAD`.

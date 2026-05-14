@@ -32,8 +32,9 @@ on:
         default: true
       container_registry:
         description: "Container registry, e.g. ghcr.io"
-        required: true
+        required: false
         type: string
+        default: "ghcr.io"
       container_image_name_postfix:
         description: "Container image name postfix, e.g. api"
         required: true
@@ -112,10 +113,13 @@ on:
         description: "Workflow artifact name holding the gzipped tarball of the built image."
         value: ${{ jobs['build-and-scan'].outputs.image_artifact }}
       sbom_artifact:
-        description: "Workflow artifact name holding the SPDX + CycloneDX SBOMs."
+        description: "Workflow artifact name holding the CycloneDX SBOM uploaded by _scan-image (the predicate sign-image consumes). Single-format artifact since v1.55.0 (the previous bundled SPDX+CycloneDX zip is gone)."
         value: ${{ jobs['build-and-scan'].outputs.sbom_artifact }}
+      sbom_spdx_artifact:
+        description: "Workflow artifact name holding the SPDX SBOM uploaded by _scan-image. New in v1.55.0."
+        value: ${{ jobs['build-and-scan'].outputs.sbom_spdx_artifact }}
       grype_artifact:
-        description: "Workflow artifact name holding the Grype JSON for cosign attestation (empty when generate_supply_chain_artifacts=false)."
+        description: "Workflow artifact name holding the Grype JSON for cosign vuln attestation (empty when generate_supply_chain_artifacts=false). Now references the canonical _scan-image artifact name; the previous build-and-scan-${postfix}-grype artifact is gone."
         value: ${{ jobs['build-and-scan'].outputs.grype_artifact }}
       sbom_cyclonedx_sha256:
         description: "sha256 of the CycloneDX SBOM file uploaded under sbom_artifact. Pass to image-push.yml or sign-image so the consumer-side sign job can verify the predicate has not been swapped between jobs."
@@ -172,8 +176,13 @@ jobs:
     outputs:
       image_artifact: ${{ steps.save.outputs.artifact_name }}
       image_digest: ${{ steps.save.outputs.image_digest }}
-      sbom_artifact: ${{ steps.upload-sboms.outputs.artifact-id && format('build-and-scan-{0}-sboms', inputs.container_image_name_postfix) || '' }}
-      grype_artifact: ${{ steps.upload-grype.outputs.artifact-id && format('build-and-scan-{0}-grype', inputs.container_image_name_postfix) || '' }}
+      # SBOM + Grype artifacts are uploaded by _scan-image directly (since v1.53.0 for
+      # Grype, since forever for SBOMs via anchore/sbom-action's artifact-name). v1.55.0
+      # drops the duplicate build-and-scan-${postfix}-{sboms,grype} uploads this job used
+      # to do — these outputs now forward _scan-image's canonical artifact names.
+      sbom_artifact: ${{ inputs.generate_supply_chain_artifacts && steps.scan.outputs.cyclonedx_artifact_name || '' }}
+      sbom_spdx_artifact: ${{ steps.scan.outputs.spdx_artifact_name }}
+      grype_artifact: ${{ inputs.generate_supply_chain_artifacts && steps.scan.outputs.grype_artifact_name || '' }}
       sbom_cyclonedx_sha256: ${{ steps.predicate-hashes.outputs.sbom_cyclonedx_sha256 }}
       grype_json_sha256: ${{ steps.predicate-hashes.outputs.grype_json_sha256 }}
     steps:
@@ -233,27 +242,11 @@ jobs:
           artifact_name: build-and-scan-${{ inputs.container_image_name_postfix }}-image
           retention_days: ${{ inputs.artifact_retention_days }}
 
-      - name: Upload SBOM artifacts
-        id: upload-sboms
-        if: ${{ inputs.generate_supply_chain_artifacts }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: build-and-scan-${{ inputs.container_image_name_postfix }}-sboms
-          path: |
-            ${{ steps.scan.outputs.sbom_spdx_path }}
-            ${{ steps.scan.outputs.sbom_cyclonedx_path }}
-          retention-days: ${{ inputs.artifact_retention_days }}
-          if-no-files-found: error
-
-      - name: Upload Grype JSON artifact
-        id: upload-grype
-        if: ${{ inputs.generate_supply_chain_artifacts }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: build-and-scan-${{ inputs.container_image_name_postfix }}-grype
-          path: ${{ steps.scan.outputs.grype_json_path }}
-          retention-days: ${{ inputs.artifact_retention_days }}
-          if-no-files-found: error
+      # _scan-image uploads the SPDX+CycloneDX SBOMs (via anchore/sbom-action's
+      # artifact-name field) and the Grype JSON (since v1.53.0) under matrix-safe
+      # canonical names — see the sbom_artifact / sbom_spdx_artifact / grype_artifact
+      # workflow outputs above. v1.55.0 dropped the duplicate upload-sboms /
+      # upload-grype steps this job used to do.
 
       # Hash the SBOM and Grype JSON so a downstream sign job (image-push.yml
       # or sign-image composite) can verify the predicate hasn't been swapped
