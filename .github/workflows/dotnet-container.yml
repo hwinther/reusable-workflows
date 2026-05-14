@@ -68,7 +68,19 @@ on:
         type: boolean
         default: true
       cosign_supply_chain_attest_enabled:
-        description: "After push, attach Cosign CycloneDX SBOM and Grype vuln attestations for Kyverno verifyImages (GitHub SLSA/build provenance is separate via attest-build-provenance). Requires cosign_sign_enabled and job permissions id-token:write and attestations:write. Relies on the Cosign v2.x pin so attestations publish as .att manifests, not referrers-only (Cosign v3+)."
+        description: |
+          Controls two things together: (1) generation of the CycloneDX SBOM and Grype
+          JSON predicate files inside `_scan-image`, which are also uploaded as workflow
+          artifacts (`container-image-${postfix}[-${suffix}].{cyclonedx,grype}.json`);
+          (2) when `cosign_sign_enabled` is ALSO true, publishing those predicates as
+          cosign CycloneDX + vuln attestations from this workflow (Kyverno-friendly).
+          Decoupled from `cosign_sign_enabled` since v1.54.0: set this true with
+          `cosign_sign_enabled: false` to generate and upload the predicates for a
+          downstream consumer-side `sign-image` job (narrower OIDC trust scope) without
+          publishing duplicate in-job cosign attestations. Set both false to skip both.
+          Requires job permissions id-token:write and attestations:write when also signing.
+          Relies on the Cosign v2.x pin so attestations publish as .att manifests, not
+          referrers-only (Cosign v3+).
         required: false
         type: boolean
         default: true
@@ -195,7 +207,12 @@ jobs:
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
           grype_fail_build: ${{ inputs.grype_fail_build }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
-          cosign_supply_chain_attest_enabled: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
+          # Decoupled from cosign_sign_enabled in v1.54.0 so consumer-signed callers can
+          # generate + upload the SBOM/Grype predicates without publishing duplicate in-job
+          # cosign attestations. The cosign attest steps inside _push-image-with-signatures
+          # remain independently gated on cosign_sign_enabled, so we still won't attest from
+          # this workflow's identity when signing is off.
+          cosign_supply_chain_attest_enabled: ${{ inputs.cosign_supply_chain_attest_enabled }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Push image and attach signatures + attestations
