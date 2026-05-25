@@ -1,0 +1,188 @@
+name: GitOps preview upsert
+
+# Renders per-PR Kubernetes manifests into a GitOps repo and commits them. Designed to be reused
+# across apps: the caller passes the target repo + path to a previews tree that has a
+# `template/` subdirectory with three .tpl files (overlay.namespace.yaml.tpl,
+# overlay.kustomization.yaml.tpl, database.yaml.tpl). The workflow substitutes placeholders
+# (__PR__, __HOST__, __IMAGE_*__, __DB_NAME__), writes the rendered files into
+# `<base>/pr-<N>/` and `<base>/databases/pr-<N>.yaml`, then idempotently inserts the entries
+# into the parent kustomization.yaml files. Flux reconciles within ~1 min.
+#
+# Auth: a GitHub App installed on the target repo (default name in callers: proxmox-gitops-bot).
+# Caller passes app_id + app_private_key as secrets.
+
+on:
+  workflow_call:
+    inputs:
+      target_repo:
+        required: true
+        type: string
+        description: "owner/repo of the GitOps repo to mutate (e.g. hwinther/proxmox)"
+      target_ref:
+        required: false
+        type: string
+        default: main
+      preview_base_path:
+        required: true
+        type: string
+        description: "Path within target repo to the previews tree (e.g. clusters/production/apps/previews/clutterstock)"
+      pr_number:
+        required: true
+        type: string
+      host:
+        required: true
+        type: string
+        description: "Preview hostname (e.g. clutterstock-pr-42.test.wsh.no)"
+      db_name:
+        required: true
+        type: string
+        description: "SQL database name for the CNPG Database CR (e.g. clutterstock_pr42)"
+      image_api_tag:
+        required: true
+        type: string
+      image_api_digest:
+        required: true
+        type: string
+        description: "Registry digest including the sha256: prefix"
+      image_frontend_tag:
+        required: true
+        type: string
+      image_frontend_digest:
+        required: true
+        type: string
+      image_migrator_tag:
+        required: true
+        type: string
+      image_migrator_digest:
+        required: true
+        type: string
+    secrets:
+      app_id:
+        required: true
+      app_private_key:
+        required: true
+    outputs:
+      preview_url:
+        description: "Full HTTPS preview URL"
+        value: ${{ jobs.upsert.outputs.preview_url }}
+
+permissions: {}
+
+jobs:
+  upsert:
+    runs-on: ubuntu-latest
+    # Serialize concurrent upserts against the same target branch so the bot does not race itself.
+    concurrency:
+      group: gitops-upsert-${{ inputs.target_repo }}-${{ inputs.target_ref }}
+      cancel-in-progress: false
+    outputs:
+      preview_url: ${{ steps.render.outputs.preview_url }}
+    steps:
+      - name: Parse target repo
+        id: parse
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          owner="${TARGET_REPO%%/*}"
+          name="${TARGET_REPO##*/}"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "name=$name"   >> "$GITHUB_OUTPUT"
+
+      - name: Mint GitHub App installation token
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ steps.parse.outputs.owner }}
+          repositories: ${{ steps.parse.outputs.name }}
+
+      - name: Checkout target GitOps repo
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.target_repo }}
+          ref: ${{ inputs.target_ref }}
+          token: ${{ steps.token.outputs.token }}
+          path: target
+          persist-credentials: true
+
+      - name: Render templates and update parent kustomizations
+        id: render
+        working-directory: target
+        env:
+          BASE: ${{ inputs.preview_base_path }}
+          PR: ${{ inputs.pr_number }}
+          HOST: ${{ inputs.host }}
+          DB_NAME: ${{ inputs.db_name }}
+          IMAGE_API_TAG: ${{ inputs.image_api_tag }}
+          IMAGE_API_DIGEST: ${{ inputs.image_api_digest }}
+          IMAGE_FRONTEND_TAG: ${{ inputs.image_frontend_tag }}
+          IMAGE_FRONTEND_DIGEST: ${{ inputs.image_frontend_digest }}
+          IMAGE_MIGRATOR_TAG: ${{ inputs.image_migrator_tag }}
+          IMAGE_MIGRATOR_DIGEST: ${{ inputs.image_migrator_digest }}
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "$BASE/template" ]; then
+            echo "::error::Template directory $BASE/template missing in target repo"
+            exit 1
+          fi
+
+          overlay_dir="$BASE/pr-$PR"
+          db_file="$BASE/databases/pr-$PR.yaml"
+          mkdir -p "$overlay_dir" "$BASE/databases"
+
+          render() {
+            local tpl="$1" out="$2"
+            sed \
+              -e "s|__PR__|$PR|g" \
+              -e "s|__HOST__|$HOST|g" \
+              -e "s|__DB_NAME__|$DB_NAME|g" \
+              -e "s|__IMAGE_API_TAG__|$IMAGE_API_TAG|g" \
+              -e "s|__IMAGE_API_DIGEST__|$IMAGE_API_DIGEST|g" \
+              -e "s|__IMAGE_FRONTEND_TAG__|$IMAGE_FRONTEND_TAG|g" \
+              -e "s|__IMAGE_FRONTEND_DIGEST__|$IMAGE_FRONTEND_DIGEST|g" \
+              -e "s|__IMAGE_MIGRATOR_TAG__|$IMAGE_MIGRATOR_TAG|g" \
+              -e "s|__IMAGE_MIGRATOR_DIGEST__|$IMAGE_MIGRATOR_DIGEST|g" \
+              "$tpl" > "$out"
+          }
+
+          render "$BASE/template/overlay.namespace.yaml.tpl"     "$overlay_dir/namespace.yaml"
+          render "$BASE/template/overlay.kustomization.yaml.tpl" "$overlay_dir/kustomization.yaml"
+          render "$BASE/template/database.yaml.tpl"              "$db_file"
+
+          # Idempotent insert into parent kustomization (sorted, deduped).
+          yq -i ".resources = ((.resources // []) + [\"pr-$PR\"] | unique | sort)" "$BASE/kustomization.yaml"
+          yq -i ".resources = ((.resources // []) + [\"pr-$PR.yaml\"] | unique | sort)" "$BASE/databases/kustomization.yaml"
+
+          echo "preview_url=https://$HOST" >> "$GITHUB_OUTPUT"
+
+      - name: Commit and push
+        working-directory: target
+        env:
+          PR: ${{ inputs.pr_number }}
+          HOST: ${{ inputs.host }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name  "proxmox-gitops-bot[bot]"
+          git config user.email "proxmox-gitops-bot[bot]@users.noreply.github.com"
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes — overlay already in sync."
+            exit 0
+          fi
+          git commit -m "preview(clutterstock): upsert pr-$PR ($HOST)"
+
+          n=0
+          until git push origin "HEAD:$TARGET_REF"; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::Push failed after $n attempts"
+              exit 1
+            fi
+            echo "Push rejected; rebasing and retrying ($n/3)"
+            git pull --rebase --autostash origin "$TARGET_REF"
+          done

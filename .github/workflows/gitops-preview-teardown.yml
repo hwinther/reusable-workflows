@@ -1,0 +1,112 @@
+name: GitOps preview teardown
+
+# Removes a per-PR preview overlay from a GitOps repo. Inverse of gitops-preview-upsert.yml.
+# Designed to fire on `pull_request.closed` (merged or not) so cleanup is best-effort for all
+# closed PRs without needing a label gate. Idempotent: if the overlay was never created (PR
+# was never labelled) or was already removed, the workflow exits with no changes.
+
+on:
+  workflow_call:
+    inputs:
+      target_repo:
+        required: true
+        type: string
+      target_ref:
+        required: false
+        type: string
+        default: main
+      preview_base_path:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: string
+    secrets:
+      app_id:
+        required: true
+      app_private_key:
+        required: true
+
+permissions: {}
+
+jobs:
+  teardown:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: gitops-teardown-${{ inputs.target_repo }}-${{ inputs.target_ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Parse target repo
+        id: parse
+        env:
+          TARGET_REPO: ${{ inputs.target_repo }}
+        run: |
+          set -euo pipefail
+          echo "owner=${TARGET_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${TARGET_REPO##*/}"  >> "$GITHUB_OUTPUT"
+
+      - name: Mint GitHub App installation token
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.app_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ steps.parse.outputs.owner }}
+          repositories: ${{ steps.parse.outputs.name }}
+
+      - name: Checkout target GitOps repo
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ inputs.target_repo }}
+          ref: ${{ inputs.target_ref }}
+          token: ${{ steps.token.outputs.token }}
+          path: target
+          persist-credentials: true
+
+      - name: Remove per-PR files and parent kustomization entries
+        working-directory: target
+        env:
+          BASE: ${{ inputs.preview_base_path }}
+          PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+
+          # File system cleanup — idempotent.
+          rm -rf "$BASE/pr-$PR"
+          rm -f  "$BASE/databases/pr-$PR.yaml"
+
+          # Parent kustomization edits — guard against absent files so a never-deployed PR no-ops.
+          if [ -f "$BASE/kustomization.yaml" ]; then
+            yq -i "del(.resources[] | select(. == \"pr-$PR\"))" "$BASE/kustomization.yaml"
+          fi
+          if [ -f "$BASE/databases/kustomization.yaml" ]; then
+            yq -i "del(.resources[] | select(. == \"pr-$PR.yaml\"))" "$BASE/databases/kustomization.yaml"
+          fi
+
+      - name: Commit and push
+        working-directory: target
+        env:
+          PR: ${{ inputs.pr_number }}
+          TARGET_REF: ${{ inputs.target_ref }}
+        run: |
+          set -euo pipefail
+          git config user.name  "proxmox-gitops-bot[bot]"
+          git config user.email "proxmox-gitops-bot[bot]@users.noreply.github.com"
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to remove — preview was never deployed or already cleaned up."
+            exit 0
+          fi
+          git commit -m "preview(clutterstock): teardown pr-$PR"
+
+          n=0
+          until git push origin "HEAD:$TARGET_REF"; do
+            n=$((n+1))
+            if [ "$n" -ge 3 ]; then
+              echo "::error::Push failed after $n attempts"
+              exit 1
+            fi
+            echo "Push rejected; rebasing and retrying ($n/3)"
+            git pull --rebase --autostash origin "$TARGET_REF"
+          done
