@@ -30,6 +30,11 @@ on:
         required: false
         type: string
         default: "chromium"
+      playwright_cache_enabled:
+        description: "Cache Playwright browser binaries under ~/.cache/ms-playwright, keyed by Playwright version (read from <playwright_working_directory>/package-lock.json) and the playwright_browsers list. Opt-in; saves ~20-40s per run on a warm cache."
+        required: false
+        type: boolean
+        default: false
       playwright_install_command:
         description: "Command to install npm deps in playwright_working_directory."
         required: false
@@ -158,13 +163,46 @@ jobs:
           set -euo pipefail
           eval "$INSTALL_CMD"
 
-      - name: Install Playwright browsers
+      - name: Resolve Playwright version (for cache key)
+        id: playwright-version
+        if: ${{ inputs.playwright_cache_enabled }}
+        shell: bash
+        working-directory: ${{ inputs.playwright_working_directory }}
+        run: |
+          set -euo pipefail
+          version=$(node -e "console.log(require('./package-lock.json').packages['node_modules/@playwright/test'].version)")
+          if [ -z "$version" ] || [ "$version" = "undefined" ]; then
+            echo "::error::Could not resolve @playwright/test version from package-lock.json in ${PWD}."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Playwright version: $version"
+
+      - name: Restore Playwright browsers cache
+        id: playwright-cache
+        if: ${{ inputs.playwright_cache_enabled }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}-${{ inputs.playwright_browsers }}
+
+      - name: Install Playwright browsers (with system deps)
+        if: ${{ !inputs.playwright_cache_enabled || steps.playwright-cache.outputs.cache-hit != 'true' }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
           BROWSERS: ${{ inputs.playwright_browsers }}
           NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: npx playwright install --with-deps $BROWSERS
+
+      - name: Install Playwright system deps only (cache hit)
+        if: ${{ inputs.playwright_cache_enabled && steps.playwright-cache.outputs.cache-hit == 'true' }}
+        shell: bash
+        working-directory: ${{ inputs.playwright_working_directory }}
+        env:
+          BROWSERS: ${{ inputs.playwright_browsers }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
+        run: npx playwright install-deps $BROWSERS
 
       - name: Download image artifacts and load into local Docker daemon
         env:
