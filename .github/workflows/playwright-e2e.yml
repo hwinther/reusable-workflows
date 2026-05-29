@@ -131,6 +131,9 @@ jobs:
       contents: read
       packages: read
       pull-requests: write
+      # `gh run download` (artifact fetch for image_artifacts_json) hits the Actions REST API,
+      # which requires `actions: read` on the workflow token.
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
