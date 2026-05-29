@@ -1,12 +1,21 @@
 name: GitOps preview upsert
 
 # Renders per-PR Kubernetes manifests into a GitOps repo and commits them. Designed to be reused
-# across apps: the caller passes the target repo + path to a previews tree that has a
-# `template/` subdirectory with three .tpl files (overlay.namespace.yaml.tpl,
-# overlay.kustomization.yaml.tpl, database.yaml.tpl). The workflow substitutes placeholders
-# (__PR__, __HOST__, __IMAGE_*__, __DB_NAME__), writes the rendered files into
-# `<base>/pr-<N>/` and `<base>/databases/pr-<N>.yaml`, then idempotently inserts the entries
-# into the parent kustomization.yaml files. Flux reconciles within ~1 min.
+# across apps of different shapes: the caller passes the target repo + path to a previews tree that
+# has a `template/` subdirectory with at least the two overlay .tpl files
+# (overlay.namespace.yaml.tpl, overlay.kustomization.yaml.tpl). The workflow substitutes
+# placeholders (__PR__, __HOST__, __IMAGE_*__, __DB_NAME__), writes the rendered files into
+# `<base>/pr-<N>/`, then idempotently inserts the entry into the parent kustomization.yaml.
+# Flux reconciles within ~1 min.
+#
+# Multi-image apps (e.g. clutterstock: api/frontend/migrator) pass the per-component image_*
+# inputs; single-image apps (e.g. ddnsadmin) pass the generic image_tag/image_digest inputs
+# (rendered as __IMAGE_TAG__/__IMAGE_DIGEST__). All image inputs are optional — only the
+# placeholders a template actually references need to be supplied.
+#
+# Database CR rendering is opt-in: it runs only when `template/database.yaml.tpl` exists in the
+# target tree. Apps without a per-PR database (sqlite-in-pod, etc.) simply omit that template and
+# the `databases/` subtree, and the database step no-ops.
 #
 # Auth: a GitHub App installed on the target repo (default name in callers: proxmox-gitops-bot).
 # Caller passes app_id + app_private_key as secrets.
@@ -33,29 +42,51 @@ on:
         required: true
         type: string
         description: "Preview hostname (e.g. clutterstock-pr-42.test.wsh.no)"
+      app_name:
+        required: false
+        type: string
+        default: ""
+        description: "App label used in the GitOps commit message (e.g. clutterstock, ddnsadmin). Falls back to 'preview' when empty."
       db_name:
-        required: true
+        required: false
         type: string
-        description: "SQL database name for the CNPG Database CR (e.g. clutterstock_pr42)"
+        default: ""
+        description: "SQL database name for the CNPG Database CR (e.g. clutterstock_pr42). Only used when template/database.yaml.tpl exists."
+      image_tag:
+        required: false
+        type: string
+        default: ""
+        description: "Generic single-image tag for single-image apps. Rendered as __IMAGE_TAG__."
+      image_digest:
+        required: false
+        type: string
+        default: ""
+        description: "Generic single-image digest (including sha256: prefix). Rendered as __IMAGE_DIGEST__."
       image_api_tag:
-        required: true
+        required: false
         type: string
+        default: ""
       image_api_digest:
-        required: true
+        required: false
         type: string
+        default: ""
         description: "Registry digest including the sha256: prefix"
       image_frontend_tag:
-        required: true
+        required: false
         type: string
+        default: ""
       image_frontend_digest:
-        required: true
+        required: false
         type: string
+        default: ""
       image_migrator_tag:
-        required: true
+        required: false
         type: string
+        default: ""
       image_migrator_digest:
-        required: true
+        required: false
         type: string
+        default: ""
     secrets:
       app_id:
         required: true
@@ -115,6 +146,8 @@ jobs:
           PR: ${{ inputs.pr_number }}
           HOST: ${{ inputs.host }}
           DB_NAME: ${{ inputs.db_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
           IMAGE_API_TAG: ${{ inputs.image_api_tag }}
           IMAGE_API_DIGEST: ${{ inputs.image_api_digest }}
           IMAGE_FRONTEND_TAG: ${{ inputs.image_frontend_tag }}
@@ -130,8 +163,7 @@ jobs:
           fi
 
           overlay_dir="$BASE/pr-$PR"
-          db_file="$BASE/databases/pr-$PR.yaml"
-          mkdir -p "$overlay_dir" "$BASE/databases"
+          mkdir -p "$overlay_dir"
 
           render() {
             local tpl="$1" out="$2"
@@ -139,6 +171,8 @@ jobs:
               -e "s|__PR__|$PR|g" \
               -e "s|__HOST__|$HOST|g" \
               -e "s|__DB_NAME__|$DB_NAME|g" \
+              -e "s|__IMAGE_TAG__|$IMAGE_TAG|g" \
+              -e "s|__IMAGE_DIGEST__|$IMAGE_DIGEST|g" \
               -e "s|__IMAGE_API_TAG__|$IMAGE_API_TAG|g" \
               -e "s|__IMAGE_API_DIGEST__|$IMAGE_API_DIGEST|g" \
               -e "s|__IMAGE_FRONTEND_TAG__|$IMAGE_FRONTEND_TAG|g" \
@@ -150,11 +184,17 @@ jobs:
 
           render "$BASE/template/overlay.namespace.yaml.tpl"     "$overlay_dir/namespace.yaml"
           render "$BASE/template/overlay.kustomization.yaml.tpl" "$overlay_dir/kustomization.yaml"
-          render "$BASE/template/database.yaml.tpl"              "$db_file"
 
           # Idempotent insert into parent kustomization (sorted, deduped).
           yq -i ".resources = ((.resources // []) + [\"pr-$PR\"] | unique | sort)" "$BASE/kustomization.yaml"
-          yq -i ".resources = ((.resources // []) + [\"pr-$PR.yaml\"] | unique | sort)" "$BASE/databases/kustomization.yaml"
+
+          # Per-PR database CR is opt-in: render + register only when the app ships a database
+          # template. Single-image apps with sqlite-in-pod omit it entirely.
+          if [ -f "$BASE/template/database.yaml.tpl" ]; then
+            mkdir -p "$BASE/databases"
+            render "$BASE/template/database.yaml.tpl" "$BASE/databases/pr-$PR.yaml"
+            yq -i ".resources = ((.resources // []) + [\"pr-$PR.yaml\"] | unique | sort)" "$BASE/databases/kustomization.yaml"
+          fi
 
           echo "preview_url=https://$HOST" >> "$GITHUB_OUTPUT"
 
@@ -164,6 +204,7 @@ jobs:
           PR: ${{ inputs.pr_number }}
           HOST: ${{ inputs.host }}
           TARGET_REF: ${{ inputs.target_ref }}
+          APP_NAME: ${{ inputs.app_name }}
         run: |
           set -euo pipefail
           git config user.name  "proxmox-gitops-bot[bot]"
@@ -174,7 +215,7 @@ jobs:
             echo "No changes — overlay already in sync."
             exit 0
           fi
-          git commit -m "preview(clutterstock): upsert pr-$PR ($HOST)"
+          git commit -m "preview(${APP_NAME:-preview}): upsert pr-$PR ($HOST)"
 
           n=0
           until git push origin "HEAD:$TARGET_REF"; do

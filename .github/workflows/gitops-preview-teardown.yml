@@ -21,6 +21,11 @@ on:
       pr_number:
         required: true
         type: string
+      app_name:
+        required: false
+        type: string
+        default: ""
+        description: "App label used in the GitOps commit message (e.g. clutterstock, ddnsadmin). Falls back to 'preview' when empty."
     secrets:
       app_id:
         required: true
@@ -88,6 +93,7 @@ jobs:
         env:
           PR: ${{ inputs.pr_number }}
           TARGET_REF: ${{ inputs.target_ref }}
+          APP_NAME: ${{ inputs.app_name }}
         run: |
           set -euo pipefail
           git config user.name  "proxmox-gitops-bot[bot]"
@@ -98,7 +104,7 @@ jobs:
             echo "Nothing to remove — preview was never deployed or already cleaned up."
             exit 0
           fi
-          git commit -m "preview(clutterstock): teardown pr-$PR"
+          git commit -m "preview(${APP_NAME:-preview}): teardown pr-$PR"
 
           n=0
           until git push origin "HEAD:$TARGET_REF"; do
