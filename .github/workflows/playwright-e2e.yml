@@ -307,9 +307,9 @@ jobs:
         run: |
           docker compose -f "$COMPOSE_FILE" logs --no-color > "${RUNNER_TEMP}/compose-logs.txt" || true
 
-      - name: Build PR comment from Playwright report
-        id: e2e-comment
-        if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_comment_enabled }}
+      - name: Build Playwright summary
+        id: e2e-summary
+        if: always()
         shell: bash
         env:
           REPORT_JSON: ${{ inputs.playwright_working_directory }}/${{ inputs.results_json_path }}
@@ -350,13 +350,19 @@ jobs:
               echo "Duration: ${duration}"
               echo
               if [ "$failed" -gt 0 ] || [ "$flaky" -gt 0 ]; then
-                echo "<details><summary>Failed and flaky tests</summary>"
+                echo "<details open><summary><strong>Failed and flaky tests</strong></summary>"
                 echo
+                # For each non-passing test: file/title/project/status + first line of the first error,
+                # ANSI-stripped and truncated to 240 chars. Errors may live under .results[].errors[] or
+                # the singular .results[].error — collect both, pick the first non-null.
                 jq -r '
                   [ .suites[] | recurse(.suites[]?) | .specs[]? as $s
-                    | $s.tests[]
-                    | select(.status != "expected" and .status != "skipped")
-                    | "- `\($s.file // "")` — \($s.title) [\(.projectName // "")] (\(.status))"
+                    | $s.tests[] | select(.status != "expected" and .status != "skipped") as $t
+                    | ( [ $t.results[]?.errors[]?.message, $t.results[]?.error?.message ]
+                        | map(select(. != null)) | .[0] // "" ) as $raw
+                    | ( $raw | gsub("\\[[0-9;]+m"; "") | split("\n")[0] | .[0:240] ) as $msg
+                    | "- `\($s.file // "")` — \($s.title) [\($t.projectName // "")] (\($t.status))"
+                      + ( if ($msg | length) == 0 then "" else "\n  > " + $msg end )
                   ] | unique[]
                 ' "$REPORT_JSON"
                 echo
@@ -366,6 +372,9 @@ jobs:
               echo "Full report and traces: [download the \`playwright-report\` artifact](${RUN_URL}#artifacts)."
             } > "$out"
           fi
+          # Job summary: always — useful for workflow_dispatch / push runs too, not just PRs.
+          cat "$out" >> "$GITHUB_STEP_SUMMARY"
+          # Stash the same markdown for the downstream PR-comment step.
           {
             echo "comment<<__EOM__"
             cat "$out"
@@ -378,7 +387,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: ${{ inputs.comment_identifier }}
-          comment-content: ${{ steps.e2e-comment.outputs.comment }}
+          comment-content: ${{ steps.e2e-summary.outputs.comment }}
 
       - name: Resolve report and coverage paths
         id: resolve-paths
