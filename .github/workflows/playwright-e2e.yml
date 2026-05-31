@@ -360,7 +360,7 @@ jobs:
                     | $s.tests[] | select(.status != "expected" and .status != "skipped") as $t
                     | ( [ $t.results[]?.errors[]?.message, $t.results[]?.error?.message ]
                         | map(select(. != null)) | .[0] // "" ) as $raw
-                    | ( $raw | gsub("\x1b\\[[0-9;]+m"; "") | split("\n")[0] | .[0:240] ) as $msg
+                    | ( $raw | gsub("\\x1b\\[[0-9;]+m"; "") | split("\n")[0] | .[0:240] ) as $msg
                     | "- `\($s.file // "")` — \($s.title) [\($t.projectName // "")] (\($t.status))"
                       + ( if ($msg | length) == 0 then "" else "\n  > " + $msg end )
                   ] | unique[]
