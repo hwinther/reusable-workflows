@@ -74,6 +74,11 @@ on:
         required: false
         type: boolean
         default: true
+      release_asset_upload_enabled:
+        description: "Attach generated SBOMs to a matching GitHub Release as release assets (anchore/sbom-action default on tag pushes). Requires `contents: write` — set to false on private repos / workflows where the build job only has `contents: read`. SBOMs are still uploaded as workflow artifacts when false; only the release-asset attachment is skipped."
+        required: false
+        type: boolean
+        default: true
       cosign_sign_enabled:
         description: "Sign the pushed image digest with cosign (keyless / GitHub OIDC); signatures are stored in the registry. Installs Cosign CLI v2.4.3 (cosign-installer cosign-release) so attestations use legacy sha256-….att registry manifests compatible with Kyverno 1.17 verifyImages; Cosign v3+ prefers OCI referrers, which that fetch path does not resolve."
         required: false
@@ -260,6 +265,7 @@ jobs:
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
           grype_fail_build: ${{ inputs.grype_fail_build }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
+          release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
           # Decoupled from cosign_sign_enabled in v1.54.0 so consumer-signed callers can
           # generate + upload the SBOM/Grype predicates without publishing duplicate in-job
           # cosign attestations. The cosign attest steps inside _push-image-with-signatures
@@ -297,6 +303,7 @@ jobs:
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
           grype_fail_build: ${{ inputs.grype_fail_build }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
+          release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
           cosign_supply_chain_attest_enabled: false  # cosign predicate uses native-arch SBOM only in this iteration
           github_token: ${{ secrets.GITHUB_TOKEN }}
 

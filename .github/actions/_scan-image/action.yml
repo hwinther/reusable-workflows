@@ -48,6 +48,10 @@ inputs:
     required: false
     description: "Upload the Grype SARIF to GitHub Code Scanning. Set to false on private repositories without GitHub Advanced Security (the Code Scanning API rejects uploads with `Advanced Security must be enabled`). When false, the Grype scan still runs and findings still appear in the job summary and PR comment via _grype-summary; only the Code Scanning UI integration is skipped, and the severity gate is enforced from the Grype step's outcome regardless."
     default: "true"
+  release_asset_upload_enabled:
+    required: false
+    description: "Attach the generated SBOMs to a matching GitHub Release as release assets (anchore/sbom-action's default behaviour on tag pushes). Requires `contents: write` — set to false on private repos / consumers that only grant `contents: read` to the build job (the API rejects the upload with `Resource not accessible by integration`). When false, the SBOMs are still uploaded as workflow artifacts; only the release-asset attachment is skipped."
+    default: "true"
   github_token:
     required: false
     description: "Token for the Grype-summary PR comment."
@@ -115,6 +119,7 @@ runs:
         format: spdx-json
         output-file: ${{ steps.paths.outputs.sbom_spdx_path }}
         artifact-name: ${{ steps.paths.outputs.spdx_artifact_name }}
+        upload-release-assets: ${{ inputs.release_asset_upload_enabled }}
 
     - name: Generate SBOM (CycloneDX) for cosign attestation
       if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' }}
@@ -124,6 +129,7 @@ runs:
         format: cyclonedx-json
         output-file: ${{ steps.paths.outputs.sbom_cyclonedx_path }}
         artifact-name: ${{ steps.paths.outputs.cyclonedx_artifact_name }}
+        upload-release-assets: ${{ inputs.release_asset_upload_enabled }}
 
     - name: Vulnerability scan (Grype)
       id: grype-scan

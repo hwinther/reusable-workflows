@@ -69,6 +69,11 @@ on:
         required: false
         type: boolean
         default: true
+      release_asset_upload_enabled:
+        description: "Attach generated SBOMs to a matching GitHub Release as release assets (anchore/sbom-action default on tag pushes). Requires `contents: write` — set to false on private repos / workflows where the build job only has `contents: read`. SBOMs are still uploaded as workflow artifacts when false; only the release-asset attachment is skipped."
+        required: false
+        type: boolean
+        default: true
       generate_supply_chain_artifacts:
         description: "Generate CycloneDX SBOM and Grype JSON for downstream cosign attestations in image-push.yml"
         required: false
@@ -231,6 +236,7 @@ jobs:
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
           grype_fail_build: ${{ inputs.grype_fail_build }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
+          release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
           cosign_supply_chain_attest_enabled: ${{ inputs.generate_supply_chain_artifacts }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
