@@ -58,6 +58,10 @@ jobs:
           private-key: ${{ secrets.app_private_key }}
           owner: ${{ steps.parse.outputs.owner }}
           repositories: ${{ steps.parse.outputs.name }}
+          # Scope the installation token to the minimum needed (checkout + git push to the
+          # target repo). Without this the token inherits all of the App installation's
+          # permissions — flagged by zizmor (dangerous use of GitHub App tokens).
+          permission-contents: write
 
       - name: Checkout target GitOps repo
         uses: actions/checkout@v5
