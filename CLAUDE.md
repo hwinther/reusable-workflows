@@ -8,10 +8,12 @@ A library of **reusable GitHub Actions workflows and composite actions** consume
 
 ## Versioning model (read this before touching anything)
 
-The whole repo ships under one semver line. The current major lives in `.version-major` (currently `1`). Internal `uses:` references inside this repo must all point at that same major (`@v1`), and floating refs (`@main`, `@HEAD`) are forbidden. This is enforced by `scripts/validate-version-refs.mjs`, run by `.github/workflows/validate-version.yml` on every PR.
+The whole repo ships under one semver line. The current major lives in `.version-major` (currently `2`). Internal `uses:` references inside this repo must all point at that same major (`@v2`), and floating refs (`@main`, `@HEAD`) are forbidden. This is enforced by `scripts/validate-version-refs.mjs`, run by `.github/workflows/validate-version.yml` on every PR.
 
-- **Non-breaking change**: edit, merge, optionally run the `Create tag and release` workflow. The `v1` floating tag gets moved to the new commit.
-- **Breaking change**: bump `.version-major` (e.g. `1` → `2`), update internal `uses: …@v1` → `…@v2` everywhere in `.github/`, then release `v2.0.0` and create the `v2` floating tag.
+- **Non-breaking change**: edit, merge, optionally run the `Create tag and release` workflow. The `v2` floating tag gets moved to the new commit.
+- **Breaking change**: bump `.version-major` (e.g. `2` → `3`), sweep internal `uses: …@vN` → `…@vN+1` everywhere in `.github/` (the regex `(hwinther/reusable-workflows/\.github/[^@\s]+)@vN` covers all `uses:` lines), update the `@vN` references in CLAUDE.md and the cosign-verify examples printed in the container/image-push job summaries, then release the new `vN+1.0.0` and create the floating tag.
+
+> v2 (this line) folded in breaking renames: npm scope/registry inputs standardized to `npm_scope` / `npm_registry_url` (no more `scope` / `node_scope` / `node_registry_url`); `npm-deploy.yml`'s `working-directory` input → `working_directory` (and the file was translated from Norwegian to English); `image-push.yml` outputs `pushed_tags`/`pushed_digest` → `container_image_tags`/`image_digest`; and `grype_fail_build` changed from a boolean to the string enum `auto|always|never` (see the grype convention below).
 
 `tag-and-release.yml` in `auto` mode bumps **minor** from the latest `vX.Y.Z` tag (resets patch to `0`) and force-pushes the floating `vX.Y` and `vX` tags.
 
@@ -36,6 +38,8 @@ There is no build/test/lint suite for the repo itself — all "testing" happens 
   - `_scan-image/` — **internal**. Generates SPDX (always) and CycloneDX (when supply-chain attestation is on) SBOMs, runs Grype, uploads SARIF, and produces the Grype JSON used as a cosign-vuln attestation predicate.
   - `_save-image-artifact/`, `_load-image-artifact/` — **internal**. `docker save | gzip` to a workflow artifact and the inverse — used to ship a built image between jobs (build → e2e → push) byte-identically without round-tripping through a registry.
   - `_push-image-with-signatures/` — **internal**. `docker tag` + `docker push` per tag, then `attest-build-provenance`, cosign keyless sign, and (when supply-chain attestation is on) cosign CycloneDX + vuln attestations. Used by `docker-container.yml`, `dotnet-container.yml`, and `image-push.yml`.
+  - `sign-image/` — **public**. The signing/attestation half of `_push-image-with-signatures` as a standalone composite a consumer runs in its OWN job AFTER an already-pushed digest. Because a composite runs inline in the caller's job, the OIDC token carries the **consumer's** `job_workflow_ref`, so cosign/attest signatures bind to the consumer's workflow identity — not this repo's. This is the canonical way to get per-consumer signature identities (see "Image signing strategy" below). Accepts the predicate files directly (`sbom_cyclonedx_path`/`grype_json_path`, for in-job callers) or downloads them itself from `sbom_artifact_name`/`grype_artifact_name`; resolves `image_digest` from the first `container_tags` entry when left empty. Keeps the cross-job sha256 + SBOM-binding integrity checks.
+  - `_compose-image-tags/` — **internal**. Builds the comma-separated push-tag list from gitversion tags (optionally `tag_suffix`'d) plus `additional_tags`. Extracted from the formerly-duplicated "Compose final container tags" step; called by `docker-container.yml`, `build-and-scan-docker.yml`, and `dotnet-container.yml` (each passes only the dimensions it uses).
 - `.github/workflows/` — reusable workflows (`on: workflow_call`) that compose the actions:
   - `pr-build.yml` — one entry-point for PR builds. Runs a `detect-changes` job comparing against the PR base (or `origin/main` on push), then conditionally runs `node-build` and/or `dotnet-build` plus optional ReSharper InspectCode and TODO commenter.
   - `docker-container.yml` / `dotnet-container.yml` — gitversion → build → SBOM (Anchore) → Grype scan → push to GHCR → Cosign keyless sign → Cosign CycloneDX + vuln attestations → GitHub build provenance attestation. **Single-job, push-always.** Used for `main` and tag pushes.
@@ -59,14 +63,16 @@ There is no build/test/lint suite for the repo itself — all "testing" happens 
 
 The runner-execution context for a reusable workflow called from a consumer repo is the **caller's** repo, not this one — so any `actions/checkout` in our workflows clones the consumer. That means top-level `scripts/` here (e.g. `validate-version-refs.mjs`) is only reachable from workflows that run *on this repo's own PRs* (like `validate-version.yml`, which checks out this repo).
 
-When a composite action is referenced via `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`, the runner resolves it and downloads the action's **whole directory** — including any sibling files. Inside that action's bash `run:` blocks, `$GITHUB_ACTION_PATH` points at that directory, so an action can ship its own `scripts/foo.sh` and call `bash "$GITHUB_ACTION_PATH/scripts/foo.sh"`.
+When a composite action is referenced via `uses: hwinther/reusable-workflows/.github/actions/<name>@v2`, the runner resolves it and downloads the action's **whole directory** — including any sibling files. Inside that action's bash `run:` blocks, `$GITHUB_ACTION_PATH` points at that directory, so an action can ship its own `scripts/foo.sh` and call `bash "$GITHUB_ACTION_PATH/scripts/foo.sh"`.
 
 If two actions need to share the same script, the way to do it is a third internal composite action (e.g. `_format-output/`) that both call via `uses:`. That's how the runner is willing to deliver one set of files to multiple action consumers without an extra checkout. The same trick is used by `_dotnet-add-nuget-source/` — a one-step composite that runs the `dotnet nuget remove → dotnet nuget add source` pair via `env:`-redirected shell, used by `dotnet-build`, `_build-image-dotnet`, `stryker.yml`, `format-and-create-pr.yml`, and `dependabot-update-dotnet-lockfiles.yml` so all five callers stay in sync.
 
 ## Conventions to follow when editing workflows/actions
 
 - **Pin every third-party action to a commit SHA with a `# vX.Y.Z` comment.** Dependabot (`.github/dependabot.yml`) is configured to update both `/` and `/.github/actions/*` weekly; keep the comment format intact so it can update cleanly.
-- **Internal `uses:` refs use the major floating tag**, e.g. `uses: hwinther/reusable-workflows/.github/actions/node-build@v1`. The validator will fail PRs that use `@main`, `@HEAD`, or a different major.
+- **Internal `uses:` refs use the major floating tag**, e.g. `uses: hwinther/reusable-workflows/.github/actions/node-build@v2`. The validator will fail PRs that use `@main`, `@HEAD`, or a different major.
+- **`grype_fail_build` is a mode string, not a boolean.** Container/build-and-scan workflows accept `auto` (default — fail on every event except `pull_request`, which gets report/SARIF only), `always`, or `never`. The workflow resolves the effective boolean with `inputs.grype_fail_build == 'always' || (inputs.grype_fail_build == 'auto' && github.event_name != 'pull_request')` and passes that to `_scan-image`. Don't reintroduce a boolean or a consumer-side `github.event_name` conditional — `auto` is the lever consumers should reach for.
+- **Pass user-supplied shell input via `env:`, never template-expanded into `run:`.** The `extra_command` inputs on `node-build`/`dotnet-build`/`python-build` are routed through `env: EXTRA_COMMAND:` and executed as `bash -c "$EXTRA_COMMAND"` (zizmor code-injection clean). When substituting inputs into `sed` replacement text, escape `\`, `&`, and the delimiter first (see the `sed_escape` helper in `gitops-preview-upsert.yml`).
 - **`persist-credentials: false` on every `actions/checkout`** unless a later step in the same job needs to `git push` (then set it explicitly, as `gitversion/action.yml` does via the `persist_checkout_credentials` input). This is required for zizmor to pass.
 - **Bash steps must `set +e` around the tool invocation, capture exit code, then act on it.** The node-build/dotnet-build actions deliberately don't fail fast — they collect typecheck/build/lint/test output into per-step markdown files in `$TEMP_DIR`, emit `::error file=…,line=…::` annotations, and combine everything into one `pr-comment` output before failing the step. Preserve this pattern when adding new checks.
 - **Don't pass user-controlled values directly into shell `run:` blocks** without the `# zizmor: ignore[template-injection]` justification or routing through `env:`. See `docker-container.yml` for the established pattern of using `env:` for repo-controlled inputs and the `# zizmor: ignore` comment only for `inputs.*` that are paths/names.
@@ -80,7 +86,7 @@ All workflows and actions that install npm or NuGet packages accept optional inp
 
 ### Runner-side npm
 
-`node-build` (composite) accepts `npm_registry_url` (default `https://npm.pkg.github.com`), `npm_auth_token` (default empty → falls back to `github_token`), and the existing `scope`. `playwright-e2e.yml` and `pr-build.yml` surface these as `npm_registry_url` / `node_registry_url` inputs and an `npm_auth_token` secret. The token resolves via `${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}` so unset means "use GITHUB_TOKEN."
+`node-build` (composite) accepts `npm_registry_url` (default `https://npm.pkg.github.com`), `npm_auth_token` (default empty → falls back to `github_token`), and `npm_scope`. `playwright-e2e.yml`, `pr-build.yml`, `npm-deploy.yml`, `package-deploy.yml`, and `stryker.yml` all surface the npm registry/scope as `npm_registry_url` / `npm_scope` inputs and an `npm_auth_token` secret — the names are uniform across the surface as of v2 (the old `scope` / `node_scope` / `node_registry_url` spellings are gone). The token resolves via `${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}` so unset means "use GITHUB_TOKEN."
 
 ### Runner-side NuGet
 
@@ -128,6 +134,15 @@ Caveat for `format-and-create-pr.yml`: the .NET/NuGet inputs (`solution_path`, `
 
 `is_alpha` is a **string** (`'true'`/`'false'`) because reusable-workflow outputs round-trip as strings.
 
+## Image signing strategy (in-workflow vs consumer-side)
+
+cosign keyless signing binds the signature to the OIDC token's `job_workflow_ref`. That ref depends on *where the signing step runs*, and the two contexts differ:
+
+- **In-workflow signing** (default): `docker-container.yml` / `dotnet-container.yml` / `image-push.yml` sign via `_push-image-with-signatures` *inside the reusable workflow*. A reusable workflow's OIDC token carries **this repo's** ref (`hwinther/reusable-workflows/.github/workflows/docker-container.yml@refs/tags/v2`). So every consumer's images are signed under the same shared identity. Fine when you trust "built by the reusable-workflows pipeline" as the assertion; the job summaries print the exact `cosign verify` command.
+- **Consumer-side signing** (per-consumer identity): set `cosign_sign_enabled: false` (and usually `attest_build_provenance_enabled: false`) on the build workflow, leave `cosign_supply_chain_attest_enabled: true` so the SBOM/Grype predicates are still generated and uploaded, then run a job in the **consumer repo** that calls the `sign-image` **composite**. Because a composite runs inline in the caller's job, its OIDC token carries the **consumer's** ref (`hwinther/<consumer>/.github/workflows/<file>.yml@…`), so signatures/attestations bind to the consumer's identity — which is what Kyverno/cosign policies that pin per-consumer identities need. wsh-rtl-sdr's `build-sdr-images.yml` (sdr-base-sign / sdr-build-sign) is the reference consumer.
+
+Keep `sign-image` **centralized here** (pinned by consumers to a commit SHA), not vendored into each consumer: the composite already inherits the consumer's identity, so copying it around buys nothing. The consumer-side job stays small — `docker login`, then `sign-image` with `container_tags` + `sbom_artifact_name`/`grype_artifact_name`; `sign-image` resolves the digest from the registry and downloads the predicate artifacts itself (the job needs `id-token: write`, `packages: write`, `attestations: write`, `actions: read`). Cross-matrix base-image **digest pinning** (a derived image `FROM` a matrixed base by floating tag) is still a consumer concern — `sign-image` resolving its own entry's digest does not pin what a *derived* image's `FROM` points at.
+
 ## PR-time container e2e and label-gated push
 
 There are two parallel container flows in this repo:
@@ -150,7 +165,7 @@ on:
 
 jobs:
   api:
-    uses: hwinther/reusable-workflows/.github/workflows/build-and-scan-dotnet.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/build-and-scan-dotnet.yml@v2
     permissions: { contents: read, packages: read, security-events: write, pull-requests: write }
     with:
       dotnet_version: 10.0.x
@@ -162,7 +177,7 @@ jobs:
 
   e2e:
     needs: [api]
-    uses: hwinther/reusable-workflows/.github/workflows/playwright-e2e.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/playwright-e2e.yml@v2
     secrets: inherit
     with:
       compose_file: docker-compose.e2e.yml
@@ -173,7 +188,7 @@ jobs:
   push-api:
     needs: [api, e2e]
     if: contains(github.event.pull_request.labels.*.name, 'deploy-feature')
-    uses: hwinther/reusable-workflows/.github/workflows/image-push.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/image-push.yml@v2
     permissions: { contents: read, packages: write, id-token: write, attestations: write, actions: read }
     with:
       container_image_name_postfix: api
@@ -220,7 +235,7 @@ The `image_digest` workflow output is a digest-pinned reference to what was just
 
 ```yaml
 sdr-base-runtime:
-  uses: hwinther/reusable-workflows/.github/workflows/docker-container.yml@v1
+  uses: hwinther/reusable-workflows/.github/workflows/docker-container.yml@v2
   with:
     container_image_name_postfix: sdr/sdr-base-wsh
     build_context: compose/templates/sdr-base/bookworm/base-image
@@ -231,7 +246,7 @@ sdr-base-runtime:
 
 adsbexchange:
   needs: sdr-base-runtime
-  uses: hwinther/reusable-workflows/.github/workflows/docker-container.yml@v1
+  uses: hwinther/reusable-workflows/.github/workflows/docker-container.yml@v2
   with:
     container_image_name_postfix: sdr/adsbexchange-wsh
     build_context: compose/templates/adsb/adsbexchange

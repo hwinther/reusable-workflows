@@ -45,6 +45,11 @@ on:
         required: false
         type: string
         default: "npx playwright test"
+      playwright_setup_project:
+        description: "Optional Playwright project name to run on its own immediately before the main run (e.g. 'setup') to seed auth/storage state against the started compose stack. Empty = skip. Receives the same E2E_* secrets and exported playwright_env vars as the main run."
+        required: false
+        type: string
+        default: ""
       image_artifacts_json:
         description: |
           JSON object mapping docker-compose env var names to workflow artifact names produced by
@@ -285,6 +290,20 @@ jobs:
             } >> "$GITHUB_ENV"
             echo "Exported $key (value masked if a registered secret)"
           done <<< "$EXTRA_ENV"
+
+      - name: Seed Playwright auth state (setup project)
+        if: ${{ inputs.playwright_setup_project != '' }}
+        shell: bash
+        working-directory: ${{ inputs.playwright_working_directory }}
+        env:
+          CI: "true"
+          SETUP_PROJECT: ${{ inputs.playwright_setup_project }}
+          E2E_USERNAME: ${{ secrets.e2e_username }}
+          E2E_PASSWORD: ${{ secrets.e2e_password }}
+          E2E_OTP_SECRET: ${{ secrets.e2e_otp_secret }}
+        run: |
+          set -euo pipefail
+          npx playwright test --project="$SETUP_PROJECT"
 
       - name: Run Playwright
         shell: bash

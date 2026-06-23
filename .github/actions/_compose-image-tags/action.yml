@@ -1,0 +1,101 @@
+name: "Compose final container tags"
+description: |
+  Internal helper (leading `_` = not part of the public surface). Builds the
+  comma-separated list of full image refs to push from three sources, in this
+  order:
+    1. gitversion-derived tags (when use_gitversion=true), each optionally
+       suffixed with `-${tag_suffix}` so matrix legs sharing one image name
+       don't race over the same gitversion tags;
+    2. additional_tags (semicolon-separated tag-only strings), each expanded to
+       `${registry}/${repository}/${postfix}:${tag}`.
+
+  Extracted from the identical "Compose final container tags" steps in
+  docker-container.yml, build-and-scan-docker.yml and dotnet-container.yml. Each
+  caller passes only the dimensions it uses; the rest default to no-ops, so the
+  composed output is byte-identical to the previous inline logic.
+
+inputs:
+  gitversion_tags:
+    required: false
+    description: "Comma-separated gitversion-derived full image refs (gitversion composite container_image_tags output)."
+    default: ""
+  additional_tags:
+    required: false
+    description: "Semicolon-separated tag-only strings (no registry, no name). Each becomes ${registry}/${repository}/${postfix}:${tag}."
+    default: ""
+  use_gitversion:
+    required: false
+    description: "When 'true', include the gitversion_tags (optionally tag_suffix'd). When 'false', emit only additional_tags."
+    default: "true"
+  tag_suffix:
+    required: false
+    description: "Optional suffix appended to every gitversion-derived tag (':1.2.3' -> ':1.2.3-bookworm'). No effect on additional_tags."
+    default: ""
+  registry:
+    required: false
+    description: "Container registry (e.g. ghcr.io), used to expand additional_tags."
+    default: ""
+  repository:
+    required: false
+    description: "Lowercased owner/repo, used to expand additional_tags."
+    default: ""
+  postfix:
+    required: false
+    description: "Image name postfix, used to expand additional_tags."
+    default: ""
+
+outputs:
+  container_tags:
+    description: "Comma-separated full image refs to push."
+    value: ${{ steps.compose.outputs.container_tags }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Compose final container tags
+      id: compose
+      shell: bash
+      env:
+        GITVERSION_TAGS: ${{ inputs.gitversion_tags }}
+        ADDITIONAL_TAGS: ${{ inputs.additional_tags }}
+        USE_GITVERSION: ${{ inputs.use_gitversion }}
+        TAG_SUFFIX: ${{ inputs.tag_suffix }}
+        REGISTRY: ${{ inputs.registry }}
+        REPO: ${{ inputs.repository }}
+        POSTFIX: ${{ inputs.postfix }}
+      run: |
+        set -euo pipefail
+        final_tags=""
+        if [ "$USE_GITVERSION" = "true" ]; then
+          if [ -n "$TAG_SUFFIX" ]; then
+            # Each gitversion entry is "registry/repo/postfix:tag" — append "-${TAG_SUFFIX}" to ":tag".
+            while IFS= read -r ref; do
+              ref=$(echo "$ref" | xargs)
+              [ -z "$ref" ] && continue
+              suffixed="${ref}-${TAG_SUFFIX}"
+              if [ -z "$final_tags" ]; then
+                final_tags="$suffixed"
+              else
+                final_tags="${final_tags},${suffixed}"
+              fi
+            done < <(echo "$GITVERSION_TAGS" | tr ',' '\n')
+          else
+            final_tags="$GITVERSION_TAGS"
+          fi
+        fi
+        if [ -n "$ADDITIONAL_TAGS" ]; then
+          while IFS= read -r t; do
+            t=$(echo "$t" | xargs)
+            [ -z "$t" ] && continue
+            full_ref="${REGISTRY}/${REPO}/${POSTFIX}:${t}"
+            if [ -z "$final_tags" ]; then
+              final_tags="$full_ref"
+            else
+              final_tags="${final_tags},${full_ref}"
+            fi
+          done < <(echo "$ADDITIONAL_TAGS" | tr ';' '\n')
+        fi
+        [ -n "$final_tags" ] || { echo "::error::No container tags resolved (use_gitversion=$USE_GITVERSION, additional_tags='$ADDITIONAL_TAGS')"; exit 1; }
+        echo "container_tags=$final_tags" >> "$GITHUB_OUTPUT"
+        echo "Final container tags:"
+        echo "$final_tags" | tr ',' '\n' | sed 's/^/  /'

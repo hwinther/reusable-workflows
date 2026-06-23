@@ -78,7 +78,7 @@ jobs:
       - name: Determine package version and container image tag
         id: gitversion
         if: github.event.inputs.tag_name == 'auto'
-        uses: hwinther/reusable-workflows/.github/actions/gitversion@v1
+        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2
         with:
           persist_checkout_credentials: 'true'
 
