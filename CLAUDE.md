@@ -10,6 +10,8 @@ A library of **reusable GitHub Actions workflows and composite actions** consume
 
 The whole repo ships under one semver line. The current major lives in `.version-major` (currently `2`). Internal `uses:` references inside this repo must all point at that same major (`@v2`), and floating refs (`@main`, `@HEAD`) are forbidden. This is enforced by `scripts/validate-version-refs.mjs`, run by `.github/workflows/validate-version.yml` on every PR.
 
+> Known limitation: because internal refs float at `@v{major}`, a consumer who pins a *workflow* to a SHA still floats every action it pulls in (the `@v2` strings resolve at run time). A planned fix — freezing internal refs to the immutable patch tag at release time, leaving `main` on `@v{major}` — is written up in [docs/adr/0001-internal-ref-pinning.md](docs/adr/0001-internal-ref-pinning.md) (proposed, not yet implemented; consumer-non-breaking, ships as a minor).
+
 - **Non-breaking change**: edit, merge, optionally run the `Create tag and release` workflow. The `v2` floating tag gets moved to the new commit.
 - **Breaking change**: bump `.version-major` (e.g. `2` → `3`), sweep internal `uses: …@vN` → `…@vN+1` everywhere in `.github/` (the regex `(hwinther/reusable-workflows/\.github/[^@\s]+)@vN` covers all `uses:` lines), update the `@vN` references in CLAUDE.md and the cosign-verify examples printed in the container/image-push job summaries, then release the new `vN+1.0.0` and create the floating tag.
 
