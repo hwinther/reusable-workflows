@@ -146,7 +146,7 @@ runs:
 
     - name: Upload Grype SARIF to Code Scanning
       if: ${{ always() && inputs.grype_scan_enabled == 'true' && inputs.code_scanning_upload_enabled == 'true' && steps.grype-scan.outcome != 'skipped' }}
-      uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+      uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
       with:
         sarif_file: ${{ steps.paths.outputs.sarif_path }}
         category: ${{ steps.paths.outputs.sarif_category }}
