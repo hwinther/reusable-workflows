@@ -60,10 +60,10 @@ on:
         type: boolean
         default: true
       grype_fail_build:
-        description: "Grype fail-build: fail the job when vulnerabilities meet severity-cutoff"
+        description: "Grype fail-build mode: 'auto' (fail on every event except pull_request — PRs get report/SARIF only), 'always' (fail whenever vulnerabilities meet severity-cutoff), or 'never' (report/SARIF only). Replaces the former boolean: migrate true->'always' (or 'auto'), false->'never'."
         required: false
-        type: boolean
-        default: true
+        type: string
+        default: auto
       code_scanning_upload_enabled:
         description: "Upload the Grype SARIF to GitHub Code Scanning. Set to false on private repositories without GitHub Advanced Security; findings still go to the job summary, the PR comment, and the severity gate."
         required: false
@@ -143,7 +143,7 @@ jobs:
     needs: prepare-repository-name
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2
     with:
       container_registry: ${{ inputs.container_registry }}
       container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
@@ -192,40 +192,18 @@ jobs:
 
       - name: Compose final container tags
         id: tags
-        shell: bash
-        env:
-          GITVERSION_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
-          ADDITIONAL_TAGS: ${{ inputs.additional_tags }}
-          USE_GITVERSION: ${{ inputs.use_gitversion_tags }}
-          REGISTRY: ${{ inputs.container_registry }}
-          REPO: ${{ needs.prepare-repository-name.outputs.repository }}
-          POSTFIX: ${{ inputs.container_image_name_postfix }}
-        run: |
-          set -euo pipefail
-          final_tags=""
-          if [ "$USE_GITVERSION" = "true" ]; then
-            final_tags="$GITVERSION_TAGS"
-          fi
-          if [ -n "$ADDITIONAL_TAGS" ]; then
-            while IFS= read -r t; do
-              t=$(echo "$t" | xargs)
-              [ -z "$t" ] && continue
-              full_ref="${REGISTRY}/${REPO}/${POSTFIX}:${t}"
-              if [ -z "$final_tags" ]; then
-                final_tags="$full_ref"
-              else
-                final_tags="${final_tags},${full_ref}"
-              fi
-            done < <(echo "$ADDITIONAL_TAGS" | tr ';' '\n')
-          fi
-          [ -n "$final_tags" ] || { echo "::error::No container tags resolved (use_gitversion_tags=$USE_GITVERSION, additional_tags='$ADDITIONAL_TAGS')"; exit 1; }
-          echo "container_tags=$final_tags" >> "$GITHUB_OUTPUT"
-          echo "Final container tags:"
-          echo "$final_tags" | tr ',' '\n' | sed 's/^/  /'
+        uses: hwinther/reusable-workflows/.github/actions/_compose-image-tags@v2
+        with:
+          gitversion_tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          additional_tags: ${{ inputs.additional_tags }}
+          use_gitversion: ${{ inputs.use_gitversion_tags }}
+          registry: ${{ inputs.container_registry }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          postfix: ${{ inputs.container_image_name_postfix }}
 
       - name: Build container (load locally, do not push)
         id: build
-        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v1
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v2
         with:
           build_context: ${{ inputs.build_context }}
           dockerfile: ${{ inputs.dockerfile }}
@@ -238,7 +216,7 @@ jobs:
 
       - name: Generate SBOM and scan with Grype
         id: scan
-        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v1
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
@@ -246,7 +224,7 @@ jobs:
           grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
           grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
-          grype_fail_build: ${{ inputs.grype_fail_build }}
+          grype_fail_build: ${{ inputs.grype_fail_build == 'always' || (inputs.grype_fail_build == 'auto' && github.event_name != 'pull_request') }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
           release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
           cosign_supply_chain_attest_enabled: ${{ inputs.generate_supply_chain_artifacts }}
@@ -254,7 +232,7 @@ jobs:
 
       - name: Save image as workflow artifact
         id: save
-        uses: hwinther/reusable-workflows/.github/actions/_save-image-artifact@v1
+        uses: hwinther/reusable-workflows/.github/actions/_save-image-artifact@v2
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           artifact_name: build-and-scan-${{ inputs.container_image_name_postfix }}-image

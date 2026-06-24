@@ -1,0 +1,25 @@
+---
+# yamllint config for this repo's GitHub Actions YAML.
+# Run in CI by .github/workflows/lint-workflows.yml and locally via:
+#   yamllint -c .yamllint.yml .github
+# Rules are tuned for GitHub Actions / Dependabot conventions.
+extends: default
+
+rules:
+  # Actions YAML routinely has long `uses:` / expression lines.
+  line-length: disable
+  # A leading `---` document marker is optional for Actions files.
+  document-start: disable
+  # Line endings are normalized to LF by .gitattributes; the Windows working tree may
+  # be CRLF, so don't fail on the new-line character here (CI checks out LF anyway).
+  new-lines: disable
+  # `on:`, `no:`, etc. are YAML "truthy" keys but valid Actions keys.
+  truthy:
+    check-keys: false
+  # Action pins use a single space before the version comment, e.g. `@<sha> # v1.2.3`.
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  # Sequence indentation varies (e.g. dependabot.yml's nested `directories:`);
+  # enforcing one style is low-value churn for this repo.
+  indentation: disable

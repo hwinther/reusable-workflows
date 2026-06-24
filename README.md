@@ -53,6 +53,12 @@ Internal helpers (prefixed `_`) are implementation details of the workflows abov
 
 ## Typical usage patterns
 
+The diagrams below are the abstract building-block patterns. For **rendered
+(Mermaid) diagrams of how real consumer repos wire these up** — `clutterstock`
+(full-stack app), `wsh-rtl-sdr` (arm64 base + feeder images), `proxmox`
+(infrastructure/GitOps), and the minimal `test-*` examples — see
+[docs/consumer-topologies.md](docs/consumer-topologies.md).
+
 ### PR build (Node / .NET / Python)
 
 ```

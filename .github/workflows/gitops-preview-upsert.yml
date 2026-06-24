@@ -169,20 +169,26 @@ jobs:
           overlay_dir="$BASE/pr-$PR"
           mkdir -p "$overlay_dir"
 
+          # sed replacement text is not literal: `&` expands to the whole match,
+          # `\` escapes, and `|` is our delimiter. Escape all three in every
+          # substituted value so an image ref / host / db name that happens to
+          # contain one can't corrupt the render or inject replacement text.
+          sed_escape() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+
           render() {
             local tpl="$1" out="$2"
             sed \
-              -e "s|__PR__|$PR|g" \
-              -e "s|__HOST__|$HOST|g" \
-              -e "s|__DB_NAME__|$DB_NAME|g" \
-              -e "s|__IMAGE_TAG__|$IMAGE_TAG|g" \
-              -e "s|__IMAGE_DIGEST__|$IMAGE_DIGEST|g" \
-              -e "s|__IMAGE_API_TAG__|$IMAGE_API_TAG|g" \
-              -e "s|__IMAGE_API_DIGEST__|$IMAGE_API_DIGEST|g" \
-              -e "s|__IMAGE_FRONTEND_TAG__|$IMAGE_FRONTEND_TAG|g" \
-              -e "s|__IMAGE_FRONTEND_DIGEST__|$IMAGE_FRONTEND_DIGEST|g" \
-              -e "s|__IMAGE_MIGRATOR_TAG__|$IMAGE_MIGRATOR_TAG|g" \
-              -e "s|__IMAGE_MIGRATOR_DIGEST__|$IMAGE_MIGRATOR_DIGEST|g" \
+              -e "s|__PR__|$(sed_escape "$PR")|g" \
+              -e "s|__HOST__|$(sed_escape "$HOST")|g" \
+              -e "s|__DB_NAME__|$(sed_escape "$DB_NAME")|g" \
+              -e "s|__IMAGE_TAG__|$(sed_escape "$IMAGE_TAG")|g" \
+              -e "s|__IMAGE_DIGEST__|$(sed_escape "$IMAGE_DIGEST")|g" \
+              -e "s|__IMAGE_API_TAG__|$(sed_escape "$IMAGE_API_TAG")|g" \
+              -e "s|__IMAGE_API_DIGEST__|$(sed_escape "$IMAGE_API_DIGEST")|g" \
+              -e "s|__IMAGE_FRONTEND_TAG__|$(sed_escape "$IMAGE_FRONTEND_TAG")|g" \
+              -e "s|__IMAGE_FRONTEND_DIGEST__|$(sed_escape "$IMAGE_FRONTEND_DIGEST")|g" \
+              -e "s|__IMAGE_MIGRATOR_TAG__|$(sed_escape "$IMAGE_MIGRATOR_TAG")|g" \
+              -e "s|__IMAGE_MIGRATOR_DIGEST__|$(sed_escape "$IMAGE_MIGRATOR_DIGEST")|g" \
               "$tpl" > "$out"
           }
 

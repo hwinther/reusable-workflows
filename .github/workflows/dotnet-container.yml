@@ -54,10 +54,10 @@ on:
         type: boolean
         default: true
       grype_fail_build:
-        description: "Grype fail-build: fail the job when vulnerabilities meet severity-cutoff (false = report/SARIF only)"
+        description: "Grype fail-build mode: 'auto' (fail on every event except pull_request — PRs get report/SARIF only), 'always' (fail whenever vulnerabilities meet severity-cutoff), or 'never' (report/SARIF only). Replaces the former boolean: migrate true->'always' (or 'auto'), false->'never'."
         required: false
-        type: boolean
-        default: true
+        type: string
+        default: auto
       code_scanning_upload_enabled:
         description: "Upload the Grype SARIF to GitHub Code Scanning. Set to false on private repositories without GitHub Advanced Security; findings still go to the job summary, the PR comment, and the severity gate."
         required: false
@@ -153,7 +153,7 @@ jobs:
     needs: prepare-repository-name
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2
     with:
       container_registry: ${{ inputs.container_registry }}
       container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
@@ -168,7 +168,6 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-      actions: write
       security-events: write
       pull-requests: write  # for the Grype findings PR comment via _grype-summary
     outputs:
@@ -189,7 +188,7 @@ jobs:
 
       - name: Build dotnet container (publish to archive, load locally)
         id: build
-        uses: hwinther/reusable-workflows/.github/actions/_build-image-dotnet@v1
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-dotnet@v2
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           solution_path: ${{ inputs.solution_path }}
@@ -210,7 +209,7 @@ jobs:
 
       - name: Generate SBOM and scan with Grype
         id: scan
-        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v1
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
@@ -218,7 +217,7 @@ jobs:
           grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
           grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
           grype_only_fixed: ${{ inputs.grype_only_fixed }}
-          grype_fail_build: ${{ inputs.grype_fail_build }}
+          grype_fail_build: ${{ inputs.grype_fail_build == 'always' || (inputs.grype_fail_build == 'auto' && github.event_name != 'pull_request') }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
           release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
           # Decoupled from cosign_sign_enabled in v1.54.0 so consumer-signed callers can
@@ -231,33 +230,14 @@ jobs:
 
       - name: Compose final container tags
         id: tags
-        shell: bash
-        env:
-          GITVERSION_TAGS: ${{ needs.gitversion.outputs.container_image_tags }}
-          TAG_SUFFIX: ${{ inputs.tag_suffix }}
-        run: |
-          set -euo pipefail
-          if [ -n "$TAG_SUFFIX" ]; then
-            # Each gitversion entry is "registry/repo/postfix:tag" — append "-${TAG_SUFFIX}" to ":tag".
-            final_tags=""
-            while IFS= read -r ref; do
-              ref=$(echo "$ref" | xargs)
-              [ -z "$ref" ] && continue
-              suffixed="${ref}-${TAG_SUFFIX}"
-              if [ -z "$final_tags" ]; then
-                final_tags="$suffixed"
-              else
-                final_tags="${final_tags},${suffixed}"
-              fi
-            done < <(echo "$GITVERSION_TAGS" | tr ',' '\n')
-          else
-            final_tags="$GITVERSION_TAGS"
-          fi
-          echo "container_tags=$final_tags" >> "$GITHUB_OUTPUT"
+        uses: hwinther/reusable-workflows/.github/actions/_compose-image-tags@v2
+        with:
+          gitversion_tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          tag_suffix: ${{ inputs.tag_suffix }}
 
       - name: Push image and attach signatures + attestations
         id: push
-        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v1
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           container_tags: ${{ steps.tags.outputs.container_tags }}
@@ -308,7 +288,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Immutable reference: \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**cosign** (keyless: the certificate identifies **this reusable workflow**, not the consumer repo. Pin consumers with \`uses: …/dotnet-container.yml@v1\` so verification can target \`@refs/tags/v1\`.):" >> "$GITHUB_STEP_SUMMARY"
+          echo "**cosign** (keyless: the certificate identifies **this reusable workflow**, not the consumer repo. Pin consumers with \`uses: …/dotnet-container.yml@v2\` so verification can target \`@refs/tags/v2\`.):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- This run: \`${WORKFLOW_REF}\` → identity \`${COSIGN_CERT_IDENTITY}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -321,7 +301,7 @@ jobs:
           echo "Policy-style verify when consumers use the floating **v1** tag (any org/repo hosting this workflow):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
-          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp '^https://github.com/[^/]+/[^/]+/\\.github/workflows/dotnet-container\\.yml@refs/tags/v1\$' \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp '^https://github.com/[^/]+/[^/]+/\\.github/workflows/dotnet-container\\.yml@refs/tags/v2\$' \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "If verification fails, add \`--verbose\` and align \`--certificate-identity\` / \`-regexp\` with the \`Issued certificate\` line." >> "$GITHUB_STEP_SUMMARY"

@@ -37,11 +37,20 @@ inputs:
     required: true
     description: "Image name postfix appended to repository for the subject ref."
   image_digest:
-    required: true
-    description: "OCI manifest digest of the already-pushed image (sha256:...). Subject of attestations and the `tag@digest` form passed to cosign sign."
+    required: false
+    description: "OCI manifest digest of the already-pushed image (sha256:...). Subject of attestations and the `tag@digest` form passed to cosign sign. When empty, the action resolves it from the registry using the first entry of container_tags (`docker buildx imagetools inspect`) — caller must have done `docker login` first. Resolving here avoids the matrix-output last-writer-wins problem: a matrix sign job keyed on the same dimension as the build can recover its own entry's digest from the per-entry tag."
+    default: ""
   container_tags:
     required: true
-    description: "Comma-separated full image refs (registry/name:tag) the digest was pushed under. Each is signed as `<tag>@<digest>` so verifiers resolving via tag find the signature."
+    description: "Comma-separated full image refs (registry/name:tag) the digest was pushed under. Each is signed as `<tag>@<digest>` so verifiers resolving via tag find the signature. Also the source for digest auto-resolution when image_digest is empty (first entry)."
+  sbom_artifact_name:
+    required: false
+    description: "Workflow artifact holding the CycloneDX SBOM (e.g. build-and-scan-*.yml sbom_artifact). When set, the action downloads it and resolves sbom_cyclonedx_path internally — the job must declare permissions: actions: read. Takes effect only when cosign_supply_chain_attest_enabled. Ignored when sbom_cyclonedx_path is set explicitly (in-job callers)."
+    default: ""
+  grype_artifact_name:
+    required: false
+    description: "Workflow artifact holding the Grype JSON (e.g. build-and-scan-*.yml grype_artifact). When set, the action downloads it and resolves grype_json_path internally. Same semantics as sbom_artifact_name."
+    default: ""
   cosign_sign_enabled:
     required: false
     description: "Sign with cosign keyless."
@@ -82,6 +91,95 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # Resolve the manifest digest once, here, so every downstream step (binding
+    # check, attestation subject, cosign sign ref) shares one value. When the
+    # caller passes image_digest we use it verbatim; otherwise we read it back
+    # from the registry via the first container tag. The registry round-trip is
+    # what lets a matrix sign job recover its own entry's digest (matrix job
+    # outputs are last-writer-wins and unusable for per-entry plumbing).
+    - name: Resolve image digest
+      id: digest
+      shell: bash
+      env:
+        IMAGE_DIGEST: ${{ inputs.image_digest }}
+        CONTAINER_TAGS: ${{ inputs.container_tags }}
+      run: |
+        set -euo pipefail
+        if [ -n "$IMAGE_DIGEST" ]; then
+          echo "value=$IMAGE_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "Using provided image digest: $IMAGE_DIGEST"
+          exit 0
+        fi
+        first_tag=""
+        while IFS= read -r tag; do
+          tag=$(echo "$tag" | xargs)
+          [ -z "$tag" ] && continue
+          first_tag="$tag"
+          break
+        done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
+        [ -n "$first_tag" ] || { echo "::error::No image_digest provided and no container_tags to resolve a digest from"; exit 1; }
+        echo "Resolving digest from registry for: $first_tag"
+        digest=$(docker buildx imagetools inspect "$first_tag" --format '{{.Manifest.Digest}}')
+        [ -n "$digest" ] || { echo "::error::Failed to resolve a digest for $first_tag (is the caller logged in to the registry?)"; exit 1; }
+        echo "value=$digest" >> "$GITHUB_OUTPUT"
+        echo "Resolved digest: $digest"
+
+    # Optional: pull the predicate files from workflow artifacts so the consumer
+    # sign job doesn't have to download them itself. Explicit *_path inputs win
+    # (in-job callers already have the files on disk).
+    - name: Download CycloneDX SBOM artifact
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.sbom_cyclonedx_path == '' && inputs.sbom_artifact_name != '' }}
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.sbom_artifact_name }}
+        path: ${{ runner.temp }}/sign-image-sbom
+
+    - name: Download Grype JSON artifact
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.grype_json_path == '' && inputs.grype_artifact_name != '' }}
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: ${{ inputs.grype_artifact_name }}
+        path: ${{ runner.temp }}/sign-image-grype
+
+    # Single source of truth for the predicate paths used by every step below:
+    # explicit input path if given, otherwise the file found in the downloaded
+    # artifact directory. Only runs when attestations are on.
+    - name: Resolve predicate paths
+      id: predicates
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      shell: bash
+      env:
+        SBOM_PATH_INPUT: ${{ inputs.sbom_cyclonedx_path }}
+        GRYPE_PATH_INPUT: ${{ inputs.grype_json_path }}
+        SBOM_DIR: ${{ runner.temp }}/sign-image-sbom
+        GRYPE_DIR: ${{ runner.temp }}/sign-image-grype
+        SBOM_ARTIFACT: ${{ inputs.sbom_artifact_name }}
+        GRYPE_ARTIFACT: ${{ inputs.grype_artifact_name }}
+      run: |
+        set -euo pipefail
+        if [ -n "$SBOM_PATH_INPUT" ]; then
+          sbom_path="$SBOM_PATH_INPUT"
+        elif [ -n "$SBOM_ARTIFACT" ]; then
+          sbom_path=$(find "$SBOM_DIR" -type f -name '*.cyclonedx.json' | head -1)
+          [ -n "$sbom_path" ] || sbom_path=$(find "$SBOM_DIR" -type f -name '*.json' | head -1)
+        else
+          sbom_path=""
+        fi
+        if [ -n "$GRYPE_PATH_INPUT" ]; then
+          grype_path="$GRYPE_PATH_INPUT"
+        elif [ -n "$GRYPE_ARTIFACT" ]; then
+          grype_path=$(find "$GRYPE_DIR" -type f -name '*.grype.json' | head -1)
+          [ -n "$grype_path" ] || grype_path=$(find "$GRYPE_DIR" -type f -name '*.json' | head -1)
+        else
+          grype_path=""
+        fi
+        [ -n "$sbom_path" ] && [ -f "$sbom_path" ] || { echo "::error::Could not resolve a CycloneDX SBOM (sbom_cyclonedx_path empty and artifact '${SBOM_ARTIFACT:-<none>}' yielded no .cyclonedx.json)"; exit 1; }
+        [ -n "$grype_path" ] && [ -f "$grype_path" ] || { echo "::error::Could not resolve a Grype JSON (grype_json_path empty and artifact '${GRYPE_ARTIFACT:-<none>}' yielded no .grype.json)"; exit 1; }
+        echo "sbom_path=$sbom_path" >> "$GITHUB_OUTPUT"
+        echo "grype_path=$grype_path" >> "$GITHUB_OUTPUT"
+        echo "CycloneDX SBOM: $sbom_path"
+        echo "Grype JSON: $grype_path"
+
     # Cross-job integrity: re-hash the predicate files passed in and bail
     # before any signing if they don't match what the build job produced.
     # Empty inputs → skipped (in-job callers don't need this).
@@ -89,8 +187,8 @@ runs:
       if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' && (inputs.sbom_cyclonedx_sha256 != '' || inputs.grype_json_sha256 != '') }}
       shell: bash
       env:
-        SBOM_PATH: ${{ inputs.sbom_cyclonedx_path }}
-        GRYPE_PATH: ${{ inputs.grype_json_path }}
+        SBOM_PATH: ${{ steps.predicates.outputs.sbom_path }}
+        GRYPE_PATH: ${{ steps.predicates.outputs.grype_path }}
         EXPECTED_SBOM: ${{ inputs.sbom_cyclonedx_sha256 }}
         EXPECTED_GRYPE: ${{ inputs.grype_json_sha256 }}
       run: |
@@ -130,8 +228,8 @@ runs:
       if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
       shell: bash
       env:
-        CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
-        EXPECTED_MANIFEST_DIGEST: ${{ inputs.image_digest }}
+        CYCLONEDX_PATH: ${{ steps.predicates.outputs.sbom_path }}
+        EXPECTED_MANIFEST_DIGEST: ${{ steps.digest.outputs.value }}
         EXPECTED_IMAGE_ID: ${{ inputs.expected_image_id }}
       run: |
         set -euo pipefail
@@ -199,7 +297,7 @@ runs:
       uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
       with:
         subject-name: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}
-        subject-digest: ${{ inputs.image_digest }}
+        subject-digest: ${{ steps.digest.outputs.value }}
         push-to-registry: true
 
     # Kyverno 1.17 resolves Cosign attestations like Cosign v2 (sha256-….att manifest tags). Cosign v3+ often publishes via OCI referrers only → 404 on that path while local cosign v3 verify still works via /referrers/.
@@ -213,7 +311,7 @@ runs:
       if: ${{ inputs.cosign_sign_enabled == 'true' }}
       shell: bash
       env:
-        DIGEST: ${{ inputs.image_digest }}
+        DIGEST: ${{ steps.digest.outputs.value }}
         CONTAINER_TAGS: ${{ inputs.container_tags }}
       run: |
         set -euo pipefail
@@ -237,7 +335,7 @@ runs:
       env:
         RUN_URI: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         RUN_ID: ${{ github.run_id }}
-        GRYPE_JSON: ${{ inputs.grype_json_path }}
+        GRYPE_JSON: ${{ steps.predicates.outputs.grype_path }}
         OUT_PATH: ${{ runner.temp }}/cosign-vuln-predicate.json
       run: |
         set -euo pipefail
@@ -273,8 +371,8 @@ runs:
       if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
       shell: bash
       env:
-        IMAGE_REF: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ inputs.image_digest }}
-        CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
+        IMAGE_REF: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.digest.outputs.value }}
+        CYCLONEDX_PATH: ${{ steps.predicates.outputs.sbom_path }}
         VULN_PREDICATE: ${{ runner.temp }}/cosign-vuln-predicate.json
       run: |
         set -euo pipefail

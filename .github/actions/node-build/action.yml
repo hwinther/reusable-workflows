@@ -19,7 +19,7 @@ inputs:
     required: false
     description: "Auth token written into ~/.npmrc as NODE_AUTH_TOKEN for npm ci. When empty, falls back to github_token (the standard GitHub Packages flow)."
     default: ""
-  scope:
+  npm_scope:
     required: false
     description: "Package scope, e.g. '@org'"
     default: ''
@@ -55,7 +55,7 @@ runs:
       node-version: ${{ inputs.node_version }}
       cache: "npm"
       cache-dependency-path: ${{ inputs.working_directory != '' && format('{0}/package-lock.json', inputs.working_directory) || 'package-lock.json' }}
-      scope: ${{ inputs.scope }}
+      scope: ${{ inputs.npm_scope }}
       registry-url: ${{ inputs.npm_registry_url }}
 
   - name: Install dependencies
@@ -127,7 +127,7 @@ runs:
   - name: Format typecheck output
     id: format-typecheck
     if: steps.dependency-install.outcome == 'success' && steps.node-typecheck.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
     with:
       format: ts
       errors_file: ${{ env.TEMP_DIR }}/typecheck.err
@@ -174,7 +174,7 @@ runs:
   - name: Format build output
     id: format-build
     if: steps.dependency-install.outcome == 'success' && steps.node-build.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
     with:
       format: ts
       errors_file: ${{ env.TEMP_DIR }}/build.err
@@ -188,11 +188,19 @@ runs:
     if: steps.dependency-install.outcome == 'success' && inputs.extra_command != ''
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      # Passed via env (not template expansion) so the runner does not
+      # interpolate the input into the run-script source — closes a zizmor
+      # 'code injection via template expansion' finding. The command is still
+      # executed as shell since that's the input's documented contract.
+      EXTRA_COMMAND: ${{ inputs.extra_command }}
     run: |
       echo "::group::Extra command"
-      ${{ inputs.extra_command }}
+      set +e
+      bash -c "$EXTRA_COMMAND"
+      rc=$?
       echo "::endgroup::"
-      if [ $? -ne 0 ]; then
+      if [ $rc -ne 0 ]; then
         echo "::error::Extra command failed. Check the PR comment or job summary for details."
         exit 1
       fi
@@ -231,7 +239,7 @@ runs:
   - name: Format lint output
     id: format-lint
     if: steps.dependency-install.outcome == 'success' && steps.node-lint.outputs.skipped != 'true' && steps.node-lint.outputs.lint_runtime_error != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v1
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
     with:
       format: eslint-json
       errors_file: ${{ env.TEMP_DIR }}/eslint.json
@@ -362,7 +370,7 @@ runs:
       fail-on-error: false
 
   # - name: 'Report Coverage'
-  #   if: always() 
+  #   if: always()
   #   uses: davelosert/vitest-coverage-report-action@2500dafcee7dd64f85ab689c0b83798a8359770e # v2.9.3
   #   with:
   #     json-summary-path: "${{ inputs.working_directory }}/coverage/coverage-final.json"

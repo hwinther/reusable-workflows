@@ -1,0 +1,144 @@
+name: "Lint workflows (actionlint + yamllint)"
+
+# Lints this repo's own GitHub Actions workflows and composite actions:
+#   - actionlint: Actions schema/expressions/contexts + shellcheck on `run:` blocks
+#   - yamllint:   YAML style (rules in .yamllint.yml)
+# On pull requests it keeps a sticky PR comment in sync and writes a job summary when
+# issues are found; the check fails whenever either tool reports an issue.
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write # sticky PR comment
+    env:
+      ACTIONLINT_VERSION: "1.7.7"
+      YAMLLINT_VERSION: "1.37.1"
+      # shellcheck runs via actionlint but only gates at warning level and above;
+      # info/style findings (e.g. SC2086 on `>> $GITHUB_OUTPUT`) are not failures.
+      SHELLCHECK_OPTS: "--severity=warning"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+
+      - name: Install yamllint
+        run: pip install "yamllint==${YAMLLINT_VERSION}"
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      - name: Run actionlint
+        id: actionlint
+        run: |
+          set +e
+          # -ignore: actionlint's type model doesn't expose `result` on reusable-workflow
+          # job objects, so `needs.<job>.result` is a false positive (valid at runtime).
+          actionlint -oneline -no-color -ignore 'property "result" is not defined' \
+            > "${RUNNER_TEMP}/actionlint.txt" 2>&1
+          rc=$?
+          set -e
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+          echo "::group::actionlint output"
+          cat "${RUNNER_TEMP}/actionlint.txt"
+          echo "::endgroup::"
+
+      - name: Run yamllint
+        id: yamllint
+        run: |
+          set +e
+          yamllint -f parsable -c .yamllint.yml .github \
+            > "${RUNNER_TEMP}/yamllint.txt" 2>&1
+          rc=$?
+          set -e
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+          echo "::group::yamllint output"
+          cat "${RUNNER_TEMP}/yamllint.txt"
+          echo "::endgroup::"
+
+      - name: Build report
+        id: report
+        env:
+          AL_RC: ${{ steps.actionlint.outputs.rc }}
+          YL_RC: ${{ steps.yamllint.outputs.rc }}
+        run: |
+          set -euo pipefail
+          al="${RUNNER_TEMP}/actionlint.txt"
+          yl="${RUNNER_TEMP}/yamllint.txt"
+
+          has_issues=false
+          if [ "${AL_RC}" != "0" ] || [ "${YL_RC}" != "0" ] || [ -s "$al" ] || [ -s "$yl" ]; then
+            has_issues=true
+          fi
+          echo "has_issues=${has_issues}" >> "$GITHUB_OUTPUT"
+
+          report="${RUNNER_TEMP}/report.md"
+          {
+            if [ "${has_issues}" = "true" ]; then
+              echo "## 🧹 Workflow lint issues"
+              echo ""
+              echo "### actionlint"
+              if [ -s "$al" ]; then echo '```'; cat "$al"; echo '```'; else echo "_No issues._"; fi
+              echo ""
+              echo "### yamllint"
+              if [ -s "$yl" ]; then echo '```'; cat "$yl"; echo '```'; else echo "_No issues._"; fi
+            else
+              echo "## ✅ Workflow lint passed"
+              echo ""
+              echo "actionlint and yamllint reported no issues."
+            fi
+          } > "$report"
+
+          # Job summary only when there are issues.
+          if [ "${has_issues}" = "true" ]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Expose the report for the sticky PR comment step.
+          {
+            echo "comment<<__LINT_EOF__"
+            cat "$report"
+            echo "__LINT_EOF__"
+          } >> "$GITHUB_OUTPUT"
+
+      # Sticky PR comment (same mechanism pr-build.yml uses). Skipped for forks, and
+      # tolerant of the read-only token on Dependabot PRs (continue-on-error).
+      - name: Create or update PR comment
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          comment-identifier: "lint-workflows"
+          comment-content: ${{ steps.report.outputs.comment }}
+
+      - name: Fail if issues were found
+        if: steps.report.outputs.has_issues == 'true'
+        run: |
+          echo "::error::actionlint or yamllint reported issues — see the job summary and the PR comment."
+          exit 1

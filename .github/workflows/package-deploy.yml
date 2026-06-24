@@ -175,7 +175,7 @@ jobs:
       - name: Compute nuget version
         id: nuget_pkgver
         if: inputs.nuget_enabled
-        uses: hwinther/reusable-workflows/.github/actions/package-version@v1
+        uses: hwinther/reusable-workflows/.github/actions/package-version@v2
         with:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.nuget_version_path }}
@@ -183,18 +183,18 @@ jobs:
       - name: Compute npm version
         id: npm_pkgver
         if: inputs.npm_enabled
-        uses: hwinther/reusable-workflows/.github/actions/package-version@v1
+        uses: hwinther/reusable-workflows/.github/actions/package-version@v2
         with:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.npm_version_path }}
 
       # pypi passes the format=pep440 / run_number inputs added to
       # package-version in this same release. nuget/npm don't and stay
-      # on the same @v1 ref.
+      # on the same @v2 ref.
       - name: Compute pypi version
         id: pypi_pkgver
         if: inputs.pypi_enabled
-        uses: hwinther/reusable-workflows/.github/actions/package-version@v1
+        uses: hwinther/reusable-workflows/.github/actions/package-version@v2
         with:
           is_alpha: ${{ inputs.is_alpha }}
           path: ${{ inputs.pypi_version_path }}
@@ -276,7 +276,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: hwinther/reusable-workflows/.github/workflows/nuget-deploy.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/nuget-deploy.yml@v2
     secrets:
       packages_pat: ${{ secrets.packages_pat }}
     with:
@@ -295,13 +295,13 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: hwinther/reusable-workflows/.github/workflows/npm-deploy.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/npm-deploy.yml@v2
     secrets:
       npm_auth_token: ${{ secrets.npm_auth_token }}
     with:
-      working-directory: ${{ inputs.npm_working_directory }}
+      working_directory: ${{ inputs.npm_working_directory }}
       node_version: ${{ inputs.npm_node_version }}
-      scope: ${{ inputs.npm_scope }}
+      npm_scope: ${{ inputs.npm_scope }}
       npm_registry_url: ${{ inputs.npm_registry_url }}
       package_version: ${{ needs.detect-and-version.outputs.npm_version }}
       is_alpha: ${{ inputs.is_alpha }}
@@ -317,7 +317,7 @@ jobs:
     if: inputs.pypi_enabled && needs.detect-and-version.outputs.pypi_changed == 'true'
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/pypi-deploy.yml@v1
+    uses: hwinther/reusable-workflows/.github/workflows/pypi-deploy.yml@v2
     with:
       working-directory: ${{ inputs.pypi_working_directory }}
       python_version: ${{ inputs.pypi_python_version }}

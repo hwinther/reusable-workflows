@@ -78,7 +78,7 @@ jobs:
       - name: Determine package version and container image tag
         id: gitversion
         if: github.event.inputs.tag_name == 'auto'
-        uses: hwinther/reusable-workflows/.github/actions/gitversion@v1
+        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2
         with:
           persist_checkout_credentials: 'true'
 
@@ -116,9 +116,18 @@ jobs:
               echo "Floating tags: $MINOR_TAG, $MAJOR_TAG"
             fi
           else
-            echo "tag_name=$TAG_INPUT" >> $GITHUB_OUTPUT
-            echo "tag_name_full=$TAG_INPUT" >> $GITHUB_OUTPUT
+            echo "tag_name=$TAG_INPUT" >> "$GITHUB_OUTPUT"
+            echo "tag_name_full=$TAG_INPUT" >> "$GITHUB_OUTPUT"
             echo "Using supplied tag: $TAG_INPUT"
+            # Derive floating vX.Y and vX from an explicit full-semver tag, when enabled
+            # (e.g. the first v2.0.0 release, which can't use 'auto' until a v2.x.y tag exists).
+            if [ "$CREATE_FLOATING_TAGS" = "true" ] && printf '%s' "$TAG_INPUT" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+              VER="${TAG_INPUT#v}"
+              IFS='.' read -ra P <<< "$VER"
+              echo "tag_name_minor=v${P[0]}.${P[1]}" >> "$GITHUB_OUTPUT"
+              echo "tag_name_major=v${P[0]}" >> "$GITHUB_OUTPUT"
+              echo "Floating tags: v${P[0]}.${P[1]}, v${P[0]}"
+            fi
           fi
 
       # In auto mode: avoid creating a new tag/release on the same commit as the latest
@@ -140,6 +149,39 @@ jobs:
             exit 1
           fi
           echo "OK: commits exist after $LATEST (HEAD is not at the tag's commit)."
+
+      # Freeze this repo's internal `uses:` refs from the floating @v{major} to the
+      # immutable vX.Y.Z tag being cut, so the tagged commit fully pins all transitive
+      # workflow/action code (see docs/adr/0001-internal-ref-pinning.md). The commit is
+      # made on a detached HEAD and only the tags are pushed, so `main` stays on
+      # @v{major}. Gated on this repo: only it has self-referential internal refs, and
+      # the helper scripts only exist in its own checkout (a consumer calling this via
+      # workflow_call gets the consumer's checkout, where these scripts are absent).
+      - name: Freeze internal refs to ${{ steps.determine_tag.outputs.tag_name_full }}
+        id: freeze
+        if: github.repository == 'hwinther/reusable-workflows'
+        shell: bash
+        env:
+          FULL_TAG: ${{ steps.determine_tag.outputs.tag_name_full }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$FULL_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "Tag '$FULL_TAG' is not an immutable vX.Y.Z tag; skipping internal-ref freeze."
+            exit 0
+          fi
+          node scripts/freeze-internal-refs.mjs --tag "$FULL_TAG"
+          # Prove the freeze left no floating internal refs before we tag anything.
+          node scripts/validate-version-refs.mjs --release
+          if git diff --quiet; then
+            echo "No internal refs changed (already frozen?) — tagging the checked-out commit as-is."
+          else
+            git config user.name "$ACTOR"
+            git config user.email "$ACTOR@users.noreply.github.com"
+            git checkout --detach
+            git commit -am "release: freeze internal refs to $FULL_TAG"
+            echo "Created freeze commit $(git rev-parse HEAD)"
+          fi
 
       - name: Create tag(s) ${{ steps.determine_tag.outputs.tag_name }}
         id: create_tag

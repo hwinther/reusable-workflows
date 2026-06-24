@@ -71,10 +71,10 @@ on:
         type: string
         default: ""
     outputs:
-      pushed_tags:
+      container_image_tags:
         description: "Comma-separated tags that were pushed."
         value: ${{ inputs.container_image_tags }}
-      pushed_digest:
+      image_digest:
         description: "OCI manifest digest resolved from the registry after push."
         value: ${{ jobs.push.outputs.image_digest }}
 
@@ -116,7 +116,7 @@ jobs:
 
       - name: Download and load image artifact
         id: load
-        uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v1
+        uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v2
         with:
           artifact_name: ${{ inputs.artifact_name }}
 
@@ -195,7 +195,7 @@ jobs:
 
       - name: Push image and attach signatures + attestations
         id: push
-        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v1
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2
         with:
           image_ref: ${{ steps.load.outputs.local_ref }}
           container_tags: ${{ inputs.container_image_tags }}
@@ -244,7 +244,7 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- Immutable reference: \`${IMAGE_REF}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**cosign** (keyless: certificate identifies image-push.yml. Pin consumers with \`uses: …/image-push.yml@v1\` so verification can target \`@refs/tags/v1\`.):" >> "$GITHUB_STEP_SUMMARY"
+          echo "**cosign** (keyless: certificate identifies image-push.yml. Pin consumers with \`uses: …/image-push.yml@v2\` so verification can target \`@refs/tags/v2\`.):" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- This run: \`${WORKFLOW_REF}\` → identity \`${COSIGN_CERT_IDENTITY}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
@@ -257,7 +257,7 @@ jobs:
           echo "Policy-style verify when consumers use the floating **v1** tag:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`shell" >> "$GITHUB_STEP_SUMMARY"
-          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp '^https://github.com/[^/]+/[^/]+/\\.github/workflows/image-push\\.yml@refs/tags/v1\$' \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
+          echo "cosign verify --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" --certificate-identity-regexp '^https://github.com/[^/]+/[^/]+/\\.github/workflows/image-push\\.yml@refs/tags/v2\$' \"${IMAGE_REF}\"" >> "$GITHUB_STEP_SUMMARY"
           echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           if [ "${COSIGN_SUPPLY_CHAIN_ATTEST}" = "true" ]; then
