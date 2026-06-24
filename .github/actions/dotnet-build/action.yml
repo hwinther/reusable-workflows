@@ -399,7 +399,7 @@ runs:
       if [ -n "$(git -c core.safecrlf=false status --porcelain)" ]; then
         echo "Found changes, staging files to see if they are normalized away..."
         git add -A
-        
+
         if [ -n "$(git diff --cached)" ]; then
           echo "::error::Actual content changes in files after restore and build:"
           git status

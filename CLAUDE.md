@@ -67,6 +67,7 @@ There is no build/test/lint suite for the repo itself — all "testing" happens 
     Caller owns the `workflow_dispatch` trigger and the `mode` choice input. Uses the auto `GITHUB_TOKEN` for branch push and PR creation.
   - `stryker.yml` — runs Stryker mutation testing for .NET (`dotnet stryker`, off by default — MTP/dotnet-stryker 4.14.0 hangs) and/or Node (`npm run stryker`, on by default), each gated by an input flag and uploading its report as a workflow artifact. Caller owns the trigger; concurrency lives caller-side.
   - `poutine.yml`, `zizmor.yml` — Actions-targeted SAST that uploads SARIF to Code Scanning.
+  - `lint-workflows.yml` — **self-running on this repo** (not reusable). Runs `actionlint` (Actions schema/expressions/contexts + shellcheck on `run:` blocks) and `yamllint` (rules in `.yamllint.yml`) over `.github/`; on PRs it keeps a sticky comment (via `im-open/update-pr-comment`, same as `pr-build.yml`) in sync and writes a job summary when issues are found, and fails the check on any issue. shellcheck gates at `--severity=warning` (info/style like SC2086 don't fail); actionlint `-ignore`s the `needs.<job>.result` false-positive on reusable-workflow jobs. Run locally with `yamllint -c .yamllint.yml .github` and `actionlint`.
 
 ## Where shared scripts can live (and where they can't)
 
