@@ -51,11 +51,17 @@ function validate() {
   const declaredMajor = readMajorVersion();
   const yamlFiles = findYamlFiles();
 
+  // Release mode: run against a freshly cut release tree (after the freeze step) to
+  // prove every internal ref is immutable — a full vX.Y.Z tag or a commit SHA, never
+  // a floating @v{major} / @v{major}.{minor}. See docs/adr/0001-internal-ref-pinning.md.
+  const RELEASE_MODE =
+    process.argv.includes("--release") || process.env.VALIDATE_MODE === "release";
+
   /** @type {Array<{file:string,line:number,message:string}>} */
   const problems = [];
 
   console.log(
-    `🔍 Validating version references for ${REPO_SLUG} (expected major v${declaredMajor}).`
+    `🔍 Validating version references for ${REPO_SLUG} (expected major v${declaredMajor}, mode: ${RELEASE_MODE ? "release" : "default"}).`
   );
   if (yamlFiles.length === 0) {
     console.log("No workflow or action YAML files found under .github/ to scan.");
@@ -99,29 +105,59 @@ function validate() {
         }
       }
 
-      // 2) Enforce a single major for versioned refs to this repo
+      // 2) Enforce immutability/major rules for versioned refs to this repo
       const match = selfRepoPattern.exec(line);
       if (match) {
-        const ref = match[1]; // e.g. v1, v1.2.3, some-branch
+        const ref = match[1]; // e.g. v1, v1.2.3, <40-hex-sha>, some-branch
 
-        // Only enforce when the ref looks like a v-prefixed semver-ish value
         const semverLike = /^v(\d+)(\.\d+){0,2}(-[0-9A-Za-z.-]+)?$/.exec(ref);
-        if (semverLike) {
-          const majorStr = semverLike[1];
-          const major = Number(majorStr);
-          if (!Number.isNaN(major) && major !== declaredMajor) {
+        const fullSemver = /^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(ref);
+        const isSha = /^[0-9a-f]{40}$/i.test(ref);
+
+        if (RELEASE_MODE) {
+          // Every internal ref must be immutable: a full vX.Y.Z tag or a commit SHA.
+          if (isSha) {
+            // ok
+          } else if (fullSemver) {
+            const major = Number(semverLike[1]);
+            if (major !== declaredMajor) {
+              problems.push({
+                file,
+                line: lineNumber,
+                message: `uses: ...@${ref} does not match declared major v${declaredMajor} in .version-major.`,
+              });
+            }
+          } else if (semverLike) {
             problems.push({
               file,
               line: lineNumber,
-              message: `uses: ...@${ref} does not match declared major v${declaredMajor} in .version-major.`,
+              message: `release mode: floating ref @${ref} is not immutable — the freeze step must rewrite it to a full vX.Y.Z tag (or pin a commit SHA).`,
+            });
+          } else {
+            problems.push({
+              file,
+              line: lineNumber,
+              message: `release mode: @${ref} is not an immutable vX.Y.Z tag or commit SHA.`,
             });
           }
         } else {
-          problems.push({
-            file,
-            line: lineNumber,
-            message: `uses: ...@${ref} for ${REPO_SLUG} is not a v-prefixed version tag (expected something like v${declaredMajor}).`,
-          });
+          // Default (main/PR) mode: enforce a single major for v-prefixed refs.
+          if (semverLike) {
+            const major = Number(semverLike[1]);
+            if (!Number.isNaN(major) && major !== declaredMajor) {
+              problems.push({
+                file,
+                line: lineNumber,
+                message: `uses: ...@${ref} does not match declared major v${declaredMajor} in .version-major.`,
+              });
+            }
+          } else {
+            problems.push({
+              file,
+              line: lineNumber,
+              message: `uses: ...@${ref} for ${REPO_SLUG} is not a v-prefixed version tag (expected something like v${declaredMajor}).`,
+            });
+          }
         }
       }
     });

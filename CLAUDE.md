@@ -10,7 +10,7 @@ A library of **reusable GitHub Actions workflows and composite actions** consume
 
 The whole repo ships under one semver line. The current major lives in `.version-major` (currently `2`). Internal `uses:` references inside this repo must all point at that same major (`@v2`), and floating refs (`@main`, `@HEAD`) are forbidden. This is enforced by `scripts/validate-version-refs.mjs`, run by `.github/workflows/validate-version.yml` on every PR.
 
-> Known limitation: because internal refs float at `@v{major}`, a consumer who pins a *workflow* to a SHA still floats every action it pulls in (the `@v2` strings resolve at run time). A planned fix — freezing internal refs to the immutable patch tag at release time, leaving `main` on `@v{major}` — is written up in [docs/adr/0001-internal-ref-pinning.md](docs/adr/0001-internal-ref-pinning.md) (proposed, not yet implemented; consumer-non-breaking, ships as a minor).
+> Internal-ref freezing: on `main`, internal refs float at `@v{major}` (`@v2`) for atomic edits. At release, `tag-and-release.yml` rewrites them to the immutable `@vX.Y.Z` being cut, commits on a detached HEAD, and tags that commit (so the tag fully pins all transitive code; `main` stays on `@v{major}`). This means a consumer who pins `@vX.Y.Z` (or a SHA) gets reproducible, tamper-evident runs; `@v{major}` consumers still float across releases. The freeze is `scripts/freeze-internal-refs.mjs`; `scripts/validate-version-refs.mjs --release` proves no floating self-ref survived (run as a pre-tag gate). Rationale, the rejected alternatives, and the **required** tag-immutability setup are in [docs/adr/0001-internal-ref-pinning.md](docs/adr/0001-internal-ref-pinning.md). Tag immutability (immutable releases or a ruleset protecting `v*.*.*`) is load-bearing — without it, `@vX.Y.Z` internal refs are only as good as convention.
 
 - **Non-breaking change**: edit, merge, optionally run the `Create tag and release` workflow. The `v2` floating tag gets moved to the new commit.
 - **Breaking change**: bump `.version-major` (e.g. `2` → `3`), sweep internal `uses: …@vN` → `…@vN+1` everywhere in `.github/` (the regex `(hwinther/reusable-workflows/\.github/[^@\s]+)@vN` covers all `uses:` lines), update the `@vN` references in CLAUDE.md and the cosign-verify examples printed in the container/image-push job summaries, then release the new `vN+1.0.0` and create the floating tag.
@@ -24,6 +24,13 @@ The whole repo ships under one semver line. The current major lives in `.version
 ```bash
 # Validate that every internal `uses: hwinther/reusable-workflows/...@vN` matches .version-major
 node ./scripts/validate-version-refs.mjs
+
+# Dry-run the release-time internal-ref freeze against a throwaway copy (don't mutate the
+# working tree), then prove no floating self-ref survives. tag-and-release.yml does this
+# automatically at release; this is for local testing only.
+tmp=$(mktemp -d); cp -r .github .version-major "$tmp/"
+node ./scripts/freeze-internal-refs.mjs --root "$tmp" --tag v2.0.0
+(cd "$tmp" && node "$OLDPWD/scripts/validate-version-refs.mjs" --release); rm -rf "$tmp"
 ```
 
 There is no build/test/lint suite for the repo itself — all "testing" happens by the workflows being exercised in consumer repos. Prettier config (`.prettierrc`) is set up for JSON only.

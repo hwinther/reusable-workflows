@@ -1,6 +1,9 @@
 # ADR 0001 — Freeze internal `uses:` refs to immutable tags at release time
 
-- **Status:** Proposed (design only — not yet implemented)
+- **Status:** Accepted — mechanism implemented 2026-06-24 on `v2-coordinated-release`.
+  Pending operational steps before relying on it: (1) enable tag immutability
+  (immutable releases or a ruleset), (2) cut `v2.0.0` so a frozen tag exists, then
+  (3) point consumers at the non-floating `v2.0.0`.
 - **Date:** 2026-06-24
 - **Supersedes / relates to:** the single-semver model in `CLAUDE.md`, enforced by
   `scripts/validate-version-refs.mjs`
@@ -99,47 +102,35 @@ this ADR without one of them.
 
 ## Implementation plan
 
-### 1. `tag-and-release.yml` — add a freeze step
+### 1. `tag-and-release.yml` — freeze step ✅ done
 
-After version computation and before creating the tag/Release, on a **detached
-release commit** (child of the released `main` commit; **not** pushed to `main`):
+A `Freeze internal refs to <tag>` step runs after the "new commits" guard and before
+`Create tag(s)`, gated on `github.repository == 'hwinther/reusable-workflows'` (only
+this repo has self-refs, and the helper scripts only exist in its own checkout — a
+consumer calling this via `workflow_call` gets the *consumer's* checkout). It:
 
-```bash
-# VERSION is the immutable patch tag being cut, e.g. v2.3.5 (no leading refs/tags/)
-# MAJOR is .version-major, e.g. 2
-sed_pat='s#(hwinther/reusable-workflows/\.github/[^@[:space:]]+)@v'"$MAJOR"'\b#\1@'"$VERSION"'#g'
-# apply to every workflow/action file
-grep -rlE "hwinther/reusable-workflows/\.github/[^@[:space:]]+@v$MAJOR\b" .github \
-  | while read -r f; do sed -E -i "$sed_pat" "$f"; done
+1. skips unless `FULL_TAG` matches `vX.Y.Z`;
+2. runs `node scripts/freeze-internal-refs.mjs --tag "$FULL_TAG"`;
+3. runs `node scripts/validate-version-refs.mjs --release` as a pre-tag gate (aborts
+   the release if any floating ref survived);
+4. if anything changed, `git checkout --detach` then commits the frozen refs. The
+   existing `Create tag(s)` step then tags `HEAD` (= the freeze commit) and force-moves
+   the floating `vX`/`vX.Y` tags onto it. `main` is never pushed, so it stays on
+   `@v{major}`; the freeze commit reaches the remote only via the pushed tag.
 
-git add .github
-git commit -m "release: freeze internal refs to $VERSION"
-# then tag THIS commit, and move floating tags here too
-git tag -a "$VERSION" -m "$VERSION"
-git tag -f "v$MAJOR"            # floating major → frozen commit
-git tag -f "v${MAJOR}.${MINOR}" # floating minor → frozen commit
-```
+`scripts/freeze-internal-refs.mjs` rewrites `uses: <slug>/.github/…@v{major}` (and
+`@v{major}.{minor}`) → `@<tag>`; three-part refs, SHAs, third-party pins, and `# vX.Y.Z`
+comments are left untouched.
 
-Notes:
-- The freeze commit is the tag target, so `@v2` / `@v2.3` consumers also fetch a
-  commit with pinned internals.
-- Only `…/reusable-workflows/.github/…@v{major}` refs are rewritten; third-party SHA
-  pins and the `# vX.Y.Z` comments are untouched (the regex is anchored to this repo).
-- `main` is left on `@v{major}` — the freeze commit is release-only and not merged
-  back, so the next development cycle starts clean.
-- A tag created by `GITHUB_TOKEN` won't fire `on: push: tags` elsewhere; irrelevant
-  here (this repo's release doesn't depend on that).
+### 2. `scripts/validate-version-refs.mjs` — release mode ✅ done
 
-### 2. `scripts/validate-version-refs.mjs` — split rule by context
+- **Default mode (`main` / PRs):** unchanged — v-prefixed self-refs must match
+  `.version-major`; `@main`/`@HEAD`/`@master` rejected.
+- **`--release` (or `VALIDATE_MODE=release`):** every self-ref must be immutable — a
+  full `vX.Y.Z` tag (major must match) or a 40-hex SHA; a floating `@v{major}` /
+  `@v{major}.{minor}` is an error. Mechanical proof the freeze worked.
 
-- **On `main` / PRs (default mode):** internal refs must be `@v{major}` matching
-  `.version-major`; reject `@main`/`@HEAD` and mismatched majors (unchanged).
-- **Add a release-verification mode** (`--mode=release`, run against a freshly cut
-  tag, e.g. in a post-tag job or a `workflow_dispatch` check): assert **no**
-  `@v{major}` internal refs remain — every internal ref must be an immutable
-  `@vX.Y.Z` or a 40-hex SHA. This is the mechanical proof the freeze worked.
-
-### 3. Repo settings (one-time)
+### 3. Repo settings (one-time) — ⏳ remaining
 
 - Turn on **immutable releases**, or add the tag-protection ruleset described above
   (protect `v*.*.*`, leave `v*` and `v*.*` movable).
