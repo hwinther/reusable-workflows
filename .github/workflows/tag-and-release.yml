@@ -57,6 +57,15 @@ on:
       tag_name:
         description: "Name of the created tag"
         value: ${{ jobs.tag.outputs.tag_name }}
+    secrets:
+      WORKFLOW_TOKEN:
+        description: >-
+          Token with the `workflow` scope (classic PAT with repo+workflow, a
+          fine-grained PAT with Contents+Workflows write, or a GitHub App token),
+          used to push the release freeze commit which edits .github/workflows/*.
+          Required only for repos whose tag-and-release freezes internal refs (this
+          repo); falls back to GITHUB_TOKEN, which CANNOT push workflow-file changes.
+        required: false
 
 jobs:
   tag:
@@ -74,6 +83,10 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
+          # Persist creds so the freeze commit + tags can be pushed. The freeze edits
+          # .github/workflows/*, which GITHUB_TOKEN may not push — use WORKFLOW_TOKEN
+          # (workflow scope) when set; consumers (no freeze) fall back to GITHUB_TOKEN.
+          token: ${{ secrets.WORKFLOW_TOKEN || github.token }}
 
       - name: Determine package version and container image tag
         id: gitversion
