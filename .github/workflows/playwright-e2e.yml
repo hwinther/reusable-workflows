@@ -383,7 +383,7 @@ jobs:
 
       - name: Post or update PR comment
         if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_comment_enabled }}
-        uses: im-open/update-pr-comment@b782531000dfcf02162c0bd9e78639d82a13c3b5 # v1.2.2
+        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           comment-identifier: ${{ inputs.comment_identifier }}
