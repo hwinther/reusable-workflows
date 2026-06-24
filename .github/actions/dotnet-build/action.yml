@@ -74,7 +74,7 @@ runs:
 
   - name: Add extra NuGet source
     if: inputs.extra_nuget_source != ''
-    uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v2
+    uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v2.0.0
     with:
       extra_nuget_source: ${{ inputs.extra_nuget_source }}
       extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
@@ -107,7 +107,7 @@ runs:
 
   - name: Format restore output
     id: format-restore
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.0.0
     with:
       format: nuget
       errors_file: ${{ env.TEMP_DIR }}/restore.err
@@ -135,7 +135,7 @@ runs:
   - name: Format build output
     id: format-build
     if: steps.format-restore.outputs.failed != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.0.0
     with:
       format: csc
       errors_file: ${{ env.TEMP_DIR }}/build.err
@@ -234,7 +234,7 @@ runs:
   - name: Format test warnings
     id: format-test-warn
     if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.0.0
     with:
       format: csc
       warnings_file: ${{ env.TEMP_DIR }}/test.warn

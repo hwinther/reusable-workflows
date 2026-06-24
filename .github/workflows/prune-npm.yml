@@ -53,7 +53,7 @@ jobs:
       packages: write
     steps:
       - name: Prune
-        uses: hwinther/reusable-workflows/.github/actions/_prune-package-versions@v2
+        uses: hwinther/reusable-workflows/.github/actions/_prune-package-versions@v2.0.0
         with:
           package_type: npm
           dry_run: ${{ inputs.dry_run }}

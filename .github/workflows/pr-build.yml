@@ -339,7 +339,7 @@ jobs:
 
       - name: Build node
         id: node-build
-        uses: hwinther/reusable-workflows/.github/actions/node-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/node-build@v2.0.0
         with:
           node_version: ${{ inputs.node_version }}
           working_directory: ${{ inputs.node_working_directory }}
@@ -377,7 +377,7 @@ jobs:
 
       - name: Build dotnet
         id: dotnet-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2.0.0
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}
@@ -417,7 +417,7 @@ jobs:
 
       - name: Build python
         id: python-build
-        uses: hwinther/reusable-workflows/.github/actions/python-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/python-build@v2.0.0
         with:
           python_version: ${{ inputs.python_version }}
           working_directory: ${{ inputs.python_working_directory }}
@@ -547,7 +547,7 @@ jobs:
 
       - name: Restore and build
         id: dotnet-restore-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2.0.0
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}

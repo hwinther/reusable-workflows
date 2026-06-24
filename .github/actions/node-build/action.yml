@@ -127,7 +127,7 @@ runs:
   - name: Format typecheck output
     id: format-typecheck
     if: steps.dependency-install.outcome == 'success' && steps.node-typecheck.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.0.0
     with:
       format: ts
       errors_file: ${{ env.TEMP_DIR }}/typecheck.err
@@ -174,7 +174,7 @@ runs:
   - name: Format build output
     id: format-build
     if: steps.dependency-install.outcome == 'success' && steps.node-build.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.0.0
     with:
       format: ts
       errors_file: ${{ env.TEMP_DIR }}/build.err
@@ -239,7 +239,7 @@ runs:
   - name: Format lint output
     id: format-lint
     if: steps.dependency-install.outcome == 'success' && steps.node-lint.outputs.skipped != 'true' && steps.node-lint.outputs.lint_runtime_error != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.0.0
     with:
       format: eslint-json
       errors_file: ${{ env.TEMP_DIR }}/eslint.json
