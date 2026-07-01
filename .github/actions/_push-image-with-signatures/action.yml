@@ -54,7 +54,7 @@ inputs:
     default: "true"
   attest_build_provenance_enabled:
     required: false
-    description: "Generate a GitHub artifact attestation via actions/attest-build-provenance and persist it via the repo Attestations API. Set to false on private repositories without GitHub Advanced Security / paid plan (the API responds `Feature not available for the <org> organization` otherwise). When false, only Cosign-based signatures and attestations are produced — `gh attestation verify` will not find anything, but `cosign verify` and Kyverno verifyImages still work."
+    description: "Generate a GitHub artifact attestation (SLSA build provenance) via actions/attest and persist it via the repo Attestations API. Set to false on private repositories without GitHub Advanced Security / paid plan (the API responds `Feature not available for the <org> organization` otherwise). When false, only Cosign-based signatures and attestations are produced — `gh attestation verify` will not find anything, but `cosign verify` and Kyverno verifyImages still work."
     default: "true"
   sbom_cyclonedx_path:
     required: false
@@ -162,7 +162,7 @@ runs:
 
     - name: Generate artifact attestation
       if: ${{ inputs.attest_build_provenance_enabled == 'true' }}
-      uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+      uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
       with:
         subject-name: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}
         subject-digest: ${{ steps.resolve-digest.outputs.digest }}

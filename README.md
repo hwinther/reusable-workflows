@@ -46,7 +46,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`.
 - **`python-build`** — ruff + mypy + pytest + `python -m build`. Same fail-late + `pr-comment` pattern.
 - **`gitversion`** — runs GitVersion and emits `version`, `is_alpha`, container `deploy_tag` / `container_image_tags` / `image_tags`. Branches on whether `github.ref_name` is `main`, a `v*` tag, or anything else (alpha).
 - **`package-version`** — computes a version from the latest reachable `v[X.Y.Z]` tag + commit count, in either `semver` or `pep440` format. Used by `package-deploy.yml` to share one version across ecosystems.
-- **`sign-image`** — runs cosign sign + cosign attest CycloneDX/vuln + `attest-build-provenance` against an already-pushed digest. Designed to be called from the **consumer's own job** so the OIDC-keyless cert identity (`job_workflow_ref`) is the consumer's workflow, not this reusable repo. Verifies cross-job predicate-hash integrity and SBOM-image binding (`syft:image:manifestDigest` on the CycloneDX must equal the digest being attested) before publishing.
+- **`sign-image`** — runs cosign sign + cosign attest CycloneDX/vuln + `actions/attest` (SLSA build provenance) against an already-pushed digest. Designed to be called from the **consumer's own job** so the OIDC-keyless cert identity (`job_workflow_ref`) is the consumer's workflow, not this reusable repo. Verifies cross-job predicate-hash integrity and SBOM-image binding (`syft:image:manifestDigest` on the CycloneDX must equal the digest being attested) before publishing.
 - **`verify-image`** — read-only end-to-end smoke test. Pulls signature + attestation metadata back from the registry and runs `cosign verify`, `cosign verify-attestation --type cyclonedx`, `cosign verify-attestation --type vuln`, `gh attestation verify`, plus a tag → digest resolution check. Useful as a final job in the publishing pipeline so signing/attestation breakage shows up in CI instead of at the consumer's admission controller.
 
 Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_dotnet-add-nuget-source`.
@@ -95,7 +95,7 @@ consumer caller workflow  (on: pull_request)
               ├─ verify local digest == build-time digest
               └─ _push-image-with-signatures
                     ├─ docker push (per tag)
-                    ├─ attest-build-provenance     ── SLSA v1.0 provenance
+                    ├─ actions/attest              ── SLSA v1.0 provenance
                     ├─ cosign sign (keyless OIDC)
                     └─ cosign attest CycloneDX + Grype vuln  (Kyverno-friendly)
 ```
@@ -114,7 +114,7 @@ consumer caller workflow  (on: push to main / v*)
               ├─ _scan-image    (per-arch SARIF when scan_all_platforms=true)
               └─ _push-image-with-signatures
                     ├─ docker push  /  buildx manifest-list push
-                    ├─ attest-build-provenance
+                    ├─ actions/attest
                     ├─ cosign sign
                     └─ cosign attest CycloneDX + vuln
 ```
@@ -163,7 +163,7 @@ consumer caller workflow  (on: push to main, etc.)
         │     internally sign-image will:
         │       1. re-hash the predicate files, abort if ≠ build's hashes
         │       2. parse CycloneDX, abort if syft:image:manifestDigest ≠ image_digest
-        │       3. attest-build-provenance @ image_digest
+        │       3. actions/attest @ image_digest
         │       4. cosign sign  tag@image_digest                ← Fulcio SAN =
         │       5. cosign attest --type cyclonedx + --type vuln    consumer's
         │                                                          workflow ref

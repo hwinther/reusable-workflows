@@ -8,7 +8,7 @@ description: |
     - Cosign CycloneDX SBOM and Grype vuln attestations (when enabled)
 
   Because this action runs inline in the caller's job, the OIDC token minted
-  for cosign and attest-build-provenance carries the CALLER's
+  for cosign and actions/attest carries the CALLER's
   `job_workflow_ref` — i.e. the consumer repo's own workflow, not this
   reusable-workflows repo. Use this when you want each consumer's signatures
   to be bound to their own workflow identity (so Kyverno / cosign verify
@@ -294,7 +294,7 @@ runs:
 
     - name: Generate artifact attestation
       if: ${{ inputs.attest_build_provenance_enabled == 'true' }}
-      uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+      uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
       with:
         subject-name: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}
         subject-digest: ${{ steps.digest.outputs.value }}

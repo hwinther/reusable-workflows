@@ -46,7 +46,7 @@ on:
         type: boolean
         default: true
       attest_build_provenance_enabled:
-        description: "Generate a GitHub artifact attestation (actions/attest-build-provenance). Set to false on private repositories without GitHub Advanced Security / paid plan; Cosign-based signatures and attestations still run."
+        description: "Generate a GitHub artifact attestation (SLSA build provenance via actions/attest). Set to false on private repositories without GitHub Advanced Security / paid plan; Cosign-based signatures and attestations still run."
         required: false
         type: boolean
         default: true
