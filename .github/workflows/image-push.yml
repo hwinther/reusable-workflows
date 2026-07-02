@@ -116,7 +116,7 @@ jobs:
 
       - name: Download and load image artifact
         id: load
-        uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v2
+        uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v2.0.1
         with:
           artifact_name: ${{ inputs.artifact_name }}
 
@@ -195,7 +195,7 @@ jobs:
 
       - name: Push image and attach signatures + attestations
         id: push
-        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2.0.1
         with:
           image_ref: ${{ steps.load.outputs.local_ref }}
           container_tags: ${{ inputs.container_image_tags }}

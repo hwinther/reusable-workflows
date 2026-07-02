@@ -133,7 +133,7 @@ jobs:
 
       - name: Add extra NuGet source
         if: inputs.extra_nuget_source != ''
-        uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v2
+        uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v2.0.1
         with:
           extra_nuget_source: ${{ inputs.extra_nuget_source }}
           extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}

@@ -153,7 +153,7 @@ jobs:
     needs: prepare-repository-name
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2.0.1
     with:
       container_registry: ${{ inputs.container_registry }}
       container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
@@ -188,7 +188,7 @@ jobs:
 
       - name: Build dotnet container (publish to archive, load locally)
         id: build
-        uses: hwinther/reusable-workflows/.github/actions/_build-image-dotnet@v2
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-dotnet@v2.0.1
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           solution_path: ${{ inputs.solution_path }}
@@ -209,7 +209,7 @@ jobs:
 
       - name: Generate SBOM and scan with Grype
         id: scan
-        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2.0.1
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
@@ -230,14 +230,14 @@ jobs:
 
       - name: Compose final container tags
         id: tags
-        uses: hwinther/reusable-workflows/.github/actions/_compose-image-tags@v2
+        uses: hwinther/reusable-workflows/.github/actions/_compose-image-tags@v2.0.1
         with:
           gitversion_tags: ${{ needs.gitversion.outputs.container_image_tags }}
           tag_suffix: ${{ inputs.tag_suffix }}
 
       - name: Push image and attach signatures + attestations
         id: push
-        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2.0.1
         with:
           image_ref: ${{ steps.build.outputs.local_ref }}
           container_tags: ${{ steps.tags.outputs.container_tags }}

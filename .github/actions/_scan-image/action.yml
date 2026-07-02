@@ -154,7 +154,7 @@ runs:
 
     - name: Render Grype findings (job summary + PR comment)
       if: ${{ always() && inputs.grype_scan_enabled == 'true' && steps.grype-scan.outcome != 'skipped' }}
-      uses: hwinther/reusable-workflows/.github/actions/_grype-summary@v2
+      uses: hwinther/reusable-workflows/.github/actions/_grype-summary@v2.0.1
       with:
         sarif_file: ${{ steps.paths.outputs.sarif_path }}
         category: ${{ steps.paths.outputs.sarif_category }}

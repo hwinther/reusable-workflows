@@ -150,7 +150,7 @@ jobs:
     needs: prepare-repository-name
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2.0.1
     with:
       container_registry: ${{ inputs.container_registry }}
       container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
@@ -191,7 +191,7 @@ jobs:
 
       - name: Compose final container tags
         id: tags
-        uses: hwinther/reusable-workflows/.github/actions/_compose-image-tags@v2
+        uses: hwinther/reusable-workflows/.github/actions/_compose-image-tags@v2.0.1
         with:
           gitversion_tags: ${{ needs.gitversion.outputs.container_image_tags }}
           additional_tags: ${{ inputs.additional_tags }}
@@ -203,7 +203,7 @@ jobs:
 
       - name: Build container for native scan (linux/amd64, load locally)
         id: build-amd64
-        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v2
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v2.0.1
         with:
           build_context: ${{ inputs.build_context }}
           dockerfile: ${{ inputs.dockerfile }}
@@ -217,7 +217,7 @@ jobs:
 
       - name: Generate SBOM and scan with Grype (amd64)
         id: scan-amd64
-        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2.0.1
         with:
           image_ref: ${{ steps.build-amd64.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
@@ -240,7 +240,7 @@ jobs:
       - name: Build container for arm64 scan (load locally under QEMU)
         id: build-arm64
         if: ${{ inputs.scan_all_platforms && contains(inputs.platforms, 'linux/arm64') }}
-        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v2
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v2.0.1
         with:
           build_context: ${{ inputs.build_context }}
           dockerfile: ${{ inputs.dockerfile }}
@@ -255,7 +255,7 @@ jobs:
       - name: Generate SBOM and scan with Grype (arm64)
         id: scan-arm64
         if: ${{ inputs.scan_all_platforms && contains(inputs.platforms, 'linux/arm64') }}
-        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2.0.1
         with:
           image_ref: ${{ steps.build-arm64.outputs.local_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
@@ -272,7 +272,7 @@ jobs:
 
       - name: Push image and attach signatures + attestations
         id: push
-        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2.0.1
         with:
           image_ref: ${{ steps.build-amd64.outputs.local_ref }}
           container_tags: ${{ steps.tags.outputs.container_tags }}
