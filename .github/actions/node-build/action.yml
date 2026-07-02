@@ -94,7 +94,10 @@ runs:
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
-      NODE_DISABLE_COLORS: 1
+      # FORCE_COLOR=0 rather than NODE_DISABLE_COLORS: tools like the Expo CLI force FORCE_COLOR onto
+      # child processes, and Node prints an "env ignored" warning whenever both are set. An explicit
+      # FORCE_COLOR=0 takes precedence everywhere, keeping the output ANSI-free for the grep parsers.
+      FORCE_COLOR: "0"
     run: |
       echo "::group::Typecheck"
       if ! node -e "const s=require('./package.json').scripts; process.exit(s && s.typecheck ? 0 : 1)"; then
@@ -144,7 +147,10 @@ runs:
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
-      NODE_DISABLE_COLORS: 1
+      # FORCE_COLOR=0 rather than NODE_DISABLE_COLORS: tools like the Expo CLI force FORCE_COLOR onto
+      # child processes, and Node prints an "env ignored" warning whenever both are set. An explicit
+      # FORCE_COLOR=0 takes precedence everywhere, keeping the output ANSI-free for the grep parsers.
+      FORCE_COLOR: "0"
     run: |
       echo "::group::Build"
       if ! node -e "const s=require('./package.json').scripts; process.exit(s && s.build ? 0 : 1)"; then
