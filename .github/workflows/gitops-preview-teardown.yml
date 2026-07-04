@@ -93,6 +93,7 @@ jobs:
           fi
 
       - name: Commit and push
+        id: push
         working-directory: target
         env:
           PR: ${{ inputs.pr_number }}
@@ -106,8 +107,10 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "Nothing to remove — preview was never deployed or already cleaned up."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
           git commit -m "preview(${APP_NAME:-preview}): teardown pr-$PR"
 
           n=0
@@ -120,3 +123,24 @@ jobs:
             echo "Push rejected; rebasing and retrying ($n/3)"
             git pull --rebase --autostash origin "$TARGET_REF"
           done
+
+      # Counterpart of the upsert reusable's run summary: makes the cleanup outcome visible straight
+      # from the Actions UI without opening the job log.
+      - name: Write run summary
+        env:
+          PR: ${{ inputs.pr_number }}
+          APP_NAME: ${{ inputs.app_name }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          BASE: ${{ inputs.preview_base_path }}
+          CHANGED: ${{ steps.push.outputs.changed }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### Preview teardown (${APP_NAME:-preview})"
+            echo ""
+            if [ "$CHANGED" = "true" ]; then
+              echo "Removed overlay \`$BASE/pr-$PR\` from \`$TARGET_REPO\` — Flux prunes the preview namespace within ~1 min."
+            else
+              echo "Nothing to remove for \`pr-$PR\` — the preview was never deployed or is already cleaned up."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

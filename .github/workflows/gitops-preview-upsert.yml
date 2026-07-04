@@ -209,6 +209,7 @@ jobs:
           echo "preview_url=https://$HOST" >> "$GITHUB_OUTPUT"
 
       - name: Commit and push
+        id: push
         working-directory: target
         env:
           PR: ${{ inputs.pr_number }}
@@ -223,8 +224,10 @@ jobs:
           git add -A
           if git diff --cached --quiet; then
             echo "No changes — overlay already in sync."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
           git commit -m "preview(${APP_NAME:-preview}): upsert pr-$PR ($HOST)"
 
           n=0
@@ -237,3 +240,53 @@ jobs:
             echo "Push rejected; rebasing and retrying ($n/3)"
             git pull --rebase --autostash origin "$TARGET_REF"
           done
+
+      # Mirror of the sticky PR comment most callers post: surface the preview URL + what was
+      # deployed on the run's Summary page, so the link is visible straight from the Actions UI
+      # (e.g. for re-runs, or apps that skip the PR comment).
+      - name: Write run summary
+        env:
+          HOST: ${{ inputs.host }}
+          PR: ${{ inputs.pr_number }}
+          APP_NAME: ${{ inputs.app_name }}
+          TARGET_REPO: ${{ inputs.target_repo }}
+          BASE: ${{ inputs.preview_base_path }}
+          CHANGED: ${{ steps.push.outputs.changed }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_DIGEST: ${{ inputs.image_digest }}
+          IMAGE_API_TAG: ${{ inputs.image_api_tag }}
+          IMAGE_API_DIGEST: ${{ inputs.image_api_digest }}
+          IMAGE_FRONTEND_TAG: ${{ inputs.image_frontend_tag }}
+          IMAGE_FRONTEND_DIGEST: ${{ inputs.image_frontend_digest }}
+          IMAGE_MIGRATOR_TAG: ${{ inputs.image_migrator_tag }}
+          IMAGE_MIGRATOR_DIGEST: ${{ inputs.image_migrator_digest }}
+        run: |
+          set -euo pipefail
+
+          # One row per image that was actually supplied (single-image apps use the generic pair,
+          # multi-image apps the per-component pairs) — skip empty ones.
+          img_row() {
+            local label="$1" tag="$2" digest="$3"
+            [ -n "$tag$digest" ] || return 0
+            echo "| $label | \`${tag:-<untagged>}${digest:+@$digest}\` |"
+          }
+
+          {
+            echo "### Preview environment"
+            echo ""
+            echo "**Preview URL:** <https://$HOST>"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| App | ${APP_NAME:-preview} |"
+            echo "| Overlay | \`$TARGET_REPO\`: \`$BASE/pr-$PR\` |"
+            img_row "Image" "$IMAGE_TAG" "$IMAGE_DIGEST"
+            img_row "API image" "$IMAGE_API_TAG" "$IMAGE_API_DIGEST"
+            img_row "Frontend image" "$IMAGE_FRONTEND_TAG" "$IMAGE_FRONTEND_DIGEST"
+            img_row "Migrator image" "$IMAGE_MIGRATOR_TAG" "$IMAGE_MIGRATOR_DIGEST"
+            if [ "$CHANGED" = "true" ]; then
+              echo "| GitOps commit | pushed — Flux reconciles within ~1 min |"
+            else
+              echo "| GitOps commit | none needed (overlay already in sync) |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
