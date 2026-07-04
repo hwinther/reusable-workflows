@@ -88,25 +88,48 @@ jobs:
           # (workflow scope) when set; consumers (no freeze) fall back to GITHUB_TOKEN.
           token: ${{ secrets.WORKFLOW_TOKEN || github.token }}
 
-      - name: Determine package version and container image tag
+      # Consumers rely on GitVersion to compute their next version from their OWN history
+      # (the GitVersion branch below). This repo does NOT: its release tags sit on detached
+      # freeze commits GitVersion can't see, so when .version-major is present we read git
+      # tags directly instead. Runs in auto mode only (both invocation contexts); its output
+      # is simply ignored on this repo.
+      - name: Determine package version (GitVersion — consumer auto mode)
         id: gitversion
-        if: github.event.inputs.tag_name == 'auto'
+        if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name == 'auto') || (github.event_name == 'workflow_call' && inputs.tag_name == 'auto')
         uses: hwinther/reusable-workflows/.github/actions/gitversion@v2
         with:
           persist_checkout_credentials: 'true'
 
       - name: Determine tag name
         id: determine_tag
+        env:
+          # Route the caller-controlled tag input through env (not template-expanded into the
+          # script) and resolve both workflow_dispatch and workflow_call, mirroring the
+          # CREATE_FLOATING_TAGS pattern above.
+          TAG_INPUT: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name || inputs.tag_name }}
+          GITVERSION: ${{ steps.gitversion.outputs.version }}
         run: |
-          TAG_INPUT="${{ github.event.inputs.tag_name }}"
-
           if [ "$TAG_INPUT" == "auto" ]; then
-            IFS='.' read -ra VERSION_PARTS <<< "${{ steps.gitversion.outputs.version }}"
-            MAJOR=${VERSION_PARTS[0]}
-            MINOR=${VERSION_PARTS[1]:-0}
-            PATCH=${VERSION_PARTS[2]:-0}
-
-            MINOR=$((MINOR + 1))
+            if [ -f .version-major ]; then
+              # This repo (coordinated-major freeze model): release tags live on detached
+              # freeze commits that are NOT ancestors of main, so GitVersion can't see them.
+              # Bump minor from the latest vMAJOR.*.* git tag (visible regardless of ancestry),
+              # MAJOR pinned by .version-major. See docs/adr/0001-internal-ref-pinning.md.
+              MAJOR="$(cat .version-major)"
+              LATEST=$(git tag -l "v${MAJOR}.*" --sort=-v:refname \
+                | grep -E "^v${MAJOR}\.[0-9]+\.[0-9]+$" | head -1 || true)
+              if [ -n "$LATEST" ]; then
+                IFS='.' read -ra P <<< "${LATEST#v}"
+                MINOR=$(( P[1] + 1 ))
+              else
+                MINOR=0   # no vMAJOR.*.* tag yet — first release of a new major
+              fi
+            else
+              # Consumers: GitVersion computed the next version from this repo's history.
+              IFS='.' read -ra P <<< "$GITVERSION"
+              MAJOR="${P[0]}"
+              MINOR=$(( ${P[1]:-0} + 1 ))
+            fi
             PATCH=0
 
             FULL_TAG="v${MAJOR}.${MINOR}.${PATCH}"
