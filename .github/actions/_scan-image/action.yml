@@ -135,7 +135,7 @@ runs:
       id: grype-scan
       if: ${{ inputs.grype_scan_enabled == 'true' }}
       continue-on-error: true
-      uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         sbom: ${{ steps.paths.outputs.sbom_spdx_path }}
         output-format: sarif
@@ -188,7 +188,7 @@ runs:
 
     - name: Grype JSON only (supply-chain attestation, no SARIF gate)
       if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.grype_scan_enabled != 'true' }}
-      uses: anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0
+      uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
       with:
         sbom: ${{ steps.paths.outputs.sbom_spdx_path }}
         output-format: json
