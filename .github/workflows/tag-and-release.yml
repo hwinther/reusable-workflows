@@ -91,7 +91,7 @@ jobs:
       - name: Determine package version (GitVersion — consumer auto mode)
         id: gitversion
         if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name == 'auto') || (github.event_name == 'workflow_call' && inputs.tag_name == 'auto')
-        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2
+        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2.1.0
 
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
