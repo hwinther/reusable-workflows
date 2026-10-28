@@ -173,7 +173,7 @@ runs:
     - name: Download Grype CLI (JSON report for cosign vuln attestation)
       id: grype-for-attest
       if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.grype_scan_enabled == 'true' }}
-      uses: anchore/scan-action/download-grype@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2 # v7.4.0 (same ref as scan-action)
+      uses: anchore/scan-action/download-grype@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.0 (same ref as scan-action)
 
     - name: Grype JSON for cosign vuln attestation
       if: ${{ inputs.cosign_supply_chain_attest_enabled == 'true' && inputs.grype_scan_enabled == 'true' }}
