@@ -10,9 +10,9 @@ inputs:
     default: ''
   override_config:
     description: |
-      GitVersion configuration overrides in YAML format.
-      Appended after a built-in default that sets the pull-request label to "{BranchName}",
-      so consumer overrides for the same key win.
+      GitVersion /overrideconfig entries, one `key=value` per line (e.g. `tag-prefix=v`).
+      gittools/actions silently drops lines that aren't key=value, so nested YAML such as
+      `branches:` blocks can't be passed here; put those in the repo's GitVersion.yml.
     default: ''
   persist_checkout_credentials:
     description: 'actions/checkout persist-credentials; set true only if a later step in the same job runs git push using this clone.'
@@ -53,48 +53,59 @@ runs:
       persist-credentials: ${{ inputs.persist_checkout_credentials == 'true' }}
 
   - name: Install GitVersion
-    uses: gittools/actions/gitversion/setup@bc6623af8fc07d5a8903052dd46da33403eec8e8 # v4.5.0
+    uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
     with:
-      versionSpec: '6.6.x'
-
-  # Pull-request builds get a label derived from the source branch by default, so that
-  # container and package tags look like e.g. "0.20.1-feature-login-fix.2" instead of
-  # the GitVersion default "0.20.1-PullRequest151.2". Consumers can override by passing
-  # their own `pull-request:` block via `override_config:` (last block wins).
-  - name: Build GitVersion override config
-    id: gitversion-override
-    shell: bash
-    env:
-      USER_OVERRIDE: ${{ inputs.override_config }}
-    run: |
-      DEFAULT_OVERRIDE='branches:
-        pull-request:
-          label: "{BranchName}"'
-      {
-        echo 'config<<GITVERSION_OVERRIDE_EOF'
-        printf '%s\n' "$DEFAULT_OVERRIDE"
-        if [ -n "$USER_OVERRIDE" ]; then
-          printf '%s\n' "$USER_OVERRIDE"
-        fi
-        echo 'GITVERSION_OVERRIDE_EOF'
-      } >> "$GITHUB_OUTPUT"
+      versionSpec: '6.8.x'
 
   - name: Determine next version
     id: determine_version_values
-    uses: gittools/actions/gitversion/execute@bc6623af8fc07d5a8903052dd46da33403eec8e8 # v4.5.0
+    uses: gittools/actions/gitversion/execute@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
     with:
-      overrideConfig: ${{ steps.gitversion-override.outputs.config }}
+      overrideConfig: ${{ inputs.override_config }}
+
+  # A pull_request build checks out refs/pull/<N>/merge, so GitVersion labels it
+  # "PullRequest<N>" (no branch rule can see the source branch there). Swap that label for the
+  # source branch, sanitised the way GitVersion does it for push builds, so PR tags read like
+  # "0.20.1-feat-login-fix.2" and match what a push build of the same branch produces.
+  - name: Use the source branch as the pull-request label
+    id: pr_label
+    shell: bash
+    env:
+      EVENT_NAME: ${{ github.event_name }}
+      HEAD_REF: ${{ github.head_ref }}
+      SEMVER: ${{ steps.determine_version_values.outputs.semVer }}
+      LABEL: ${{ steps.determine_version_values.outputs.preReleaseLabel }}
+    run: |
+      semver="$SEMVER"
+      if [[ "$EVENT_NAME" == pull_request* && -n "$HEAD_REF" && "$LABEL" == PullRequest* ]]; then
+        # SemVer identifiers allow [0-9A-Za-z-]; Docker tags cap at 128 characters overall.
+        branch="$(printf '%s' "$HEAD_REF" | sed -e 's/[^0-9A-Za-z-]/-/g' -e 's/--*/-/g' -e 's/^-//' | cut -c1-80 | sed -e 's/-*$//')"
+        # A purely numeric identifier with a leading zero is invalid SemVer.
+        if [[ "$branch" =~ ^[0-9]+$ ]]; then
+          branch="b$branch"
+        fi
+        if [ -n "$branch" ]; then
+          semver="${semver/"$LABEL"/"$branch"}"
+          echo "Pull-request label: $LABEL -> $branch"
+        fi
+      fi
+      echo "semver=$semver" >> "$GITHUB_OUTPUT"
 
   - name: Determine version and tag values
     id: determine_version_and_tag_values
     shell: bash
+    env:
+      # Via env, not inline: on pull requests this carries the (sanitised) head branch name.
+      SEMVER: ${{ steps.pr_label.outputs.semver }}
+      REGISTRY: ${{ inputs.container_registry }}
+      IMAGE_NAME: ${{ inputs.container_image_name }}
     run: |
       echo "GitVersion MajorMinorPatch: ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
-      echo "GitVersion SemVer: ${{ steps.determine_version_values.outputs.semVer }}"
+      echo "GitVersion SemVer: ${SEMVER}"
 
-      LATEST_CONTAINER_IMAGE_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:latest"
-      GITVERSION_MAJOR_MINOR_PATCH_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
-      GITVERSION_SEMVER_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.semVer }}"
+      LATEST_CONTAINER_IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:latest"
+      GITVERSION_MAJOR_MINOR_PATCH_TAG="${REGISTRY}/${IMAGE_NAME}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+      GITVERSION_SEMVER_TAG="${REGISTRY}/${IMAGE_NAME}:${SEMVER}"
 
       # `:latest` should only ever point at the most recent stable minor release. We attach
       # it if all three hold:
@@ -120,7 +131,7 @@ runs:
       fi
 
       if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == "main" ]]; then
-        if [ -n "${{ inputs.container_image_name }}" ]; then
+        if [ -n "${IMAGE_NAME}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
@@ -132,7 +143,7 @@ runs:
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to false"
       elif [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
-        if [ -n "${{ inputs.container_image_name }}" ]; then
+        if [ -n "${IMAGE_NAME}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           if [ "$INCLUDE_LATEST" = "true" ]; then
             echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
@@ -150,18 +161,18 @@ runs:
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to false"
       else
-        if [ -n "${{ inputs.container_image_name }}" ]; then
+        if [ -n "${IMAGE_NAME}" ]; then
           # Feature/bugfix branch — use SemVer (which includes the prerelease label derived
           # from the branch name, e.g. "1.2.1-mybranch.5") so the container tag matches the
           # package version and uniquely identifies which branch the build came from.
           echo "deploy_tag=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=${{ steps.determine_version_values.outputs.semVer }}" >> $GITHUB_OUTPUT
+          echo "image_tags=${SEMVER}" >> $GITHUB_OUTPUT
           echo "Using tag with prerelease label: $GITVERSION_SEMVER_TAG"
         fi
 
-        echo "version=${{ steps.determine_version_values.outputs.semVer }}" >> $GITHUB_OUTPUT
-        echo "Setting version to ${{ steps.determine_version_values.outputs.semVer }}"
+        echo "version=${SEMVER}" >> $GITHUB_OUTPUT
+        echo "Setting version to ${SEMVER}"
         echo "is_alpha=true" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to true"
       fi
