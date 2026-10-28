@@ -12,7 +12,7 @@ on:
         default: ''
         type: string
       override_config:
-        description: 'GitVersion configuration overrides in YAML format'
+        description: 'GitVersion /overrideconfig entries, one key=value per line (e.g. tag-prefix=v)'
         default: ''
         type: string
     outputs:
