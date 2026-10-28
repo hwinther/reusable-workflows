@@ -73,7 +73,7 @@ jobs:
       EFFECTIVE_SOURCE_URL: ${{ inputs.package_source_url != '' && inputs.package_source_url || format('https://nuget.pkg.github.com/{0}/index.json', github.repository_owner) }}
     steps:
       - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
