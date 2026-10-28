@@ -166,7 +166,7 @@ jobs:
           dotnet stryker --solution "$SOLUTION_FILE" --test-runner mtp --mutation-level "$MUTATION_LEVEL" -r html -r json -r cleartext $EXTRA_ARGS
 
       - name: Upload dotnet stryker report artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.dotnet_artifact_name }}
           path: stryker-report-dotnet
@@ -204,7 +204,7 @@ jobs:
         run: npm run stryker
 
       - name: Upload frontend Stryker report artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ inputs.node_artifact_name }}
           path: "${{ inputs.node_working_directory }}/reports/mutation"
