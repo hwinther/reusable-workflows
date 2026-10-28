@@ -79,6 +79,20 @@ jobs:
       tag_name: ${{ steps.determine_tag.outputs.tag_name }}
 
     steps:
+      # Consumers rely on GitVersion to compute their next version from their OWN history
+      # (the GitVersion branch below). This repo does NOT: its release tags sit on detached
+      # freeze commits GitVersion can't see, so when .version-major is present we read git
+      # tags directly instead. Runs in auto mode only (both invocation contexts); its output
+      # is simply ignored on this repo.
+      # Runs before "Checkout repository": the action does its own checkout with
+      # GITHUB_TOKEN, which would otherwise replace WORKFLOW_TOKEN's credentials and get
+      # the freeze push rejected ("refusing to allow a GitHub App ... without `workflows`").
+      # The checkout below then re-clones with the right token.
+      - name: Determine package version (GitVersion — consumer auto mode)
+        id: gitversion
+        if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name == 'auto') || (github.event_name == 'workflow_call' && inputs.tag_name == 'auto')
+        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2
+
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,18 +101,6 @@ jobs:
           # .github/workflows/*, which GITHUB_TOKEN may not push — use WORKFLOW_TOKEN
           # (workflow scope) when set; consumers (no freeze) fall back to GITHUB_TOKEN.
           token: ${{ secrets.WORKFLOW_TOKEN || github.token }}
-
-      # Consumers rely on GitVersion to compute their next version from their OWN history
-      # (the GitVersion branch below). This repo does NOT: its release tags sit on detached
-      # freeze commits GitVersion can't see, so when .version-major is present we read git
-      # tags directly instead. Runs in auto mode only (both invocation contexts); its output
-      # is simply ignored on this repo.
-      - name: Determine package version (GitVersion — consumer auto mode)
-        id: gitversion
-        if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name == 'auto') || (github.event_name == 'workflow_call' && inputs.tag_name == 'auto')
-        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2
-        with:
-          persist_checkout_credentials: 'true'
 
       - name: Determine tag name
         id: determine_tag
