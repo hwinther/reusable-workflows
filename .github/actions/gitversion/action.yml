@@ -94,13 +94,18 @@ runs:
   - name: Determine version and tag values
     id: determine_version_and_tag_values
     shell: bash
+    env:
+      # Via env, not inline: on pull requests this carries the (sanitised) head branch name.
+      SEMVER: ${{ steps.pr_label.outputs.semver }}
+      REGISTRY: ${{ inputs.container_registry }}
+      IMAGE_NAME: ${{ inputs.container_image_name }}
     run: |
       echo "GitVersion MajorMinorPatch: ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
-      echo "GitVersion SemVer: ${{ steps.pr_label.outputs.semver }}"
+      echo "GitVersion SemVer: ${SEMVER}"
 
-      LATEST_CONTAINER_IMAGE_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:latest"
-      GITVERSION_MAJOR_MINOR_PATCH_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
-      GITVERSION_SEMVER_TAG="${{ inputs.container_registry }}/${{ inputs.container_image_name }}:${{ steps.pr_label.outputs.semver }}"
+      LATEST_CONTAINER_IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:latest"
+      GITVERSION_MAJOR_MINOR_PATCH_TAG="${REGISTRY}/${IMAGE_NAME}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+      GITVERSION_SEMVER_TAG="${REGISTRY}/${IMAGE_NAME}:${SEMVER}"
 
       # `:latest` should only ever point at the most recent stable minor release. We attach
       # it if all three hold:
@@ -126,7 +131,7 @@ runs:
       fi
 
       if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == "main" ]]; then
-        if [ -n "${{ inputs.container_image_name }}" ]; then
+        if [ -n "${IMAGE_NAME}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
@@ -138,7 +143,7 @@ runs:
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to false"
       elif [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
-        if [ -n "${{ inputs.container_image_name }}" ]; then
+        if [ -n "${IMAGE_NAME}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           if [ "$INCLUDE_LATEST" = "true" ]; then
             echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
@@ -156,18 +161,18 @@ runs:
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to false"
       else
-        if [ -n "${{ inputs.container_image_name }}" ]; then
+        if [ -n "${IMAGE_NAME}" ]; then
           # Feature/bugfix branch — use SemVer (which includes the prerelease label derived
           # from the branch name, e.g. "1.2.1-mybranch.5") so the container tag matches the
           # package version and uniquely identifies which branch the build came from.
           echo "deploy_tag=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=${{ steps.pr_label.outputs.semver }}" >> $GITHUB_OUTPUT
+          echo "image_tags=${SEMVER}" >> $GITHUB_OUTPUT
           echo "Using tag with prerelease label: $GITVERSION_SEMVER_TAG"
         fi
 
-        echo "version=${{ steps.pr_label.outputs.semver }}" >> $GITHUB_OUTPUT
-        echo "Setting version to ${{ steps.pr_label.outputs.semver }}"
+        echo "version=${SEMVER}" >> $GITHUB_OUTPUT
+        echo "Setting version to ${SEMVER}"
         echo "is_alpha=true" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to true"
       fi
