@@ -21,10 +21,10 @@ on:
         type: string
         default: "."
       node_version:
-        description: "Node version, e.g. 24.x"
+        description: "Node version, e.g. 26.x"
         required: false
         type: string
-        default: "24.x"
+        default: "26.x"
       playwright_browsers:
         description: "Browsers to install for Playwright, e.g. 'chromium' or 'chromium firefox'."
         required: false

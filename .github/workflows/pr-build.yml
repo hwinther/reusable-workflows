@@ -19,8 +19,8 @@ on:
       node_version:
         required: false
         type: string
-        description: "Node version, e.g. 24.x"
-        default: "24.x"
+        description: "Node version, e.g. 26.x"
+        default: "26.x"
       node_working_directory:
         required: false
         type: string
