@@ -2,7 +2,7 @@
 """Builds the Markdown review report for a rendered manifest change.
 
     manifest-report.py [--run-url URL] [--marker KEY] [--map all|changed] [--note TEXT]
-                       NAME BASE.jsonl HEAD.jsonl [NAME BASE HEAD ...]
+                       [--helm true|false] NAME BASE.jsonl HEAD.jsonl [NAME BASE HEAD ...]
 
 One section per render, headed by NAME when there is more than one. Inputs are rendered
 manifests as one JSON document per line (`yq -o=json -I=0 '.'`). Each section has a change
@@ -14,7 +14,8 @@ visible too. dyff must be on PATH.
 
 --map all draws every resource (an app's deploy dir). --map changed draws only the changed
 resources and their direct neighbours, and folds renders without a change into one line, for
-whole-cluster renders with hundreds of objects. --note is a footer line.
+whole-cluster renders with hundreds of objects. --note is a footer line. --helm true templates
+each changed HelmRelease's chart at both sides (helm_render.py) and reports that too.
 """
 
 import json
@@ -23,6 +24,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+
+import helm_render
 
 MARKER = "<!-- manifest-diff -->"
 # PR comments are capped at 65536 characters; leave room for the closing note.
@@ -291,24 +294,16 @@ def classify(base, head):
     return status
 
 
-def section(name, base, head, tmp, scope="all"):
-    """Summary + map for one render, plus its per-resource details as a separate list so the
-    caller can stop adding details when the comment budget runs out. None for an unchanged
-    render under scope changed."""
-    status = classify(base, head)
+def summarize(status):
     counts = {
         s: sum(1 for v in status.values() if v == s)
         for s in ("changed", "added", "removed", "unchanged")
     }
     summary = ", ".join(f"{n} {s}" for s, n in counts.items() if n) or "empty"
-    changed = any(counts[s] for s in ("changed", "added", "removed"))
-    if scope == "changed" and not changed:
-        return None
-    lines = [f"#### `{name}`", ""] if name else []
-    lines.append(f"{summary}." if changed else f"No change ({summary}).")
-    drawing = mermaid(base, head, status, scope)
-    if drawing:
-        lines += ["", drawing]
+    return summary, any(counts[s] for s in ("changed", "added", "removed"))
+
+
+def resource_details(base, head, status, tmp, prefix=""):
     details = []
     order = ["changed", "added", "removed"]
     for k in sorted(
@@ -322,8 +317,63 @@ def section(name, base, head, tmp, scope="all"):
         else:
             body = "Pruned by Flux when this version is applied."
         details.append(
-            f"<details><summary><b>{status[k]}</b> {k}</summary>\n\n{body}\n\n</details>"
+            f"<details><summary><b>{status[k]}</b> {prefix}{k}</summary>\n\n{body}\n\n</details>"
         )
+    return details
+
+
+def chart_section(k, base, head, tmp):
+    """The templated chart of one changed HelmRelease, base vs head: lines and details."""
+    lines = ["", f"##### `{k}` chart", ""]
+    old, old_notes = (
+        helm_render.render(base[k], base, tmp, key) if k in base else ({}, [])
+    )
+    new, notes = helm_render.render(head[k], head, tmp, key)
+    if new is None:
+        lines.append("Not templated: " + "; ".join(notes) + ".")
+        return lines, []
+    if old is None:
+        notes.append(
+            "the base didn't template ("
+            + "; ".join(old_notes)
+            + "), so all of it shows as added"
+        )
+        old = {}
+    status = classify(old, new)
+    summary, changed = summarize(status)
+    lines.append(
+        f"{summary}." if changed else f"No change in the templated chart ({summary})."
+    )
+    if notes:
+        lines.append("")
+        lines.append("_" + "; ".join(n[0].upper() + n[1:] for n in notes) + "._")
+    drawing = mermaid(old, new, status, "changed") if changed else None
+    if drawing:
+        lines += ["", drawing]
+    return lines, resource_details(old, new, status, tmp, prefix=f"{k} → ")
+
+
+def section(name, base, head, tmp, scope="all", helm=False):
+    """Summary + map for one render, plus its per-resource details as a separate list so the
+    caller can stop adding details when the comment budget runs out. None for an unchanged
+    render under scope changed. With helm, each changed HelmRelease's chart is templated at
+    both sides and reported the same way, below the render's own map."""
+    status = classify(base, head)
+    summary, changed = summarize(status)
+    if scope == "changed" and not changed:
+        return None
+    lines = [f"#### `{name}`", ""] if name else []
+    lines.append(f"{summary}." if changed else f"No change ({summary}).")
+    drawing = mermaid(base, head, status, scope)
+    if drawing:
+        lines += ["", drawing]
+    details = resource_details(base, head, status, tmp)
+    if helm:
+        for k in sorted(k for k in status if status[k] in ("changed", "added")):
+            if head[k]["kind"] == "HelmRelease":
+                chart_lines, chart_details = chart_section(k, base, head, tmp)
+                lines += chart_lines
+                details += chart_details
     return "\n".join(lines) + "\n", details
 
 
@@ -332,7 +382,7 @@ DEFAULT_NOTE = "Placeholder image tags; the release job pins tag@digest."
 
 def main():
     args = sys.argv[1:]
-    run_url, marker, scope, note = "", MARKER, "all", DEFAULT_NOTE
+    run_url, marker, scope, note, helm = "", MARKER, "all", DEFAULT_NOTE, False
     while args and args[0].startswith("--"):
         if len(args) < 2:
             sys.exit(__doc__)
@@ -347,6 +397,8 @@ def main():
             scope = value
         elif flag == "--note":
             note = value
+        elif flag == "--helm":
+            helm = value == "true"
         else:
             sys.exit(f"unknown flag {flag}")
     if not args or len(args) % 3:
@@ -360,7 +412,12 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         for name, base_path, head_path in renders:
             result = section(
-                name if named else "", load(base_path), load(head_path), tmp, scope
+                name if named else "",
+                load(base_path),
+                load(head_path),
+                tmp,
+                scope,
+                helm,
             )
             if result is None:
                 quiet.append(name)
@@ -389,6 +446,7 @@ def main():
     )
     if footer:
         report += f"\n<sub>{footer}</sub>\n"
+    sys.stdout.reconfigure(encoding="utf-8")
     sys.stdout.write(report)
 
 

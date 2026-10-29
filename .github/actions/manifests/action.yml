@@ -84,13 +84,24 @@ inputs:
       diff: `all` maps every resource of a render; `changed` maps only the changed resources and
       their direct neighbours and folds unchanged renders into one line (whole-cluster renders).
     default: "all"
+  helm:
+    required: false
+    description: |
+      diff: also template each changed Flux HelmRelease's chart at the base and the head (helm
+      template, with its HelmRepository/OCIRepository, valuesFrom ConfigMaps, values and
+      postRenderers from the render) and report the chart's resource changes below it.
+    default: "false"
+  helm_kube_version:
+    required: false
+    description: "diff: --kube-version for helm template, e.g. the cluster's 1.35.8."
+    default: ""
   note:
     required: false
     description: "diff: footer line of the report."
     default: "Placeholder image tags; the release job pins tag@digest."
   comment:
     required: false
-    description: "diff: keep a sticky PR comment in sync (skipped for fork PRs, whose token is read-only)."
+    description: "diff: keep a sticky PR comment in sync (skipped for fork PRs, whose token is read-only; Dependabot PRs get the caller's pull-requests: write)."
     default: "true"
   comment_key:
     required: false
@@ -205,6 +216,8 @@ runs:
       COMMENT_KEY: ${{ inputs.comment_key }}
       MAP: ${{ inputs.map }}
       NOTE: ${{ inputs.note }}
+      HELM: ${{ inputs.helm }}
+      HELM_KUBE_VERSION: ${{ inputs.helm_kube_version }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     run: |
       export PATH="$RUNNER_TEMP/manifests-bin:$PATH"
@@ -218,11 +231,11 @@ runs:
         yq -o=json -I=0 '.' "$head/$out" > "$head/$out.jsonl"
         args+=("$out" "$base/$out.jsonl" "$head/$out.jsonl")
       done < "$RUNNER_TEMP/manifests-renders.txt"
-      python3 "$GITHUB_ACTION_PATH/scripts/manifest-report.py" --run-url "$RUN_URL" --marker "$COMMENT_KEY" --map "$MAP" --note "$NOTE" "${args[@]}" > "$RUNNER_TEMP/manifests-report.md"
+      python3 "$GITHUB_ACTION_PATH/scripts/manifest-report.py" --run-url "$RUN_URL" --marker "$COMMENT_KEY" --map "$MAP" --note "$NOTE" --helm "$HELM" "${args[@]}" > "$RUNNER_TEMP/manifests-report.md"
       cat "$RUNNER_TEMP/manifests-report.md" >> "$GITHUB_STEP_SUMMARY"
 
   - name: Keep the sticky PR comment in sync
-    if: inputs.mode == 'diff' && inputs.comment == 'true' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    if: inputs.mode == 'diff' && inputs.comment == 'true' && github.event.pull_request.head.repo.full_name == github.repository
     shell: bash
     env:
       GH_TOKEN: ${{ inputs.github_token }}
