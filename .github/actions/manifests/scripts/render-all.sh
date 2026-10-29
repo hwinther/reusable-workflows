@@ -4,7 +4,8 @@
 #
 #   render-all.sh <src-root> <out-dir> <list-file> [validate|best-effort]
 #
-# validate:    also run kubeconform ($KUBECONFORM_ARGS) on each render; any failure fails.
+# validate:    also run kubeconform ($KUBECONFORM_ARGS) on each render, unless VALIDATE=false;
+#              any failure fails.
 # best-effort: a render that fails is skipped (used for the PR base, whose tree or contract
 #              isn't this PR's problem).
 set -euo pipefail
@@ -54,7 +55,7 @@ while IFS= read -r line; do
 
   echo "::group::Render $out from $dir${component:+ + $component}"
   if "$here/render-manifests.sh" "$root/$dir" "$outdir/$out" "$component"; then
-    if [ "$mode" = validate ] && ! kubeconform "${kubeconform_args[@]}" "$outdir/$out"; then
+    if [ "$mode" = validate ] && [ "${VALIDATE:-true}" != false ] && ! kubeconform "${kubeconform_args[@]}" "$outdir/$out"; then
       status=1
     fi
   elif [ "$mode" = best-effort ]; then

@@ -17,6 +17,10 @@ description: |
   Contract check: a rendered `${VAR}` without a default fails unless the nearest README.md at or
   above its directory documents it as `VAR` (Flux substitutes an undefined variable with "").
 
+  A cluster repo can use diff mode too: one render per Flux Kustomization path, `map: changed`
+  (a whole-cluster map would have hundreds of nodes), `contract: "false"`, and `validate:
+  "false"` or CRD-tolerant kubeconform_args.
+
   The caller must check out its repo first (persist-credentials: false is fine). Permissions:
     push: contents: read, packages: write, id-token: write
     diff: contents: read, pull-requests: write (or comment: "false")
@@ -66,6 +70,24 @@ inputs:
     required: false
     description: "kubeconform flags, e.g. add `-ignore-missing-schemas` for CRDs without a schema."
     default: "-strict -summary"
+  validate:
+    required: false
+    description: "Run kubeconform on the head renders."
+    default: "true"
+  contract:
+    required: false
+    description: "Run the contract check. Set false for directories that aren't an artifact contract."
+    default: "true"
+  map:
+    required: false
+    description: |
+      diff: `all` maps every resource of a render; `changed` maps only the changed resources and
+      their direct neighbours and folds unchanged renders into one line (whole-cluster renders).
+    default: "all"
+  note:
+    required: false
+    description: "diff: footer line of the report."
+    default: "Placeholder image tags; the release job pins tag@digest."
   comment:
     required: false
     description: "diff: keep a sticky PR comment in sync (skipped for fork PRs, whose token is read-only)."
@@ -148,6 +170,8 @@ runs:
       RENDERS: ${{ inputs.renders }}
       IMAGES: ${{ inputs.mode == 'push' && inputs.images || '' }}
       KUBECONFORM_ARGS: ${{ inputs.kubeconform_args }}
+      VALIDATE: ${{ inputs.validate }}
+      CONTRACT: ${{ inputs.contract }}
     # The tools live in $RUNNER_TEMP/manifests-bin; each step adds it to its own PATH rather than
     # writing GITHUB_PATH for the rest of the caller's job.
     run: |
@@ -169,6 +193,7 @@ runs:
     shell: bash
     env:
       RENDERS: ${{ inputs.renders }}
+      CONTRACT: ${{ inputs.contract }}
     # The base is rendered with this action's scripts, so a script change can't break it, and
     # its contract isn't this PR's problem.
     run: bash "$GITHUB_ACTION_PATH/scripts/render-all.sh" .manifests-base "$RUNNER_TEMP/manifests-base" "$RUNNER_TEMP/manifests-base-renders.txt" best-effort
@@ -178,6 +203,8 @@ runs:
     shell: bash
     env:
       COMMENT_KEY: ${{ inputs.comment_key }}
+      MAP: ${{ inputs.map }}
+      NOTE: ${{ inputs.note }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     run: |
       export PATH="$RUNNER_TEMP/manifests-bin:$PATH"
@@ -191,7 +218,7 @@ runs:
         yq -o=json -I=0 '.' "$head/$out" > "$head/$out.jsonl"
         args+=("$out" "$base/$out.jsonl" "$head/$out.jsonl")
       done < "$RUNNER_TEMP/manifests-renders.txt"
-      python3 "$GITHUB_ACTION_PATH/scripts/manifest-report.py" --run-url "$RUN_URL" --marker "$COMMENT_KEY" "${args[@]}" > "$RUNNER_TEMP/manifests-report.md"
+      python3 "$GITHUB_ACTION_PATH/scripts/manifest-report.py" --run-url "$RUN_URL" --marker "$COMMENT_KEY" --map "$MAP" --note "$NOTE" "${args[@]}" > "$RUNNER_TEMP/manifests-report.md"
       cat "$RUNNER_TEMP/manifests-report.md" >> "$GITHUB_STEP_SUMMARY"
 
   - name: Keep the sticky PR comment in sync

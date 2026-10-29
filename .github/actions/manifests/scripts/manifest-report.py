@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Builds the Markdown review report for a rendered manifest change.
 
-    manifest-report.py [--run-url URL] [--marker KEY] NAME BASE.jsonl HEAD.jsonl [NAME BASE HEAD ...]
+    manifest-report.py [--run-url URL] [--marker KEY] [--map all|changed] [--note TEXT]
+                       NAME BASE.jsonl HEAD.jsonl [NAME BASE HEAD ...]
 
 One section per render, headed by NAME when there is more than one. Inputs are rendered
 manifests as one JSON document per line (`yq -o=json -I=0 '.'`). Each section has a change
 summary and a Mermaid map of how the resources wire together (Ingress -> Service -> workload ->
-Secret/ConfigMap/PVC) coloured by change; then a collapsible dyff per changed resource follows.
-References to objects outside the rendered set (the Secrets the cluster repo provides) show as
-dashed external nodes, so the deploy contract is visible too. dyff must be on PATH.
+Secret/ConfigMap/PVC, Flux Kustomization/HelmRelease -> source) coloured by change; then a
+collapsible dyff per changed resource follows. References to objects outside the rendered set
+(the Secrets the cluster repo provides) show as dashed external nodes, so the deploy contract is
+visible too. dyff must be on PATH.
+
+--map all draws every resource (an app's deploy dir). --map changed draws only the changed
+resources and their direct neighbours, and folds renders without a change into one line, for
+whole-cluster renders with hundreds of objects. --note is a footer line.
 """
 
 import json
@@ -21,6 +27,8 @@ from pathlib import Path
 MARKER = "<!-- manifest-diff -->"
 # PR comments are capped at 65536 characters; leave room for the closing note.
 BUDGET = 60000
+# GitHub's Mermaid gives up past 500 edges; a map this big is unreadable well before that.
+MAX_NODES = 80
 WORKLOADS = {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob"}
 
 
@@ -70,6 +78,18 @@ def refs(obj):
     elif kind == "HorizontalPodAutoscaler":
         target = spec.get("scaleTargetRef", {})
         yield target.get("kind"), target.get("name"), "scales"
+    elif kind == "Kustomization" and "sourceRef" in spec:
+        yield spec["sourceRef"].get("kind"), spec["sourceRef"].get("name"), "source"
+        for s in spec.get("postBuild", {}).get("substituteFrom", []):
+            yield s.get("kind"), s.get("name"), "substitute"
+    elif kind == "HelmRelease":
+        chart = spec.get("chart", {}).get("spec", {}).get("sourceRef")
+        if chart:
+            yield chart.get("kind"), chart.get("name"), "chart"
+        if "chartRef" in spec:
+            yield spec["chartRef"].get("kind"), spec["chartRef"].get("name"), "chart"
+        for v in spec.get("valuesFrom", []):
+            yield v.get("kind"), v.get("name"), "values"
 
     pod = pod_template(obj).get("spec", {})
     if not pod:
@@ -99,25 +119,43 @@ def refs(obj):
                 yield "ConfigMap", src["configMapKeyRef"]["name"], "env"
 
 
-def selects(selector, obj):
+def namespace(obj):
+    return obj.get("metadata", {}).get("namespace")
+
+
+def selects(selector, obj, ns):
     labels = pod_template(obj).get("metadata", {}).get("labels", {})
-    return bool(selector) and all(labels.get(k) == v for k, v in selector.items())
+    return (
+        bool(selector)
+        and namespace(obj) == ns
+        and all(labels.get(k) == v for k, v in selector.items())
+    )
 
 
 def edges(objs):
-    """Edges between keys in objs, plus (kind, name) targets that aren't in objs."""
-    by_name = {(o["kind"], o["metadata"].get("name")): k for k, o in objs.items()}
+    """Edges between keys in objs, plus targets that aren't in objs (as `ext:<key>`). A
+    reference resolves within the referrer's namespace, so a whole-cluster render with the same
+    name in many namespaces wires up correctly; an app render has no namespaces at all."""
+    by_name = {
+        (o["kind"], namespace(o), o["metadata"].get("name")): k for k, o in objs.items()
+    }
     out = set()
     for k, obj in objs.items():
+        ns = namespace(obj)
         for kind, name, label in refs(obj):
-            out.add((k, by_name.get((kind, name), f"ext:{kind}/{name}"), label))
+            target = by_name.get((kind, ns, name))
+            if target is None:
+                target = f"ext:{kind}/{ns + '/' if ns else ''}{name}"
+            out.add((k, target, label))
         selector = None
         if obj["kind"] == "Service":
             selector = obj.get("spec", {}).get("selector")
         elif obj["kind"] == "PodDisruptionBudget":
             selector = obj.get("spec", {}).get("selector", {}).get("matchLabels")
+        if not selector:
+            continue
         for k2, o2 in objs.items():
-            if selects(selector, o2):
+            if selects(selector, o2, ns):
                 out.add(
                     (k, k2, "protects" if obj["kind"] == "PodDisruptionBudget" else "")
                 )
@@ -132,21 +170,54 @@ def short_image(image):
     return image.split("@")[0].rsplit("/", 1)[-1]
 
 
-def mermaid(base, head, status):
-    shown = {**{k: base[k] for k in status if status[k] == "removed"}, **head}
+def node_text(k, obj):
+    """The resource key plus what a reviewer looks for first: images, chart version, path."""
+    lines = [k]
+    lines += [
+        short_image(c["image"])
+        for c in pod_template(obj).get("spec", {}).get("containers", [])
+        if "image" in c
+    ]
+    spec = obj.get("spec", {})
+    if obj["kind"] == "HelmRelease":
+        chart = spec.get("chart", {}).get("spec", {})
+        if chart.get("chart"):
+            lines.append(f"{chart['chart']} {chart.get('version', '')}".strip())
+    elif obj["kind"] in ("Kustomization", "OCIRepository", "GitRepository"):
+        ref = spec.get("ref", {})
+        for field in ("tag", "semver", "digest", "branch"):
+            if ref.get(field):
+                lines.append(f"{field} {ref[field]}")
+                break
+        if obj["kind"] == "Kustomization" and spec.get("path"):
+            lines.append(spec["path"])
+    return "<br/>".join(lines)
+
+
+def mermaid(base, head, status, scope="all"):
+    """The resource map, or None when there is nothing (or too much) to draw."""
+    every = {**{k: base[k] for k in status if status[k] == "removed"}, **head}
     all_edges = edges(head) | {e for e in edges(base) if status.get(e[0]) == "removed"}
+    if scope == "changed":
+        focus = {k for k, s in status.items() if s != "unchanged"}
+        keep = set(focus)
+        for src, dst, _ in all_edges:
+            if src in focus or dst in focus:
+                keep.update((src, dst))
+        all_edges = {e for e in all_edges if e[0] in focus or e[1] in focus}
+        shown = {k: every[k] for k in keep if k in every}
+    else:
+        shown = every
+    if not shown:
+        return None
+    externals = sorted({t for _, t, _ in all_edges if t.startswith("ext:")})
+    if len(shown) + len(externals) > MAX_NODES:
+        return f"_Map left out: {len(shown) + len(externals)} resources is too many to draw._"
     ids = {k: f"n{i}" for i, k in enumerate(sorted(shown))}
     lines = ["```mermaid", "graph LR"]
     for k in sorted(shown):
-        obj = shown[k]
-        text = k
-        images = [
-            c["image"] for c in pod_template(obj).get("spec", {}).get("containers", [])
-        ]
-        if images:
-            text += "<br/>" + "<br/>".join(short_image(i) for i in images)
-        lines.append(f'  {ids[k]}["{label(text)}"]:::{status[k]}')
-    for target in sorted({t for _, t, _ in all_edges if t.startswith("ext:")}):
+        lines.append(f'  {ids[k]}["{label(node_text(k, shown[k]))}"]:::{status[k]}')
+    for target in externals:
         ids[target] = f"x{len(ids)}"
         lines.append(f'  {ids[target]}(["{label(target[4:])}"]):::external')
     for src, dst, text in sorted(all_edges):
@@ -220,9 +291,10 @@ def classify(base, head):
     return status
 
 
-def section(name, base, head, tmp):
+def section(name, base, head, tmp, scope="all"):
     """Summary + map for one render, plus its per-resource details as a separate list so the
-    caller can stop adding details when the comment budget runs out."""
+    caller can stop adding details when the comment budget runs out. None for an unchanged
+    render under scope changed."""
     status = classify(base, head)
     counts = {
         s: sum(1 for v in status.values() if v == s)
@@ -230,12 +302,13 @@ def section(name, base, head, tmp):
     }
     summary = ", ".join(f"{n} {s}" for s, n in counts.items() if n) or "empty"
     changed = any(counts[s] for s in ("changed", "added", "removed"))
+    if scope == "changed" and not changed:
+        return None
     lines = [f"#### `{name}`", ""] if name else []
-    lines += [
-        f"{summary}." if changed else f"No change ({summary}).",
-        "",
-        mermaid(base, head, status),
-    ]
+    lines.append(f"{summary}." if changed else f"No change ({summary}).")
+    drawing = mermaid(base, head, status, scope)
+    if drawing:
+        lines += ["", drawing]
     details = []
     order = ["changed", "added", "removed"]
     for k in sorted(
@@ -254,9 +327,12 @@ def section(name, base, head, tmp):
     return "\n".join(lines) + "\n", details
 
 
+DEFAULT_NOTE = "Placeholder image tags; the release job pins tag@digest."
+
+
 def main():
     args = sys.argv[1:]
-    run_url, marker = "", MARKER
+    run_url, marker, scope, note = "", MARKER, "all", DEFAULT_NOTE
     while args and args[0].startswith("--"):
         if len(args) < 2:
             sys.exit(__doc__)
@@ -265,6 +341,12 @@ def main():
             run_url = value
         elif flag == "--marker":
             marker = f"<!-- {value} -->"
+        elif flag == "--map":
+            if value not in ("all", "changed"):
+                sys.exit(f"--map must be all or changed, got {value}")
+            scope = value
+        elif flag == "--note":
+            note = value
         else:
             sys.exit(f"unknown flag {flag}")
     if not args or len(args) % 3:
@@ -274,13 +356,23 @@ def main():
 
     report = f"{marker}\n### Rendered manifests\n\n"
     pending = []
+    quiet = []
     with tempfile.TemporaryDirectory() as tmp:
         for name, base_path, head_path in renders:
-            text, details = section(
-                name if named else "", load(base_path), load(head_path), tmp
+            result = section(
+                name if named else "", load(base_path), load(head_path), tmp, scope
             )
+            if result is None:
+                quiet.append(name)
+                continue
+            text, details = result
             report += text + "\n"
             pending.append(details)
+    if quiet:
+        if len(quiet) == len(renders):
+            report += "No change in any render.\n\n"
+        else:
+            report += "No change: " + ", ".join(f"`{n}`" for n in quiet) + ".\n\n"
     # Maps and summaries always go in; details fill what's left of the budget, in render order.
     left_out = 0
     for details in pending:
@@ -292,8 +384,11 @@ def main():
     if left_out:
         report += f"_{left_out} resource diff(s) left out for size"
         report += f"; see the [workflow run]({run_url})._\n" if run_url else "._\n"
-    if run_url:
-        report += f"\n<sub>Placeholder image tags; the release job pins tag@digest. [Run]({run_url})</sub>\n"
+    footer = " ".join(
+        part for part in (note, f"[Run]({run_url})" if run_url else "") if part
+    )
+    if footer:
+        report += f"\n<sub>{footer}</sub>\n"
     sys.stdout.write(report)
 
 
