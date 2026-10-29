@@ -68,7 +68,7 @@ on:
       npm_node_version:
         required: false
         type: string
-        default: '24.x'
+        default: '26.x'
       npm_scope:
         required: false
         type: string
