@@ -12,7 +12,8 @@
 # contract README documents as `VAR`. Flux substitutes an undefined variable with an empty
 # string instead of failing, so an undocumented one is a silent misconfiguration waiting to
 # happen. The README is the nearest README.md at or above deploy-dir, stopping below the
-# current directory (the repo root's README is not a contract).
+# current directory (the repo root's README is not a contract). CONTRACT=false (env) skips it,
+# for directories that aren't an artifact contract (a cluster repo's Flux paths).
 set -euo pipefail
 
 src="$(cd "$1" && pwd)"
@@ -20,43 +21,54 @@ out="$2"
 component="${3:-}"
 root="$(pwd)"
 
-work="$(mktemp -d)"
-trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/overlay" "$(dirname "$out")"
-# Copy instead of referencing the source by path: kustomize resolves `resources:` relative to
-# the overlay, and an absolute path breaks on some platforms.
-cp -r "$src" "$work/base"
+mkdir -p "$(dirname "$out")"
+# With nothing to add, render the directory in place: a cluster repo's kustomizations reference
+# shared bases outside the directory (../../bases/x), which a copy would cut off.
+if [ -z "$(printf '%s' "${IMAGES:-}" | tr -d '[:space:]')" ] && [ -z "$component" ]; then
+  kubectl kustomize "$src" > "$out"
+else
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
+  mkdir -p "$work/overlay"
+  # Copy instead of referencing the source by path: kustomize resolves `resources:` relative to
+  # the overlay, and an absolute path breaks on some platforms.
+  cp -r "$src" "$work/base"
 
-{
-  echo "apiVersion: kustomize.config.k8s.io/v1beta1"
-  echo "kind: Kustomization"
-  echo "resources:"
-  echo "- ../base"
-  if [ -n "${IMAGES:-}" ]; then
-    echo "images:"
-    while IFS= read -r image; do
-      image="$(printf '%s' "$image" | tr -d '[:space:]')"
-      [ -n "$image" ] || continue
-      case "$image" in
-        *:*@sha256:*) ;;
-        *)
-          echo "::error::image '$image' must be registry/name:tag@sha256:digest" >&2
-          exit 1
-          ;;
-      esac
-      ref="${image%@*}"
-      echo "- name: ${ref%:*}"
-      echo "  newTag: ${ref##*:}"
-      echo "  digest: ${image#*@}"
-    done <<< "$IMAGES"
-  fi
-  if [ -n "$component" ]; then
-    echo "components:"
-    echo "- ../base/$component"
-  fi
-} > "$work/overlay/kustomization.yaml"
+  {
+    echo "apiVersion: kustomize.config.k8s.io/v1beta1"
+    echo "kind: Kustomization"
+    echo "resources:"
+    echo "- ../base"
+    if [ -n "${IMAGES:-}" ]; then
+      echo "images:"
+      while IFS= read -r image; do
+        image="$(printf '%s' "$image" | tr -d '[:space:]')"
+        [ -n "$image" ] || continue
+        case "$image" in
+          *:*@sha256:*) ;;
+          *)
+            echo "::error::image '$image' must be registry/name:tag@sha256:digest" >&2
+            exit 1
+            ;;
+        esac
+        ref="${image%@*}"
+        echo "- name: ${ref%:*}"
+        echo "  newTag: ${ref##*:}"
+        echo "  digest: ${image#*@}"
+      done <<< "$IMAGES"
+    fi
+    if [ -n "$component" ]; then
+      echo "components:"
+      echo "- ../base/$component"
+    fi
+  } > "$work/overlay/kustomization.yaml"
 
-kubectl kustomize "$work/overlay" > "$out"
+  kubectl kustomize "$work/overlay" > "$out"
+fi
+
+if [ "${CONTRACT:-true}" = false ]; then
+  exit 0
+fi
 
 readme=""
 dir="$src"
