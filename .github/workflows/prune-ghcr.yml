@@ -5,8 +5,14 @@ name: "Prune GHCR images (reusable)"
 #     pointing at another image via .subject.digest)
 #   - tagged manifests whose only tags are GitVersion prerelease semvers
 #     (X.Y.Z-<label>.<n>) for branches that no longer exist on origin
-#   - cosign legacy sha256-XXXX.{sig,att,sbom} tags whose parent manifest is
-#     itself being deleted in the same run
+#   - tagged manifests whose only tags belong to a closed pull request: pr-<N>
+#     (and pr-<N>-<anything>), or a prerelease whose label is the PR form
+#     GitVersion emits for refs/pull/<N>/merge builds (PullRequest<N>). Tags of
+#     open PRs are kept, so running previews keep their pinned digests.
+#   - signatures and attestations whose parent manifest is being deleted in the
+#     same run or no longer exists: cosign legacy sha256-XXXX.{sig,att,sbom}
+#     tags, OCI referrers-tag indexes (bare sha256-XXXX tags), and untagged OCI
+#     1.1 referrers (.subject.digest)
 #
 # Anything unrecognised is KEPT (fail-safe).
 #
@@ -55,6 +61,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      pull-requests: read  # open-PR lookup for pr-<N> / PullRequest<N> tags
     env:
       OWNER: ${{ github.repository_owner }}
       REPO: ${{ github.repository }}
@@ -139,6 +146,14 @@ jobs:
           echo "Live labels:";   cat /tmp/live-labels.txt
           echo "owner_lc=$OWNER_LC" >> "$GITHUB_OUTPUT"
 
+      - name: Compute open pull requests
+        if: inputs.nuke_package == ''
+        run: |
+          set -euo pipefail
+          # A failed lookup fails the run: without it every PR tag would read as closed.
+          gh api "repos/$REPO/pulls?state=open" --paginate --jq '.[].number' | sort -u > /tmp/open-prs.txt
+          echo "Open PRs:"; cat /tmp/open-prs.txt
+
       - name: Discover packages
         if: inputs.nuke_package == ''
         run: |
@@ -169,10 +184,15 @@ jobs:
             exit 0
           fi
 
-          # GHCR accepts the GitHub token base64-encoded as a Bearer for
-          # repos the token has read access to. Same trick used by the
-          # docker/login-action under the hood.
-          REGISTRY_TOKEN=$(printf '%s' "$GH_TOKEN" | base64)
+          # Registry reads need a registry token. Exchange the GitHub token for
+          # a pull-scoped one per package, as docker login does. (Sending the
+          # GitHub token itself as the Bearer made every manifest fetch fail,
+          # so untagged versions were all kept as manifest-fetch-failed.)
+          registry_token() {
+            curl -sS --fail -u "$OWNER_LC:$GH_TOKEN" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:$OWNER_LC/$1:pull" \
+              | jq -r '.token // empty'
+          }
 
           fetch_manifest_classification() {
             # Echoes one of:
@@ -183,11 +203,13 @@ jobs:
             local resp
             if ! resp=$(curl -sS --fail \
                 -H "Authorization: Bearer $REGISTRY_TOKEN" \
-                -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-                -H "Accept: application/vnd.oci.image.index.v1+json" \
-                -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-                -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
-                "https://ghcr.io/v2/$OWNER_LC/$pkg/manifests/$digest" 2>/dev/null); then
+                -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+                "https://ghcr.io/v2/$OWNER_LC/$pkg/manifests/$digest" 2>/tmp/fetch.err); then
+              # Log the first failure per package (stderr: stdout is the verdict).
+              if [ ! -e /tmp/fetch-failed-logged ]; then
+                echo "  WARN: manifest fetch failed for $digest: $(cat /tmp/fetch.err)" >&2
+                touch /tmp/fetch-failed-logged
+              fi
               echo "fetch-failed"
               return 0
             fi
@@ -225,6 +247,12 @@ jobs:
             echo
             echo "=== $pkg ==="
             enc=$(jq -rn --arg s "$pkg" '$s|@uri')
+            rm -f /tmp/fetch-failed-logged
+            if ! REGISTRY_TOKEN=$(registry_token "$pkg") || [ -z "$REGISTRY_TOKEN" ]; then
+              # Untagged versions then classify as manifest-fetch-failed (KEEP).
+              echo "  WARN: no registry token for $pkg"
+              REGISTRY_TOKEN=""
+            fi
 
             if ! gh api "/users/$OWNER/packages/container/$enc/versions" --paginate \
                 --jq '.[] | {id, name, tags: (.metadata.container.tags // [])}' \
@@ -252,7 +280,8 @@ jobs:
                 cls=$(fetch_manifest_classification "$pkg" "$digest")
                 case "$cls" in
                   attestation:*)
-                    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP" "$cls" "$digest" "" >> /tmp/verdicts.tsv ;;
+                    # Follows its subject in pass 2.
+                    printf '%s\t%s\t%s\t%s\t%s\n' "$id" "DEFER" "$cls" "$digest" "" >> /tmp/verdicts.tsv ;;
                   fetch-failed)
                     printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP" "manifest-fetch-failed" "$digest" "" >> /tmp/verdicts.tsv ;;
                   orphan)
@@ -261,13 +290,19 @@ jobs:
                 continue
               fi
 
-              # Tagged. If every tag is sha256-XXXX.{sig,att,sbom}, defer.
+              # Tagged. If every tag is sha256-XXXX[.{sig,att,sbom}], defer: the
+              # legacy cosign tags and the OCI referrers-tag fallback index
+              # (bare sha256-XXXX) both name their parent digest.
               all_sigatt=true
+              n_tags=0
               for t in $(echo "$v" | jq -r '.tags[]'); do
-                if ! echo "$t" | grep -Eq '^sha256-[a-f0-9]{64}\.(sig|att|sbom)$'; then
+                n_tags=$((n_tags + 1))
+                if ! echo "$t" | grep -Eq '^sha256-[a-f0-9]{64}(\.(sig|att|sbom))?$'; then
                   all_sigatt=false; break
                 fi
               done
+              # tags_csv is non-empty, so zero iterations means the tags did not parse.
+              [ "$n_tags" -eq 0 ] && all_sigatt=false
               if [ "$all_sigatt" = "true" ]; then
                 printf '%s\t%s\t%s\t%s\t%s\n' "$id" "DEFER" "sig-att-tag" "$digest" "$tags_csv" >> /tmp/verdicts.tsv
                 continue
@@ -283,6 +318,20 @@ jobs:
                 if echo "$t" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
                   keep=true; reasons="$reasons release($t)"; continue
                 fi
+                # PR-scoped: pr-<N>[-…] or a PullRequest<N> prerelease label.
+                pr=""
+                if echo "$t" | grep -Eq '^pr-[0-9]+(-.+)?$'; then
+                  pr=$(echo "$t" | sed -E 's/^pr-([0-9]+).*$/\1/')
+                elif echo "$t" | grep -Eiq '^[0-9]+\.[0-9]+\.[0-9]+-pull-?request-?[0-9]+\.[0-9]+$'; then
+                  pr=$(echo "$t" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-[A-Za-z-]+([0-9]+)\.[0-9]+$/\1/')
+                fi
+                if [ -n "$pr" ]; then
+                  if grep -Fxq "$pr" /tmp/open-prs.txt; then
+                    keep=true; reasons="$reasons open-pr($pr)"; continue
+                  else
+                    reasons="$reasons closed-pr($pr)"; continue
+                  fi
+                fi
                 if echo "$t" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-.+\.[0-9]+$'; then
                   label=$(echo "$t" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-(.+)\.[0-9]+$/\1/')
                   if grep -Fxq "$label" /tmp/live-labels.txt; then
@@ -294,6 +343,10 @@ jobs:
                 # Unrecognised tag — fail-safe KEEP.
                 keep=true; reasons="$reasons unknown-tag($t)"
               done
+              if [ -z "$reasons" ]; then
+                # No tag was voted on although tags_csv is set: the tags did not parse.
+                keep=true; reasons="tags-unparsed"
+              fi
               if [ "$keep" = "true" ]; then
                 printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP" "${reasons# }" "$digest" "$tags_csv" >> /tmp/verdicts.tsv
               else
@@ -301,19 +354,31 @@ jobs:
               fi
             done < /tmp/versions.json
 
-            # Pass 2: resolve DEFER (sig/att/sbom) rows by looking up the
-            # parent digest's verdict in the rows we just wrote.
+            # Pass 2: resolve DEFER rows (signature tags and untagged referrers)
+            # by looking up the parent digest's verdict in the rows we just
+            # wrote. A parent that is not in the package at all was deleted
+            # earlier, so its signatures go too. A parent that is itself a
+            # DEFER row is KEPT (fail-safe).
             awk -F'\t' '$2!="DEFER"' /tmp/verdicts.tsv > /tmp/verdicts.final.tsv
             awk -F'\t' '$2=="DEFER"'  /tmp/verdicts.tsv > /tmp/verdicts.defer.tsv
-            while IFS=$'\t' read -r id _verdict _reason digest tags_csv; do
-              first=$(echo "$tags_csv" | tr ',' '\n' | head -1)
-              parent_short=$(echo "$first" | sed -E 's/^sha256-([a-f0-9]{64})\..*/\1/')
-              parent_digest="sha256:$parent_short"
-              parent_verdict=$(awk -F'\t' -v d="$parent_digest" '$4==d {print $2; exit}' /tmp/verdicts.final.tsv)
-              if [ "$parent_verdict" = "PRUNE" ]; then
-                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "PRUNE" "follows-parent-prune($parent_short)" "$digest" "$tags_csv" >> /tmp/verdicts.final.tsv
+            while IFS=$'\t' read -r id _verdict reason digest tags_csv; do
+              if [ -z "$tags_csv" ]; then
+                parent_digest=${reason#attestation:}
               else
-                # KEEP if parent KEEP, missing, or anything else.
+                first=$(echo "$tags_csv" | tr ',' '\n' | head -1)
+                parent_digest="sha256:$(echo "$first" | sed -E 's/^sha256-([a-f0-9]{64}).*/\1/')"
+              fi
+              parent_short=${parent_digest#sha256:}
+              parent_short=${parent_short:0:12}
+              parent_verdict=$(awk -F'\t' -v d="$parent_digest" '$4==d {print $2; exit}' /tmp/verdicts.tsv)
+              if ! echo "$parent_digest" | grep -Eq '^sha256:[a-f0-9]{64}$'; then
+                # Could not read a parent digest: never treat that as parent-gone.
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP" "parent-unparsed" "$digest" "$tags_csv" >> /tmp/verdicts.final.tsv
+              elif [ "$parent_verdict" = "PRUNE" ]; then
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "PRUNE" "follows-parent-prune($parent_short)" "$digest" "$tags_csv" >> /tmp/verdicts.final.tsv
+              elif [ -z "$parent_verdict" ]; then
+                printf '%s\t%s\t%s\t%s\t%s\n' "$id" "PRUNE" "parent-gone($parent_short)" "$digest" "$tags_csv" >> /tmp/verdicts.final.tsv
+              else
                 printf '%s\t%s\t%s\t%s\t%s\n' "$id" "KEEP"  "follows-parent-keep($parent_short)"  "$digest" "$tags_csv" >> /tmp/verdicts.final.tsv
               fi
             done < /tmp/verdicts.defer.tsv
@@ -322,6 +387,9 @@ jobs:
             keep_n=$(awk -F'\t' '$2=="KEEP"'  /tmp/verdicts.tsv | wc -l | tr -d ' ')
             prune_n=$(awk -F'\t' '$2=="PRUNE"' /tmp/verdicts.tsv | wc -l | tr -d ' ')
             echo "  KEEP=$keep_n PRUNE=$prune_n"
+            # Verdicts by reason, with the digest/label/PR detail stripped.
+            awk -F'\t' '{print $2 "\t" $3}' /tmp/verdicts.tsv \
+              | sed -E 's/\([^)]*\)//g; s/:sha256:[a-f0-9]+//' | sort | uniq -c | sed 's/^/   /'
             TOTAL_KEEP=$((TOTAL_KEEP + keep_n))
             TOTAL_PRUNE=$((TOTAL_PRUNE + prune_n))
 
