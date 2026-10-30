@@ -51,6 +51,6 @@ runs:
     - name: Download and load image artifact
       id: load
       if: ${{ steps.kind.outputs.is_registry != 'true' }}
-      uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@feat/registry-image-handoff
+      uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v2
       with:
         artifact_name: ${{ inputs.image }}
