@@ -1,0 +1,50 @@
+name: "Push a locally-loaded image to a staging tag"
+description: |
+  Tags a locally-loaded image with a staging ref and pushes it, so downstream
+  jobs (scan, e2e, the final push) pull it by digest instead of downloading a
+  workflow artifact. Returns the pushed digest; every consumer references the
+  image as `repo@digest`, which is what makes the hand-off byte-identical.
+
+  Staging tags are `pr-<N>-<sha7>[-suffix]`, which prune-ghcr.yml deletes once
+  the PR is closed.
+
+  The caller must be logged in to the registry with `packages: write`.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  local_ref:
+    required: true
+    description: "Image ref present in the local Docker daemon."
+  staging_ref:
+    required: true
+    description: "Full ref to push, e.g. ghcr.io/owner/repo/api:pr-12-abc1234."
+
+outputs:
+  image_ref:
+    description: "Pushed image as repo@sha256:..."
+    value: ${{ steps.push.outputs.image_ref }}
+  digest:
+    description: "Registry manifest digest (sha256:...)."
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Push staging tag
+      id: push
+      shell: bash
+      env:
+        SRC: ${{ inputs.local_ref }}
+        DEST: ${{ inputs.staging_ref }}
+      run: |
+        set -euo pipefail
+        docker tag "$SRC" "$DEST"
+        docker push "$DEST"
+        repo="${DEST%:*}"
+        # RepoDigests holds the registry digest of every repo the image was pushed to.
+        ref=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$DEST" | grep -F "${repo}@" | head -1)
+        [ -n "$ref" ] || { echo "::error::No registry digest for $DEST after push"; exit 1; }
+        echo "image_ref=$ref" >> "$GITHUB_OUTPUT"
+        echo "digest=${ref#*@}" >> "$GITHUB_OUTPUT"
+        echo "Staged: $ref"

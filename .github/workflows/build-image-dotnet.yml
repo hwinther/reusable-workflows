@@ -1,0 +1,204 @@
+name: "Build dotnet container for e2e (staging push)"
+
+# Build-only companion to build-and-scan-dotnet.yml for the split pipeline.
+# See build-image-docker.yml for the job graph and the hand-off rules.
+
+on:
+  workflow_call:
+    inputs:
+      dotnet_version:
+        description: ".NET version, e.g. 10.0.x"
+        required: true
+        type: string
+      solution_path:
+        description: "Solution path, e.g. backend"
+        required: true
+        type: string
+      solution_file:
+        description: "Solution file, e.g. ProjectName.slnx"
+        required: true
+        type: string
+      project_file:
+        description: "Project file, e.g. src/Api/Api.csproj"
+        required: true
+        type: string
+      cache_enabled:
+        description: "Enable NuGet package caching, requires dotnet lockfiles"
+        required: false
+        type: boolean
+        default: true
+      container_registry:
+        description: "Container registry, e.g. ghcr.io"
+        required: false
+        type: string
+        default: "ghcr.io"
+      container_image_name_postfix:
+        description: "Container image name postfix, e.g. api"
+        required: true
+        type: string
+      override_config:
+        description: "Override config"
+        required: false
+        type: string
+        default: ""
+      artifact_retention_days:
+        description: "Retention for the image artifact on the fallback path."
+        required: false
+        type: number
+        default: 1
+      artifact_name_suffix:
+        description: "Disambiguates matrix callers that share container_image_name_postfix: appended to the staging tag and the artifact name."
+        required: false
+        type: string
+        default: ""
+      primary_nuget_source:
+        description: "Primary NuGet source URL passed to actions/setup-dotnet via source-url."
+        required: false
+        type: string
+        default: ""
+      extra_nuget_source:
+        description: "Additional private NuGet feed URL added via `dotnet nuget add source` before restore."
+        required: false
+        type: string
+        default: ""
+      extra_nuget_source_name:
+        description: "Name for the extra NuGet source."
+        required: false
+        type: string
+        default: ""
+      extra_nuget_source_username:
+        description: "Username for `dotnet nuget add source` on the extra source."
+        required: false
+        type: string
+        default: "az"
+    secrets:
+      nuget_auth_token:
+        description: "Auth token for NuGet feeds (NUGET_AUTH_TOKEN for setup-dotnet primary source and --password for the extra source). When unset, falls back to GITHUB_TOKEN."
+        required: false
+    outputs:
+      image:
+        description: "The hand-off: repo@digest (staging push) or a workflow artifact name (fallback). Pass to scan-image.yml, playwright-e2e.yml and image-push.yml."
+        value: ${{ jobs.build.outputs.image }}
+      image_ref:
+        description: "Staging image as repo@sha256:..., empty on the artifact fallback."
+        value: ${{ jobs.build.outputs.image_ref }}
+      image_artifact:
+        description: "Workflow artifact name, empty when the image was staged in the registry."
+        value: ${{ jobs.build.outputs.image_artifact }}
+      image_digest:
+        description: "Local image ID (sha256:...). image-push.yml asserts it on the artifact path."
+        value: ${{ jobs.build.outputs.image_digest }}
+      container_image_tags:
+        description: "Full image refs for the final push (registry/name:tag, comma-separated)."
+        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+      image_tags:
+        description: "Image tags only (semicolon-separated)."
+        value: ${{ jobs.gitversion.outputs.image_tags }}
+      version:
+        description: "GitVersion-derived version string."
+        value: ${{ jobs.gitversion.outputs.version }}
+      is_alpha:
+        description: "Whether the build is from a feature/bugfix branch (string 'true'/'false')."
+        value: ${{ jobs.gitversion.outputs.is_alpha }}
+
+jobs:
+  prepare-repository-name:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      repository: ${{ steps.lower-repo.outputs.repository }}
+    steps:
+      - id: lower-repo
+        run: |
+          echo "repository=${GITHUB_REPOSITORY@L}" >> $GITHUB_OUTPUT
+
+  gitversion:
+    needs: prepare-repository-name
+    permissions:
+      contents: read
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2
+    with:
+      container_registry: ${{ inputs.container_registry }}
+      container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+      override_config: ${{ inputs.override_config }}
+
+  build:
+    name: Build (${{ needs.gitversion.outputs.container_image_tags }})
+    needs: [prepare-repository-name, gitversion]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # staging push; read-only on Dependabot/fork PRs, which take the artifact path
+    outputs:
+      image: ${{ steps.staging.outputs.image_ref || steps.save.outputs.artifact_name }}
+      image_ref: ${{ steps.staging.outputs.image_ref }}
+      image_artifact: ${{ steps.save.outputs.artifact_name }}
+      image_digest: ${{ steps.local-id.outputs.image_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ inputs.container_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build dotnet container (publish to archive, load locally)
+        id: build
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-dotnet@v2
+        with:
+          dotnet_version: ${{ inputs.dotnet_version }}
+          solution_path: ${{ inputs.solution_path }}
+          solution_file: ${{ inputs.solution_file }}
+          project_file: ${{ inputs.project_file }}
+          cache_enabled: ${{ inputs.cache_enabled }}
+          image_tags: ${{ needs.gitversion.outputs.image_tags }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          version: ${{ needs.gitversion.outputs.version }}
+          git_sha: ${{ github.sha }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nuget_auth_token: ${{ secrets.nuget_auth_token }}
+          primary_nuget_source: ${{ inputs.primary_nuget_source }}
+          extra_nuget_source: ${{ inputs.extra_nuget_source }}
+          extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
+          extra_nuget_source_username: ${{ inputs.extra_nuget_source_username }}
+
+      - name: Choose hand-off
+        id: handoff
+        uses: hwinther/reusable-workflows/.github/actions/_choose-image-handoff@v2
+        with:
+          container_registry: ${{ inputs.container_registry }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          suffix: ${{ inputs.artifact_name_suffix }}
+
+      - name: Record local image ID
+        id: local-id
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.build.outputs.local_ref }}
+        run: |
+          set -euo pipefail
+          echo "image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")" >> "$GITHUB_OUTPUT"
+
+      - name: Push staging tag
+        id: staging
+        if: ${{ steps.handoff.outputs.staging_ref != '' }}
+        uses: hwinther/reusable-workflows/.github/actions/_push-staging-image@v2
+        with:
+          local_ref: ${{ steps.build.outputs.local_ref }}
+          staging_ref: ${{ steps.handoff.outputs.staging_ref }}
+
+      - name: Save image as workflow artifact
+        id: save
+        if: ${{ steps.handoff.outputs.staging_ref == '' }}
+        uses: hwinther/reusable-workflows/.github/actions/_save-image-artifact@v2
+        with:
+          image_ref: ${{ steps.build.outputs.local_ref }}
+          artifact_name: build-image-${{ inputs.container_image_name_postfix }}${{ inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '' }}-image
+          retention_days: ${{ inputs.artifact_retention_days }}

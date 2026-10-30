@@ -1,0 +1,141 @@
+name: "SBOM and Grype scan of a built image"
+
+# The scan half of the split pipeline (see build-image-docker.yml). Runs next
+# to playwright-e2e.yml instead of before it. Takes the `image` hand-off of
+# build-image-*.yml: a staging ref is scanned straight from the registry by
+# digest, an artifact is downloaded and loaded first. Outputs match the scan
+# outputs of build-and-scan-*.yml, so image-push.yml takes them unchanged.
+
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: "`image` output of build-image-*.yml: repo@sha256:... or a workflow artifact name."
+        required: true
+        type: string
+      container_registry:
+        description: "Container registry, e.g. ghcr.io"
+        default: "ghcr.io"
+        type: string
+      container_image_name_postfix:
+        description: "Container image name postfix, e.g. frontend. Names the SARIF category, artifacts and PR comment."
+        required: true
+        type: string
+      grype_scan_enabled:
+        description: "Run Anchore Grype vulnerability scan (SBOM is still generated when false)"
+        required: false
+        type: boolean
+        default: true
+      grype_severity_cutoff:
+        description: "Grype severity-cutoff (fail on this level and above)"
+        required: false
+        type: string
+        default: high
+      grype_only_fixed:
+        description: "Grype only-fixed: only report vulnerabilities that have a fix available"
+        required: false
+        type: boolean
+        default: true
+      grype_fail_build:
+        description: "Grype fail-build mode: 'auto' (fail on every event except pull_request), 'always', or 'never'."
+        required: false
+        type: string
+        default: auto
+      code_scanning_upload_enabled:
+        description: "Upload the Grype SARIF to GitHub Code Scanning. Set to false on private repositories without GitHub Advanced Security."
+        required: false
+        type: boolean
+        default: true
+      release_asset_upload_enabled:
+        description: "Attach generated SBOMs to a matching GitHub Release as release assets. Requires `contents: write`."
+        required: false
+        type: boolean
+        default: true
+      generate_supply_chain_artifacts:
+        description: "Generate CycloneDX SBOM and Grype JSON for downstream cosign attestations in image-push.yml"
+        required: false
+        type: boolean
+        default: true
+      artifact_name_suffix:
+        description: "Matrix disambiguator, as on build-image-*.yml."
+        required: false
+        type: string
+        default: ""
+    outputs:
+      sbom_artifact:
+        description: "Workflow artifact holding the CycloneDX SBOM (empty when generate_supply_chain_artifacts=false)."
+        value: ${{ jobs.scan.outputs.sbom_artifact }}
+      sbom_spdx_artifact:
+        description: "Workflow artifact holding the SPDX SBOM."
+        value: ${{ jobs.scan.outputs.sbom_spdx_artifact }}
+      grype_artifact:
+        description: "Workflow artifact holding the Grype JSON (empty when generate_supply_chain_artifacts=false)."
+        value: ${{ jobs.scan.outputs.grype_artifact }}
+      sbom_cyclonedx_sha256:
+        description: "sha256 of the CycloneDX SBOM, for image-push.yml's integrity check."
+        value: ${{ jobs.scan.outputs.sbom_cyclonedx_sha256 }}
+      grype_json_sha256:
+        description: "sha256 of the Grype JSON, for image-push.yml's integrity check."
+        value: ${{ jobs.scan.outputs.grype_json_sha256 }}
+
+jobs:
+  scan:
+    name: Scan (${{ inputs.container_image_name_postfix }}${{ inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '' }})
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      actions: read  # artifact fallback download
+      security-events: write
+      pull-requests: write  # for the Grype findings PR comment via _grype-summary
+    outputs:
+      sbom_artifact: ${{ inputs.generate_supply_chain_artifacts && steps.scan.outputs.cyclonedx_artifact_name || '' }}
+      sbom_spdx_artifact: ${{ steps.scan.outputs.spdx_artifact_name }}
+      grype_artifact: ${{ inputs.generate_supply_chain_artifacts && steps.scan.outputs.grype_artifact_name || '' }}
+      sbom_cyclonedx_sha256: ${{ steps.predicate-hashes.outputs.sbom_cyclonedx_sha256 }}
+      grype_json_sha256: ${{ steps.predicate-hashes.outputs.grype_json_sha256 }}
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ inputs.container_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image
+        id: image
+        uses: hwinther/reusable-workflows/.github/actions/_resolve-image-handoff@v2
+        with:
+          image: ${{ inputs.image }}
+
+      - name: Generate SBOM and scan with Grype
+        id: scan
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2
+        with:
+          image_ref: ${{ steps.image.outputs.image_ref }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          artifact_name_suffix: ${{ inputs.artifact_name_suffix }}
+          grype_scan_enabled: ${{ inputs.grype_scan_enabled }}
+          grype_severity_cutoff: ${{ inputs.grype_severity_cutoff }}
+          grype_only_fixed: ${{ inputs.grype_only_fixed }}
+          grype_fail_build: ${{ inputs.grype_fail_build == 'always' || (inputs.grype_fail_build == 'auto' && github.event_name != 'pull_request') }}
+          code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
+          release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
+          cosign_supply_chain_attest_enabled: ${{ inputs.generate_supply_chain_artifacts }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Hash supply-chain predicates
+        id: predicate-hashes
+        if: ${{ inputs.generate_supply_chain_artifacts }}
+        shell: bash
+        env:
+          CYCLONEDX_PATH: ${{ steps.scan.outputs.sbom_cyclonedx_path }}
+          GRYPE_PATH: ${{ steps.scan.outputs.grype_json_path }}
+        run: |
+          set -euo pipefail
+          sbom_sha=$(sha256sum "$CYCLONEDX_PATH" | cut -d' ' -f1)
+          grype_sha=$(sha256sum "$GRYPE_PATH" | cut -d' ' -f1)
+          echo "sbom_cyclonedx_sha256=$sbom_sha" >> "$GITHUB_OUTPUT"
+          echo "grype_json_sha256=$grype_sha" >> "$GITHUB_OUTPUT"
+          echo "CycloneDX SBOM sha256: $sbom_sha"
+          echo "Grype JSON sha256:     $grype_sha"

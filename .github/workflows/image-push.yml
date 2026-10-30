@@ -1,9 +1,12 @@
 name: "Push image artifact to registry with signatures and attestations"
 
-# Companion to build-and-scan-{docker,dotnet}.yml. Downloads the image
-# artifact those workflows produce, asserts byte-identity with the local
-# digest captured at build time, then tags + pushes + signs + attests using
-# the same supply-chain pipeline as docker-container.yml / dotnet-container.yml.
+# Companion to build-and-scan-{docker,dotnet}.yml and build-image-{docker,dotnet}.yml.
+# With an artifact, downloads it, asserts byte-identity with the local digest
+# captured at build time, then tags + pushes. With a staging ref (repo@digest
+# from build-image-*.yml), copies that exact manifest to the final tags in the
+# registry and asserts the digest is unchanged. Either way it then signs and
+# attests with the same supply-chain pipeline as docker-container.yml /
+# dotnet-container.yml.
 #
 # The caller is responsible for the `if:` gate on the job (PR label, branch,
 # etc.). When the gate is open, every invocation pushes.
@@ -20,7 +23,7 @@ on:
         required: true
         type: string
       artifact_name:
-        description: "Workflow artifact name from build-and-scan-*.yml output (image_artifact)."
+        description: "The image to push: build-and-scan-*.yml `image_artifact`, or build-image-*.yml `image` (a staging ref repo@sha256:... or an artifact name)."
         required: true
         type: string
       container_image_tags:
@@ -28,7 +31,7 @@ on:
         required: true
         type: string
       image_digest:
-        description: "Local image digest (sha256:...) from build-and-scan-*.yml output. Asserted against the loaded artifact."
+        description: "Local image digest (sha256:...) from the build workflow's output. Asserted against the loaded artifact; on a staging ref the registry digest is the identity instead."
         required: true
         type: string
       version:
@@ -114,17 +117,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download and load image artifact
+      - name: Resolve image (staging ref, or download and load the artifact)
         id: load
-        uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v2
+        uses: hwinther/reusable-workflows/.github/actions/_resolve-image-handoff@v2
         with:
-          artifact_name: ${{ inputs.artifact_name }}
+          image: ${{ inputs.artifact_name }}
 
       - name: Assert byte-identity with build-time digest
+        if: ${{ steps.load.outputs.is_registry != 'true' }}
         shell: bash
         env:
           EXPECTED: ${{ inputs.image_digest }}
-          ACTUAL: ${{ steps.load.outputs.image_digest }}
+          ACTUAL: ${{ steps.load.outputs.local_image_id }}
         run: |
           set -euo pipefail
           if [ "$EXPECTED" != "$ACTUAL" ]; then
@@ -197,7 +201,8 @@ jobs:
         id: push
         uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2
         with:
-          image_ref: ${{ steps.load.outputs.local_ref }}
+          image_ref: ${{ steps.load.outputs.image_ref }}
+          source_ref: ${{ steps.load.outputs.is_registry == 'true' && steps.load.outputs.image_ref || '' }}
           container_tags: ${{ inputs.container_image_tags }}
           container_registry: ${{ inputs.container_registry }}
           repository: ${{ needs.prepare-repository-name.outputs.repository }}
@@ -218,7 +223,7 @@ jobs:
           IMAGE_DIGEST: ${{ steps.push.outputs.image_digest }}
           APP_VERSION: ${{ inputs.version }}
           GIT_SHA: ${{ github.sha }}
-          LOCAL_REF: ${{ steps.load.outputs.local_ref }}
+          LOCAL_REF: ${{ steps.load.outputs.image_ref }}
           COSIGN_SUPPLY_CHAIN_ATTEST: ${{ inputs.cosign_sign_enabled && inputs.cosign_supply_chain_attest_enabled }}
         run: |
           echo "### 📦 Container image (PR push, byte-identical to scan + e2e tested artifact)" >> $GITHUB_STEP_SUMMARY

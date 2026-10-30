@@ -1,0 +1,58 @@
+name: "Choose registry or artifact image hand-off"
+description: |
+  Decides how build-image-*.yml hands its image on. Same-repo pull requests
+  from anyone but Dependabot get a staging ref (pr-<N>-<sha7>[-suffix]);
+  everything else gets an empty ref and uses the workflow artifact:
+
+    - Dependabot and fork PRs get a read-only packages token, so they can't push.
+    - Other events (push, workflow_dispatch) have no PR for prune-ghcr.yml to
+      close, so a staging tag would never be deleted.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  container_registry:
+    required: true
+    description: "Registry, e.g. ghcr.io"
+  repository:
+    required: true
+    description: "Lowercased owner/repo."
+  container_image_name_postfix:
+    required: true
+    description: "Image name postfix."
+  suffix:
+    required: false
+    description: "Optional suffix appended to the staging tag (matrix callers)."
+    default: ""
+
+outputs:
+  staging_ref:
+    description: "Full staging ref to push, or empty for the artifact path."
+    value: ${{ steps.choose.outputs.staging_ref }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Choose hand-off
+      id: choose
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        ACTOR: ${{ github.actor }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        BASE_REPO: ${{ github.repository }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        SHA: ${{ github.sha }}
+        REGISTRY: ${{ inputs.container_registry }}
+        REPOSITORY: ${{ inputs.repository }}
+        POSTFIX: ${{ inputs.container_image_name_postfix }}
+        SUFFIX: ${{ inputs.suffix }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT" = "pull_request" ] && [ "$HEAD_REPO" = "$BASE_REPO" ] && [ "$ACTOR" != "dependabot[bot]" ]; then
+          ref="${REGISTRY}/${REPOSITORY}/${POSTFIX}:pr-${PR_NUMBER}-${SHA:0:7}${SUFFIX:+-$SUFFIX}"
+          echo "staging_ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "Hand-off: registry ($ref)"
+        else
+          echo "Hand-off: workflow artifact (event=$EVENT, actor=$ACTOR, head=${HEAD_REPO:-n/a})"
+        fi
