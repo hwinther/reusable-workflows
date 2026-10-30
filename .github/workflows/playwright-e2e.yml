@@ -35,6 +35,11 @@ on:
         required: false
         type: boolean
         default: false
+      node_modules_cache_enabled:
+        description: "Cache <playwright_working_directory>/node_modules, keyed by runner OS/arch, the exact Node version, package-lock.json and playwright_install_command. On an exact hit the install step is skipped. Opt-in; needs package-lock.json in playwright_working_directory, so it does not suit npm workspaces that hoist to a parent directory."
+        required: false
+        type: boolean
+        default: false
       playwright_install_command:
         description: "Command to install npm deps in playwright_working_directory."
         required: false
@@ -161,7 +166,38 @@ jobs:
           registry-url: ${{ inputs.npm_registry_url }}
           scope: ${{ inputs.npm_scope }}
 
+      # The npm download cache from setup-node still leaves `npm ci` to unpack and link the whole
+      # tree (~45s for a typical frontend). Caching node_modules itself skips that. The exact Node
+      # version is in the key because packages with native builds are tied to it.
+      - name: node_modules cache key
+        id: node-modules-key
+        if: ${{ inputs.node_modules_cache_enabled }}
+        shell: bash
+        working-directory: ${{ inputs.playwright_working_directory }}
+        env:
+          INSTALL_CMD: ${{ inputs.playwright_install_command }}
+          RUNNER_ARCH_NAME: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          if [ ! -f package-lock.json ]; then
+            echo "::notice::No package-lock.json in ${PWD}; node_modules cache disabled."
+            exit 0
+          fi
+          lock=$(sha256sum package-lock.json | cut -c1-16)
+          cmd=$(printf '%s' "$INSTALL_CMD" | sha256sum | cut -c1-8)
+          echo "key=${RUNNER_OS}-${RUNNER_ARCH_NAME}-node-modules-$(node -v)-${lock}-${cmd}" >> "$GITHUB_OUTPUT"
+          echo "path=${PWD}/node_modules" >> "$GITHUB_OUTPUT"
+
+      - name: Restore node_modules
+        id: node-modules-cache
+        if: ${{ steps.node-modules-key.outputs.key != '' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.node-modules-key.outputs.path }}
+          key: ${{ steps.node-modules-key.outputs.key }}
+
       - name: Install npm dependencies
+        if: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -170,6 +206,14 @@ jobs:
         run: |
           set -euo pipefail
           eval "$INSTALL_CMD"
+
+      # Saved straight after the install, so a failing test run still leaves a warm cache.
+      - name: Save node_modules
+        if: ${{ steps.node-modules-key.outputs.key != '' && steps.node-modules-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.node-modules-key.outputs.path }}
+          key: ${{ steps.node-modules-key.outputs.key }}
 
       - name: Resolve Playwright version (for cache key)
         id: playwright-version
