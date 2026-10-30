@@ -119,7 +119,7 @@ jobs:
 
       - name: Resolve image (staging ref, or download and load the artifact)
         id: load
-        uses: hwinther/reusable-workflows/.github/actions/_resolve-image-handoff@v2
+        uses: hwinther/reusable-workflows/.github/actions/_resolve-image-handoff@v2.6.0
         with:
           image: ${{ inputs.artifact_name }}
 
@@ -199,7 +199,7 @@ jobs:
 
       - name: Push image and attach signatures + attestations
         id: push
-        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2
+        uses: hwinther/reusable-workflows/.github/actions/_push-image-with-signatures@v2.6.0
         with:
           image_ref: ${{ steps.load.outputs.image_ref }}
           source_ref: ${{ steps.load.outputs.is_registry == 'true' && steps.load.outputs.image_ref || '' }}
