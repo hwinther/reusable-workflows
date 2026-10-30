@@ -374,6 +374,9 @@ jobs:
             keep_n=$(awk -F'\t' '$2=="KEEP"'  /tmp/verdicts.tsv | wc -l | tr -d ' ')
             prune_n=$(awk -F'\t' '$2=="PRUNE"' /tmp/verdicts.tsv | wc -l | tr -d ' ')
             echo "  KEEP=$keep_n PRUNE=$prune_n"
+            # Verdicts by reason, with the digest/label/PR detail stripped.
+            awk -F'\t' '{print $2 "\t" $3}' /tmp/verdicts.tsv \
+              | sed -E 's/\([^)]*\)//g; s/:sha256:[a-f0-9]+//' | sort | uniq -c | sed 's/^/   /'
             TOTAL_KEEP=$((TOTAL_KEEP + keep_n))
             TOTAL_PRUNE=$((TOTAL_PRUNE + prune_n))
 
