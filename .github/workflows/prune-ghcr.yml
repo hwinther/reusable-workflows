@@ -184,10 +184,15 @@ jobs:
             exit 0
           fi
 
-          # GHCR accepts the GitHub token base64-encoded as a Bearer for
-          # repos the token has read access to. Same trick used by the
-          # docker/login-action under the hood.
-          REGISTRY_TOKEN=$(printf '%s' "$GH_TOKEN" | base64)
+          # Registry reads need a registry token. Exchange the GitHub token for
+          # a pull-scoped one per package, as docker login does. (Sending the
+          # GitHub token itself as the Bearer made every manifest fetch fail,
+          # so untagged versions were all kept as manifest-fetch-failed.)
+          registry_token() {
+            curl -sS --fail -u "$OWNER_LC:$GH_TOKEN" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:$OWNER_LC/$1:pull" \
+              | jq -r '.token // empty'
+          }
 
           fetch_manifest_classification() {
             # Echoes one of:
@@ -198,11 +203,13 @@ jobs:
             local resp
             if ! resp=$(curl -sS --fail \
                 -H "Authorization: Bearer $REGISTRY_TOKEN" \
-                -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-                -H "Accept: application/vnd.oci.image.index.v1+json" \
-                -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-                -H "Accept: application/vnd.docker.distribution.manifest.list.v2+json" \
-                "https://ghcr.io/v2/$OWNER_LC/$pkg/manifests/$digest" 2>/dev/null); then
+                -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json" \
+                "https://ghcr.io/v2/$OWNER_LC/$pkg/manifests/$digest" 2>/tmp/fetch.err); then
+              # Log the first failure per package (stderr: stdout is the verdict).
+              if [ ! -e /tmp/fetch-failed-logged ]; then
+                echo "  WARN: manifest fetch failed for $digest: $(cat /tmp/fetch.err)" >&2
+                touch /tmp/fetch-failed-logged
+              fi
               echo "fetch-failed"
               return 0
             fi
@@ -240,6 +247,12 @@ jobs:
             echo
             echo "=== $pkg ==="
             enc=$(jq -rn --arg s "$pkg" '$s|@uri')
+            rm -f /tmp/fetch-failed-logged
+            if ! REGISTRY_TOKEN=$(registry_token "$pkg") || [ -z "$REGISTRY_TOKEN" ]; then
+              # Untagged versions then classify as manifest-fetch-failed (KEEP).
+              echo "  WARN: no registry token for $pkg"
+              REGISTRY_TOKEN=""
+            fi
 
             if ! gh api "/users/$OWNER/packages/container/$enc/versions" --paginate \
                 --jq '.[] | {id, name, tags: (.metadata.container.tags // [])}' \
