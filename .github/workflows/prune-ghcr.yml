@@ -2,7 +2,8 @@ name: "Prune GHCR images (reusable)"
 
 # Deletes:
 #   - untagged manifests that are NOT OCI 1.1 referrers (i.e. not attestations
-#     pointing at another image via .subject.digest)
+#     pointing at another image via .subject.digest) and not a child of an
+#     index (multi-arch platform manifests follow their index)
 #   - tagged manifests whose only tags are GitVersion prerelease semvers
 #     (X.Y.Z-<label>.<n>) for branches that no longer exist on origin
 #   - tagged manifests whose only tags belong to a closed pull request: pr-<N>
@@ -194,22 +195,31 @@ jobs:
               | jq -r '.token // empty'
           }
 
-          fetch_manifest_classification() {
-            # Echoes one of:
-            #   attestation:<subject-digest>   (OCI 1.1 referrer — keep)
-            #   orphan                         (untagged, not a referrer — prune)
-            #   fetch-failed                   (network/auth blip — fail-safe keep)
+          fetch_manifest() {
+            # Prints the manifest JSON; returns non-zero if it cannot be read.
             local pkg="$1" digest="$2"
-            local resp
-            if ! resp=$(curl -sS --fail \
+            if ! curl -sS --fail \
                 -H "Authorization: Bearer $REGISTRY_TOKEN" \
                 -H "Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.v2+json, application/vnd.docker.distribution.manifest.list.v2+json" \
-                "https://ghcr.io/v2/$OWNER_LC/$pkg/manifests/$digest" 2>/tmp/fetch.err); then
-              # Log the first failure per package (stderr: stdout is the verdict).
+                "https://ghcr.io/v2/$OWNER_LC/$pkg/manifests/$digest" 2>/tmp/fetch.err; then
+              # Log the first failure per package (stderr: stdout is the caller's).
               if [ ! -e /tmp/fetch-failed-logged ]; then
                 echo "  WARN: manifest fetch failed for $digest: $(cat /tmp/fetch.err)" >&2
                 touch /tmp/fetch-failed-logged
               fi
+              return 1
+            fi
+          }
+
+          fetch_manifest_classification() {
+            # Echoes one of:
+            #   attestation:<subject-digest>   (OCI 1.1 referrer — follows its subject)
+            #   orphan                         (untagged, not a referrer — prune,
+            #                                   unless pass 1b finds it in an index)
+            #   fetch-failed                   (network/auth blip — fail-safe keep)
+            local pkg="$1" digest="$2"
+            local resp
+            if ! resp=$(fetch_manifest "$pkg" "$digest"); then
               echo "fetch-failed"
               return 0
             fi
@@ -354,6 +364,33 @@ jobs:
               fi
             done < /tmp/versions.json
 
+            # Pass 1b: the platform manifests (and buildx attestation
+            # manifests) of a multi-arch index are untagged and have no
+            # subject, so they look like orphans. Collect the children of every
+            # tagged index and make them follow their index in pass 2. If any
+            # tagged manifest cannot be read, its children are unknown, so no
+            # untagged version is pruned as an orphan.
+            : > /tmp/children.tsv
+            children_unknown=false
+            while IFS=$'\t' read -r _id _verdict _reason digest tags_csv; do
+              [ -n "$tags_csv" ] || continue
+              if ! resp=$(fetch_manifest "$pkg" "$digest"); then
+                children_unknown=true
+                continue
+              fi
+              echo "$resp" | jq -r --arg p "$digest" '.manifests[]? | "\(.digest)\t\($p)"' >> /tmp/children.tsv
+            done < /tmp/verdicts.tsv
+            echo "  index children: $(wc -l < /tmp/children.tsv | tr -d ' ')"
+            awk -F'\t' -v OFS='\t' -v unknown="$children_unknown" '
+              FILENAME==ARGV[1] { parent[$1]=$2; next }
+              $2=="PRUNE" && $3=="untagged-orphan" {
+                if ($4 in parent) { $2="DEFER"; $3="index-child:" parent[$4] }
+                else if (unknown=="true") { $2="KEEP"; $3="index-children-unknown" }
+              }
+              { print }
+            ' /tmp/children.tsv /tmp/verdicts.tsv > /tmp/verdicts.1b.tsv
+            mv /tmp/verdicts.1b.tsv /tmp/verdicts.tsv
+
             # Pass 2: resolve DEFER rows (signature tags and untagged referrers)
             # by looking up the parent digest's verdict in the rows we just
             # wrote. A parent that is not in the package at all was deleted
@@ -363,7 +400,8 @@ jobs:
             awk -F'\t' '$2=="DEFER"'  /tmp/verdicts.tsv > /tmp/verdicts.defer.tsv
             while IFS=$'\t' read -r id _verdict reason digest tags_csv; do
               if [ -z "$tags_csv" ]; then
-                parent_digest=${reason#attestation:}
+                # attestation:<subject> or index-child:<index>
+                parent_digest=${reason#*:}
               else
                 first=$(echo "$tags_csv" | tr ',' '\n' | head -1)
                 parent_digest="sha256:$(echo "$first" | sed -E 's/^sha256-([a-f0-9]{64}).*/\1/')"
