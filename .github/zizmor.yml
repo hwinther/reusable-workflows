@@ -1,0 +1,9 @@
+# Internal refs (this repo's own actions and workflows) use @v2 on main; the release workflow
+# freezes them to the release tag (tag-and-release.yml), and callers pin releases by SHA.
+# A config replaces zizmor's default policy, so the blanket hash-pin is restated for the rest.
+rules:
+  unpinned-uses:
+    config:
+      policies:
+        "hwinther/reusable-workflows/*": ref-pin
+        "*": hash-pin
