@@ -15,7 +15,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 - **`dotnet-container.yml`** — same pipeline as above using `dotnet publish -t:PublishContainer` for the build.
 - **`build-and-scan-docker.yml`** / **`build-and-scan-dotnet.yml`** — same build + SBOM + Grype gate **without** push. Uploads the loaded image as a workflow artifact for byte-identical hand-off to e2e and an optional later push.
 - **`image-push.yml`** — downloads the image artifact from `build-and-scan-*.yml`, asserts byte-identity against the build-time digest, then `_push-image-with-signatures` (sign + attest + provenance). Caller owns the `if:` gate (PR label, branch, …).
-- **`prune-ghcr.yml`** — deletes orphaned GHCR manifests: untagged non-referrer manifests, prerelease tags for branches no longer on origin, and dangling cosign legacy `.sig`/`.att`/`.sbom` tags.
+- **`prune-ghcr.yml`** — deletes orphaned GHCR manifests: untagged non-referrer manifests, prerelease tags for branches no longer on origin, tags of closed pull requests (`pr-<N>`, `X.Y.Z-PullRequest<N>.<n>`), and signatures/attestations whose parent is pruned or gone (cosign legacy `.sig`/`.att`/`.sbom` tags, `sha256-<digest>` referrers-tag indexes, untagged OCI 1.1 referrers). Callers grant `contents: read`, `packages: write` and `pull-requests: read`.
 
 ### Package publishing
 - **`npm-deploy.yml`** — publishes to GitHub Packages (or any npm registry); uses `--tag alpha` when `is_alpha=true`.
