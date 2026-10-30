@@ -506,10 +506,5 @@ jobs:
           retention-days: ${{ inputs.artifact_retention_days }}
           if-no-files-found: warn
 
-      - name: Tear down compose stack
-        if: always()
-        shell: bash
-        env:
-          COMPOSE_FILE: ${{ inputs.compose_file }}
-        run: |
-          docker compose -f "$COMPOSE_FILE" down -v
+      # No compose teardown: the job runs on a fresh hosted runner (runs-on is fixed above), so
+      # `docker compose down -v` only spent ~11s on the critical path before the push jobs.
