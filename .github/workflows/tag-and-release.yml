@@ -245,6 +245,26 @@ jobs:
             git push -f origin "$MAJOR_TAG"
           fi
 
+      # The freeze commits sit off main, so GitHub's automatic comparison base is the
+      # newest tag in main's history (the last v1 tag), and every v2 release listed
+      # every PR since then. Name the previous release explicitly.
+      - name: Find previous release tag
+        id: previous_tag
+        if: github.event.inputs.create_release == 'true'
+        shell: bash
+        env:
+          FULL_TAG: ${{ steps.determine_tag.outputs.tag_name_full }}
+        run: |
+          set -euo pipefail
+          PREV=""
+          if printf '%s' "$FULL_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # The highest plain vX.Y.Z below the new tag.
+            PREV=$( { git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$FULL_TAG" || true; echo "$FULL_TAG"; } \
+              | sort -V | grep -B1 -xF "$FULL_TAG" | grep -vxF "$FULL_TAG" || true)
+          fi
+          echo "Previous release tag: ${PREV:-<none, GitHub chooses>}"
+          echo "tag=$PREV" >> "$GITHUB_OUTPUT"
+
       - name: Create release ${{ steps.determine_tag.outputs.tag_name }}
         id: create_release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
@@ -256,6 +276,7 @@ jobs:
           make_latest: true
           body: ${{ github.event.inputs.release_notes }}
           generate_release_notes: true
+          previous_tag: ${{ steps.previous_tag.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
