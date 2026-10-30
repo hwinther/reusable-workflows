@@ -47,10 +47,10 @@ on:
         type: boolean
         default: true
       release_asset_upload_enabled:
-        description: "Attach generated SBOMs to a matching GitHub Release as release assets. Requires `contents: write`."
+        description: "Attach generated SBOMs to a matching GitHub Release as release assets. Off by default: the scan job only has `contents: read`, so the upload is rejected unless that changes."
         required: false
         type: boolean
-        default: true
+        default: false
       generate_supply_chain_artifacts:
         description: "Generate CycloneDX SBOM and Grype JSON for downstream cosign attestations in image-push.yml"
         required: false
