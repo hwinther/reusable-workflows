@@ -1,0 +1,211 @@
+name: "Build Docker container for e2e (staging push)"
+
+# Build-only companion to build-and-scan-docker.yml for the split pipeline:
+#
+#   build-image-*.yml ──┬─ scan-image.yml ──┐
+#                       └─ playwright-e2e ──┴─ image-push.yml
+#
+# A caller's `needs:` waits for every job of a called workflow, so the scan
+# lives in its own workflow and runs next to e2e instead of before it.
+#
+# On same-repo pull requests the image is pushed to a staging tag
+# (pr-<N>-<sha7>[-suffix]) and handed on as repo@digest: scan, e2e and the
+# final push all pull that digest, so they see the same bytes, and unchanged
+# layers are never uploaded again. Dependabot and fork PRs get a read-only
+# packages token, and other events have no PR to prune with, so they fall
+# back to the workflow artifact. `image` carries whichever was used;
+# scan-image.yml, playwright-e2e.yml and image-push.yml accept both.
+
+on:
+  workflow_call:
+    inputs:
+      container_registry:
+        description: "Container registry, e.g. ghcr.io"
+        default: "ghcr.io"
+        type: string
+      container_image_name_postfix:
+        description: "Container image name postfix, e.g. frontend"
+        required: true
+        type: string
+      build_context:
+        description: "Docker build context, e.g. frontend or ."
+        required: true
+        type: string
+      dockerfile:
+        description: "Dockerfile path, e.g. frontend/Dockerfile"
+        required: true
+        type: string
+      override_config:
+        description: "Override config"
+        required: false
+        type: string
+        default: ""
+      build_args:
+        description: "Newline-separated KEY=VALUE build args, appended after APP_VERSION and GIT_SHA."
+        required: false
+        type: string
+        default: ""
+      additional_tags:
+        description: "Semicolon-separated tag-only strings (no registry, no name) to add alongside gitversion's tags."
+        required: false
+        type: string
+        default: ""
+      use_gitversion_tags:
+        description: "When false, skip gitversion-derived tag computation and use only additional_tags."
+        required: false
+        type: boolean
+        default: true
+      artifact_retention_days:
+        description: "Retention for the image artifact on the fallback path."
+        required: false
+        type: number
+        default: 1
+      artifact_name_suffix:
+        description: "Disambiguates matrix callers that share container_image_name_postfix: appended to the staging tag and the artifact name."
+        required: false
+        type: string
+        default: ""
+    secrets:
+      npm_auth_token:
+        description: "When set, exposed to the Docker build as a BuildKit secret with id `npm_auth_token`."
+        required: false
+    outputs:
+      image:
+        description: "The hand-off: repo@digest (staging push) or a workflow artifact name (fallback). Pass to scan-image.yml, playwright-e2e.yml and image-push.yml."
+        value: ${{ jobs.build.outputs.image }}
+      image_ref:
+        description: "Staging image as repo@sha256:..., empty on the artifact fallback."
+        value: ${{ jobs.build.outputs.image_ref }}
+      image_artifact:
+        description: "Workflow artifact name, empty when the image was staged in the registry."
+        value: ${{ jobs.build.outputs.image_artifact }}
+      image_digest:
+        description: "Local image ID (sha256:...). image-push.yml asserts it on the artifact path."
+        value: ${{ jobs.build.outputs.image_digest }}
+      container_image_tags:
+        description: "Full image refs for the final push (registry/name:tag, comma-separated). Includes any additional_tags."
+        value: ${{ jobs.build.outputs.container_tags }}
+      image_tags:
+        description: "Image tags only (semicolon-separated)."
+        value: ${{ jobs.gitversion.outputs.image_tags }}
+      version:
+        description: "GitVersion-derived version string."
+        value: ${{ jobs.gitversion.outputs.version }}
+      is_alpha:
+        description: "Whether the build is from a feature/bugfix branch (string 'true'/'false')."
+        value: ${{ jobs.gitversion.outputs.is_alpha }}
+
+jobs:
+  prepare-repository-name:
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      repository: ${{ steps.lower-repo.outputs.repository }}
+    steps:
+      - id: lower-repo
+        run: |
+          echo "repository=${GITHUB_REPOSITORY@L}" >> $GITHUB_OUTPUT
+
+  gitversion:
+    needs: prepare-repository-name
+    permissions:
+      contents: read
+    uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2
+    with:
+      container_registry: ${{ inputs.container_registry }}
+      container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+      override_config: ${{ inputs.override_config }}
+
+  build:
+    name: Build (${{ needs.gitversion.outputs.container_image_tags }})
+    needs: [prepare-repository-name, gitversion]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write  # staging push; read-only on Dependabot/fork PRs, which take the artifact path
+    outputs:
+      image: ${{ steps.staging.outputs.image_ref || steps.save.outputs.artifact_name }}
+      image_ref: ${{ steps.staging.outputs.image_ref }}
+      image_artifact: ${{ steps.save.outputs.artifact_name }}
+      image_digest: ${{ steps.local-id.outputs.image_id }}
+      container_tags: ${{ steps.tags.outputs.container_tags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ${{ inputs.container_registry }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create docker metadata
+        id: docker-metadata
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
+
+      - name: Compose final container tags
+        id: tags
+        uses: hwinther/reusable-workflows/.github/actions/_compose-image-tags@v2
+        with:
+          gitversion_tags: ${{ needs.gitversion.outputs.container_image_tags }}
+          additional_tags: ${{ inputs.additional_tags }}
+          use_gitversion: ${{ inputs.use_gitversion_tags }}
+          registry: ${{ inputs.container_registry }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          postfix: ${{ inputs.container_image_name_postfix }}
+
+      - name: Build container (load locally)
+        id: build
+        uses: hwinther/reusable-workflows/.github/actions/_build-image-docker@v2
+        with:
+          build_context: ${{ inputs.build_context }}
+          dockerfile: ${{ inputs.dockerfile }}
+          tags: ${{ steps.tags.outputs.container_tags }}
+          app_version: ${{ needs.gitversion.outputs.version }}
+          git_sha: ${{ github.sha }}
+          labels: ${{ steps.docker-metadata.outputs.labels }}
+          build_args: ${{ inputs.build_args }}
+          npm_auth_token: ${{ secrets.npm_auth_token }}
+          # One shared layer cache per image. Read-only tokens (Dependabot, forks) still read it;
+          # their write fails with a warning. Overwritten caches are pruned as untagged orphans.
+          cache_ref: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}:buildcache${{ inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '' }}
+
+      - name: Choose hand-off
+        id: handoff
+        uses: hwinther/reusable-workflows/.github/actions/_choose-image-handoff@v2
+        with:
+          container_registry: ${{ inputs.container_registry }}
+          repository: ${{ needs.prepare-repository-name.outputs.repository }}
+          container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
+          suffix: ${{ inputs.artifact_name_suffix }}
+
+      - name: Record local image ID
+        id: local-id
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.build.outputs.local_ref }}
+        run: |
+          set -euo pipefail
+          echo "image_id=$(docker image inspect --format '{{.Id}}' "$IMAGE_REF")" >> "$GITHUB_OUTPUT"
+
+      - name: Push staging tag
+        id: staging
+        if: ${{ steps.handoff.outputs.staging_ref != '' }}
+        uses: hwinther/reusable-workflows/.github/actions/_push-staging-image@v2
+        with:
+          local_ref: ${{ steps.build.outputs.local_ref }}
+          staging_ref: ${{ steps.handoff.outputs.staging_ref }}
+
+      - name: Save image as workflow artifact
+        id: save
+        if: ${{ steps.handoff.outputs.staging_ref == '' }}
+        uses: hwinther/reusable-workflows/.github/actions/_save-image-artifact@v2
+        with:
+          image_ref: ${{ steps.build.outputs.local_ref }}
+          artifact_name: build-image-${{ inputs.container_image_name_postfix }}${{ inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '' }}-image
+          retention_days: ${{ inputs.artifact_retention_days }}

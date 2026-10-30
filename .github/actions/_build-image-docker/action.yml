@@ -41,6 +41,11 @@ inputs:
     description: "When non-empty, exposed to the build as a BuildKit secret with id `npm_auth_token`. Consume in the Dockerfile via `RUN --mount=type=secret,id=npm_auth_token,target=/run/secrets/npm_auth_token`. Build args are NOT used for this because they leak into image history."
     default: ""
 
+  cache_ref:
+    required: false
+    description: "When non-empty, a registry ref (e.g. ghcr.io/owner/repo/app:buildcache) used as a BuildKit layer cache: read before the build and written after it (mode=max). A failed write only warns, so read-only tokens still benefit from the read."
+    default: ""
+
 outputs:
   local_ref:
     description: "First tag in `tags`, available in the local Docker daemon after this action runs."
@@ -49,8 +54,12 @@ outputs:
 runs:
   using: "composite"
   steps:
+    # cleanup: false skips `docker buildx rm` at job end, which took ~23s on the critical path.
+    # The workflows using this action run on ephemeral GitHub-hosted runners.
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      with:
+        cleanup: false
 
     - name: Build container (load locally, do not push)
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -67,6 +76,8 @@ runs:
           ${{ inputs.build_args }}
         labels: ${{ inputs.labels }}
         secrets: ${{ inputs.npm_auth_token != '' && format('npm_auth_token={0}', inputs.npm_auth_token) || '' }}
+        cache-from: ${{ inputs.cache_ref != '' && format('type=registry,ref={0}', inputs.cache_ref) || '' }}
+        cache-to: ${{ inputs.cache_ref != '' && format('type=registry,ref={0},mode=max,ignore-error=true', inputs.cache_ref) || '' }}
 
     - name: Resolve local ref (first tag)
       id: resolve-ref

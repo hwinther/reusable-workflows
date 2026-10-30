@@ -1,0 +1,56 @@
+name: "Resolve an image hand-off"
+description: |
+  Takes the `image` output of build-image-*.yml, which is either a registry
+  ref (repo@sha256:...) or a workflow artifact name, and returns a ref the
+  next step can use. A registry ref is returned as-is, so tools pull it from
+  the registry by digest. An artifact is downloaded and `docker load`ed.
+
+  Internal — leading underscore signals it's not part of the public surface.
+
+inputs:
+  image:
+    required: true
+    description: "repo@sha256:... or a workflow artifact name."
+
+outputs:
+  image_ref:
+    description: "Registry ref (repo@digest) or the locally-loaded ref."
+    value: ${{ steps.registry.outputs.image_ref || steps.load.outputs.local_ref }}
+  is_registry:
+    description: "'true' when the hand-off was a registry ref."
+    value: ${{ steps.kind.outputs.is_registry }}
+  local_image_id:
+    description: "Local image ID after `docker load` (artifact path only)."
+    value: ${{ steps.load.outputs.image_digest }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Detect hand-off kind
+      id: kind
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: |
+        set -euo pipefail
+        [ -n "$IMAGE" ] || { echo "::error::Empty image hand-off"; exit 1; }
+        if [[ "$IMAGE" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]]; then
+          echo "is_registry=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "is_registry=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Registry ref
+      id: registry
+      if: ${{ steps.kind.outputs.is_registry == 'true' }}
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+      run: echo "image_ref=$IMAGE" >> "$GITHUB_OUTPUT"
+
+    - name: Download and load image artifact
+      id: load
+      if: ${{ steps.kind.outputs.is_registry != 'true' }}
+      uses: hwinther/reusable-workflows/.github/actions/_load-image-artifact@v2
+      with:
+        artifact_name: ${{ inputs.image }}

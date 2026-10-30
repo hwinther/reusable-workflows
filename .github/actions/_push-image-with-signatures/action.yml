@@ -8,7 +8,11 @@ description: |
       `sha256-….att` manifest path via Cosign v2.4.3 for Kyverno 1.17
       compatibility — see CLAUDE.md).
 
-  Two push paths:
+  Three push paths:
+    - **Registry copy** (when `source_ref` is set): copies the manifest at
+      `source_ref` (repo@digest, a staging tag from build-image-*.yml) to each
+      entry in `container_tags` without pulling it, and asserts the digest is
+      unchanged. Byte-identical to what was scanned and e2e-tested.
     - **Single-arch** (default, when `platforms` is single-value): tags the
       already-loaded `image_ref` with each entry in `container_tags` and
       `docker push`es each. Byte-identical to the locally-loaded image.
@@ -32,6 +36,10 @@ inputs:
   image_ref:
     required: true
     description: "Local image reference present in the local Docker daemon (source for `docker tag` in the single-arch path; ignored on the multi-arch path)."
+  source_ref:
+    required: false
+    description: "Registry image as repo@sha256:... to copy to `container_tags` instead of pushing a local image. Single-arch only."
+    default: ""
   container_tags:
     required: true
     description: "Comma-separated full image refs to push (typically gitversion container_image_tags merged with additional_tags)."
@@ -109,8 +117,28 @@ runs:
       if: ${{ contains(inputs.platforms, ',') }}
       uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
 
+    # --prefer-index=false makes a single-source create a carbon copy: the same manifest
+    # bytes under the new tags, so the digest that was scanned and tested is the one signed.
+    - name: Copy staging image to final tags (registry)
+      if: ${{ inputs.source_ref != '' }}
+      shell: bash
+      env:
+        CONTAINER_TAGS: ${{ inputs.container_tags }}
+        SOURCE_REF: ${{ inputs.source_ref }}
+        PLATFORMS: ${{ inputs.platforms }}
+      run: |
+        set -euo pipefail
+        case "$PLATFORMS" in *,*) echo "::error::source_ref supports a single platform only (got $PLATFORMS)"; exit 1 ;; esac
+        args=()
+        while IFS= read -r dest; do
+          dest=$(echo "$dest" | xargs)
+          if [ -n "$dest" ]; then args+=(--tag "$dest"); fi
+        done < <(echo "$CONTAINER_TAGS" | tr ',' '\n')
+        [ "${#args[@]}" -gt 0 ] || { echo "::error::No tag in container_tags ('$CONTAINER_TAGS')"; exit 1; }
+        docker buildx imagetools create --prefer-index=false "${args[@]}" "$SOURCE_REF"
+
     - name: Tag and push image (single-arch)
-      if: ${{ !contains(inputs.platforms, ',') }}
+      if: ${{ inputs.source_ref == '' && !contains(inputs.platforms, ',') }}
       shell: bash
       env:
         CONTAINER_TAGS: ${{ inputs.container_tags }}
@@ -126,7 +154,7 @@ runs:
 
     - name: Build and push image (multi-arch manifest)
       id: buildx-push
-      if: ${{ contains(inputs.platforms, ',') }}
+      if: ${{ inputs.source_ref == '' && contains(inputs.platforms, ',') }}
       uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
       with:
         context: ${{ inputs.build_context }} # zizmor: ignore[template-injection]
@@ -147,6 +175,7 @@ runs:
       env:
         CONTAINER_TAGS: ${{ inputs.container_tags }}
         BUILDX_DIGEST: ${{ steps.buildx-push.outputs.digest }}
+        SOURCE_REF: ${{ inputs.source_ref }}
       run: |
         set -euo pipefail
         if [ -n "${BUILDX_DIGEST:-}" ]; then
@@ -157,6 +186,10 @@ runs:
           DIGEST=$(docker buildx imagetools inspect "$REF" | awk '/^Digest:[[:space:]]+/ {print $2; exit}')
         fi
         [ -n "$DIGEST" ] || { echo "::error::Failed to resolve image digest"; exit 1; }
+        if [ -n "$SOURCE_REF" ] && [ "$DIGEST" != "${SOURCE_REF#*@}" ]; then
+          echo "::error::Pushed digest $DIGEST differs from the staging digest ${SOURCE_REF#*@}; the copy was not byte-identical."
+          exit 1
+        fi
         echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
         echo "Pushed digest: $DIGEST"
 

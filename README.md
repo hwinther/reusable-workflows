@@ -14,7 +14,9 @@ Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 - **`docker-container.yml`** — gitversion → `docker buildx` → SBOM (Anchore) → Grype scan → push to GHCR → Cosign keyless sign → Cosign CycloneDX + vuln attestations → GitHub build provenance attestation. Single-job, push-always. Supports multi-arch (`platforms`), per-arch scanning, and `build_args` for base-image chaining.
 - **`dotnet-container.yml`** — same pipeline as above using `dotnet publish -t:PublishContainer` for the build.
 - **`build-and-scan-docker.yml`** / **`build-and-scan-dotnet.yml`** — same build + SBOM + Grype gate **without** push. Uploads the loaded image as a workflow artifact for byte-identical hand-off to e2e and an optional later push.
-- **`image-push.yml`** — downloads the image artifact from `build-and-scan-*.yml`, asserts byte-identity against the build-time digest, then `_push-image-with-signatures` (sign + attest + provenance). Caller owns the `if:` gate (PR label, branch, …).
+- **`build-image-docker.yml`** / **`build-image-dotnet.yml`** — build only, for the split PR pipeline. On same-repo PRs the image is pushed to a staging tag `pr-<N>-<sha7>` and handed on as `repo@digest` (output `image`). Dependabot, fork and non-PR runs fall back to a workflow artifact. Docker builds use a registry layer cache (`:buildcache`). Callers grant `packages: write`.
+- **`scan-image.yml`** — SBOM + Grype gate for the `image` hand-off of `build-image-*.yml`, as its own workflow so it runs next to e2e instead of before it. Same scan outputs as `build-and-scan-*.yml`.
+- **`image-push.yml`** — takes an artifact (`build-and-scan-*.yml`) or the `image` hand-off of `build-image-*.yml`. An artifact is loaded and checked against the build-time digest, then pushed. A staging ref is copied to the final tags in the registry and its digest asserted unchanged. Then `_push-image-with-signatures` (sign + attest + provenance). Caller owns the `if:` gate (PR label, branch, …).
 - **`prune-ghcr.yml`** — deletes orphaned GHCR manifests: untagged non-referrer manifests, prerelease tags for branches no longer on origin, tags of closed pull requests (`pr-<N>`, `X.Y.Z-PullRequest<N>.<n>`), and signatures/attestations whose parent is pruned or gone (cosign legacy `.sig`/`.att`/`.sbom` tags, `sha256-<digest>` referrers-tag indexes, untagged OCI 1.1 referrers). Callers grant `contents: read`, `packages: write` and `pull-requests: read`.
 
 ### Package publishing
@@ -50,7 +52,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`.
 - **`manifests`** — app manifests as a Flux OCI artifact. `mode: push` renders kustomize directories with images pinned to `tag@digest`, validates them (kubeconform + a `${VAR}` contract check against the nearest `README.md`), runs `flux push artifact` and cosign-signs the digest; `mode: diff` posts a PR report (change summary, Mermaid resource map per render, dyff per changed resource) to the job summary and a sticky comment. Runs in the **consumer's own job**, like `sign-image`, so the artifact's cosign identity is the consumer's workflow and the cluster's `OCIRepository.verify.matchOIDCIdentity` can pin it.
 - **`verify-image`** — read-only end-to-end smoke test. Pulls signature + attestation metadata back from the registry and runs `cosign verify`, `cosign verify-attestation --type cyclonedx`, `cosign verify-attestation --type vuln`, `gh attestation verify`, plus a tag → digest resolution check. Useful as a final job in the publishing pipeline so signing/attestation breakage shows up in CI instead of at the consumer's admission controller.
 
-Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_dotnet-add-nuget-source`.
+Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_push-staging-image`, `_choose-image-handoff`, `_resolve-image-handoff`, `_dotnet-add-nuget-source`.
 
 ## Typical usage patterns
 
@@ -100,6 +102,29 @@ consumer caller workflow  (on: pull_request)
                     ├─ cosign sign (keyless OIDC)
                     └─ cosign attest CycloneDX + Grype vuln  (Kyverno-friendly)
 ```
+
+### Container PR flow, split — registry hand-off, scan next to e2e
+
+A caller's `needs:` waits for every job of a called workflow, so with `build-and-scan-*.yml` e2e can't start until the scan is done. The split flow builds, stages the image in the registry, and scans and tests it in parallel. Every job references the same `repo@digest`.
+
+```
+consumer caller workflow  (on: pull_request)
+        │
+        ├─ build-image-{docker,dotnet}.yml ─────────────┐  outputs:
+        │     ├─ gitversion                             │    image  (repo@digest or artifact)
+        │     ├─ _build-image-{docker,dotnet}           │    image_digest, container_image_tags
+        │     └─ _push-staging-image  (pr-<N>-<sha7>)   │
+        │        or _save-image-artifact (fallback)     │
+        │                                               │
+        ├─ scan-image.yml      (needs: build) ◀─────────┤
+        ├─ playwright-e2e.yml  (needs: build) ◀─────────┤   (parallel)
+        │                                               │
+        └─ image-push.yml      (needs: build, scan, e2e; if: label)
+              ├─ imagetools create --prefer-index=false  (registry copy, digest asserted)
+              └─ _push-image-with-signatures  (attest + cosign sign/attest, as above)
+```
+
+`prune-ghcr.yml` deletes `pr-<N>-*` staging tags once the PR is closed.
 
 ### Container release — push to `main` or a `v*` tag
 

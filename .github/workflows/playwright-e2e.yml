@@ -52,10 +52,11 @@ on:
         default: ""
       image_artifacts_json:
         description: |
-          JSON object mapping docker-compose env var names to workflow artifact names produced by
-          build-and-scan-{docker,dotnet}.yml. Each artifact is downloaded and `docker load`ed; the
-          env var is set to the loaded image ref before `docker compose up`. Example:
-          {"API_IMAGE":"build-and-scan-api-image","FRONTEND_IMAGE":"build-and-scan-frontend-image"}
+          JSON object mapping docker-compose env var names to images. Each value is either a workflow
+          artifact name from build-and-scan-{docker,dotnet}.yml (downloaded and `docker load`ed), or the
+          `image` output of build-image-{docker,dotnet}.yml, which may be a registry ref
+          (repo@sha256:...) that compose pulls by digest. The env var is set before `docker compose up`.
+          Example: {"API_IMAGE":"build-and-scan-api-image","FRONTEND_IMAGE":"ghcr.io/o/r/frontend@sha256:..."}
         required: true
         type: string
       report_paths_json:
@@ -212,7 +213,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: npx playwright install-deps $BROWSERS
 
-      - name: Download image artifacts and load into local Docker daemon
+      - name: Resolve images (download artifacts, or use registry refs)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_ARTIFACTS_JSON: ${{ inputs.image_artifacts_json }}
@@ -221,9 +222,15 @@ jobs:
           set -euo pipefail
           download_dir="${RUNNER_TEMP}/e2e-images"
           mkdir -p "$download_dir"
-          # Iterate JSON entries: { "<ENV_VAR>": "<artifact_name>", ... }
+          # Iterate JSON entries: { "<ENV_VAR>": "<artifact_name or repo@sha256:...>", ... }
           while IFS=$'\t' read -r env_var artifact_name; do
             [ -z "$env_var" ] || [ -z "$artifact_name" ] && continue
+            # A staging ref from build-image-*.yml: compose pulls it by digest.
+            if [[ "$artifact_name" =~ ^[^[:space:]]+@sha256:[a-f0-9]{64}$ ]]; then
+              echo "${env_var}=${artifact_name}" >> "$GITHUB_ENV"
+              echo "Set ${env_var}=${artifact_name} (registry)"
+              continue
+            fi
             target="$download_dir/$artifact_name"
             mkdir -p "$target"
             echo "Downloading artifact $artifact_name -> $target"
