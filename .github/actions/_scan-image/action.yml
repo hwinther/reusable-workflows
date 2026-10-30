@@ -112,6 +112,27 @@ runs:
         echo "grype_artifact_name=container-image-${POSTFIX}${name_suffix}.grype.json" >> "$GITHUB_OUTPUT"
         echo "pr_comment_identifier=grype-summary-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
 
+    # Downloading and installing the vulnerability DB is ~75s of every scan. Anchore
+    # publishes one build a day (around 06:30 UTC), so the key rolls over at 08:00 UTC
+    # rather than midnight: a cache saved before that day's build would be stale, and
+    # every later run would download again. Grype still checks for a newer DB on a hit.
+    - name: Grype DB cache key
+      id: grype-db
+      if: ${{ inputs.grype_scan_enabled == 'true' || inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "key=grype-db-v6-$(date -u -d '-8 hours' +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+        echo "dir=${XDG_CACHE_HOME:-$HOME/.cache}/grype/db" >> "$GITHUB_OUTPUT"
+
+    - name: Restore Grype DB
+      id: grype-db-restore
+      if: ${{ steps.grype-db.outputs.key != '' }}
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.grype-db.outputs.dir }}
+        key: ${{ steps.grype-db.outputs.key }}
+
     - name: Generate SBOM (SPDX)
       uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       with:
@@ -213,3 +234,24 @@ runs:
         name: ${{ steps.paths.outputs.grype_artifact_name }}
         path: ${{ steps.paths.outputs.grype_json_path }}
         if-no-files-found: error
+
+    # Last, and on always(), so a failed gate still leaves the DB for the next run.
+    # hashFiles() can't see outside the workspace, hence the explicit check.
+    - name: Check for a new Grype DB
+      id: grype-db-new
+      if: ${{ always() && steps.grype-db.outputs.key != '' && steps.grype-db-restore.outputs.cache-hit != 'true' }}
+      shell: bash
+      env:
+        DB_DIR: ${{ steps.grype-db.outputs.dir }}
+      run: |
+        if [ -n "$(find "$DB_DIR" -name '*.db' -print -quit 2>/dev/null)" ]; then
+          echo "present=true" >> "$GITHUB_OUTPUT"
+        fi
+
+    # Parallel jobs that all missed race for the key; the losers only log a warning.
+    - name: Save Grype DB
+      if: ${{ always() && steps.grype-db-new.outputs.present == 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.grype-db.outputs.dir }}
+        key: ${{ steps.grype-db.outputs.key }}

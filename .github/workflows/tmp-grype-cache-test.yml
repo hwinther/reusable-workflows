@@ -1,0 +1,25 @@
+name: tmp grype cache test
+
+# TEMPORARY: exercises the _scan-image Grype DB cache from this branch. Remove before merge.
+on:
+  push:
+    branches: [perf/grype-db-cache]
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: docker pull nginx:1.27-alpine
+      - uses: ./.github/actions/_scan-image
+        with:
+          image_ref: nginx:1.27-alpine
+          container_image_name_postfix: cachetest-${{ github.run_attempt }}
+          grype_fail_build: "false"
+          code_scanning_upload_enabled: "false"
+          release_asset_upload_enabled: "false"
