@@ -7,3 +7,7 @@ rules:
       policies:
         "hwinther/reusable-workflows/*": ref-pin
         "*": hash-pin
+  # GitHub applies a default Dependabot cooldown, so dependabot.yml leaves it out (#186); zizmor
+  # only sees the missing block.
+  dependabot-cooldown:
+    disable: true
