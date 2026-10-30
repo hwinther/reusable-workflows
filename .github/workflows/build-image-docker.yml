@@ -171,6 +171,9 @@ jobs:
           labels: ${{ steps.docker-metadata.outputs.labels }}
           build_args: ${{ inputs.build_args }}
           npm_auth_token: ${{ secrets.npm_auth_token }}
+          # One shared layer cache per image. Read-only tokens (Dependabot, forks) still read it;
+          # their write fails with a warning. Overwritten caches are pruned as untagged orphans.
+          cache_ref: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}:buildcache${{ inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '' }}
 
       - name: Choose hand-off
         id: handoff
