@@ -104,13 +104,13 @@ jobs:
 
       - name: Resolve image
         id: image
-        uses: hwinther/reusable-workflows/.github/actions/_resolve-image-handoff@v2
+        uses: hwinther/reusable-workflows/.github/actions/_resolve-image-handoff@feat/registry-image-handoff
         with:
           image: ${{ inputs.image }}
 
       - name: Generate SBOM and scan with Grype
         id: scan
-        uses: hwinther/reusable-workflows/.github/actions/_scan-image@v2
+        uses: hwinther/reusable-workflows/.github/actions/_scan-image@feat/registry-image-handoff
         with:
           image_ref: ${{ steps.image.outputs.image_ref }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
