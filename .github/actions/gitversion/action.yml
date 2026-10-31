@@ -52,6 +52,21 @@ runs:
       fetch-tags: true
       persist-credentials: ${{ inputs.persist_checkout_credentials == 'true' }}
 
+  # A tag build checks out a detached HEAD. When no branch points at the tagged commit any more
+  # (main moved on after tagging), GitVersion's build-agent normalisation creates a "fake branch"
+  # and fetches the remote looking for a pull-request ref. Without persisted credentials that fails
+  # in a private repo ("remote authentication required but no callback set"). A local branch at
+  # HEAD skips the fetch; the version still comes from the exact tag.
+  - name: Give a detached tag build a local branch
+    if: github.ref_type == 'tag'
+    shell: bash
+    env:
+      REF_NAME: ${{ github.ref_name }}
+    run: |
+      if [ -z "$(git for-each-ref --points-at HEAD --format='%(refname)' refs/heads)" ]; then
+        git checkout -q -B "gitversion-build-$REF_NAME"
+      fi
+
   - name: Install GitVersion
     uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
     with:
