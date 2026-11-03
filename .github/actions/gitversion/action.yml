@@ -56,15 +56,16 @@ runs:
   # (main moved on after tagging), GitVersion's build-agent normalisation creates a "fake branch"
   # and fetches the remote looking for a pull-request ref. Without persisted credentials that fails
   # in a private repo ("remote authentication required but no callback set"). A local branch at
-  # HEAD skips the fetch; the version still comes from the exact tag.
-  - name: Give a detached tag build a local branch
+  # HEAD skips the fetch. It must be named main: GitVersion versions an unknown branch like a
+  # feature branch, labelled and incremented (v0.3.0 built as 0.3.1-gitversion-build-v0-3-0.1),
+  # while on main a tag on the current commit is the version. The checkout has no local branches,
+  # so this replaces nothing.
+  - name: Give a detached tag build a local main branch
     if: github.ref_type == 'tag'
     shell: bash
-    env:
-      REF_NAME: ${{ github.ref_name }}
     run: |
       if [ -z "$(git for-each-ref --points-at HEAD --format='%(refname)' refs/heads)" ]; then
-        git checkout -q -B "gitversion-build-$REF_NAME"
+        git checkout -q -B main
       fi
 
   - name: Install GitVersion
