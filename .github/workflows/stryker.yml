@@ -1,4 +1,4 @@
-name: "Stryker mutasjonstesting (gjenbrukbar)"
+name: "Stryker mutation testing (reusable)"
 
 # Two optional jobs:
 #   dotnet-stryker — `dotnet stryker` against a .NET solution.
@@ -14,39 +14,39 @@ on:
       run_dotnet_stryker:
         required: false
         type: boolean
-        description: "Kjør dotnet-stryker-jobben."
+        description: "Run the dotnet-stryker job."
         default: false
       run_node_stryker:
         required: false
         type: boolean
-        description: "Kjør node-stryker-jobben."
+        description: "Run the node-stryker job."
         default: true
 
       dotnet_version:
         required: false
         type: string
-        description: ".NET versjon, f.eks. 10.0.x."
+        description: ".NET version, e.g. 10.0.x."
         default: "10.0.x"
       solution_path:
         required: false
         type: string
-        description: "Mappen som inneholder .NET solution-filen. Påkrevd når run_dotnet_stryker = true."
+        description: "Directory containing the .NET solution file. Required when run_dotnet_stryker = true."
         default: ""
       solution_name:
         required: false
         type: string
-        description: "Navn på solution-filen (f.eks. ClutterStock.slnx). Påkrevd når run_dotnet_stryker = true."
+        description: "Solution file name (e.g. ClutterStock.slnx). Required when run_dotnet_stryker = true."
         default: ""
 
       node_version:
         required: false
         type: string
-        description: "Node versjon, f.eks. 26.x."
+        description: "Node version, e.g. 26.x."
         default: "26.x"
       node_working_directory:
         required: false
         type: string
-        description: "Mappen som inneholder Node-prosjektet. Påkrevd når run_node_stryker = true."
+        description: "Directory containing the Node project. Required when run_node_stryker = true."
         default: ""
 
       mutation_level:
@@ -57,44 +57,44 @@ on:
       extra_arguments:
         required: false
         type: string
-        description: "Ekstra flagg som sendes uendret til `dotnet stryker`."
+        description: "Extra flags passed as is to `dotnet stryker`."
         default: "--diag"
 
       dotnet_artifact_name:
         required: false
         type: string
-        description: "Navn på upload-artifact for dotnet-rapporten."
+        description: "Artifact name for the dotnet report."
         default: "stryker-report-dotnet"
       node_artifact_name:
         required: false
         type: string
-        description: "Navn på upload-artifact for node-rapporten."
+        description: "Artifact name for the node report."
         default: "stryker-report-node"
 
       npm_registry_url:
         required: false
         type: string
-        description: "npm registry-URL som sendes til actions/setup-node. Standard er GitHub Packages."
+        description: "npm registry URL passed to actions/setup-node. Defaults to GitHub Packages."
         default: "https://npm.pkg.github.com"
       npm_scope:
         required: false
         type: string
-        description: "npm scope, f.eks. '@org'."
+        description: "npm scope, e.g. '@org'."
         default: ''
       primary_nuget_source:
         required: false
         type: string
-        description: "Primær NuGet-feed-URL sendt til actions/setup-dotnet via source-url. Tom = standard nuget.org."
+        description: "Primary NuGet feed URL passed to actions/setup-dotnet as source-url. Empty = nuget.org."
         default: ''
       extra_nuget_source:
         required: false
         type: string
-        description: "Ekstra privat NuGet-feed lagt til via `dotnet nuget add source` før restore."
+        description: "Extra private NuGet feed added with `dotnet nuget add source` before restore."
         default: ''
       extra_nuget_source_name:
         required: false
         type: string
-        description: "Navn på den ekstra NuGet-kilden."
+        description: "Name of the extra NuGet source."
         default: ''
       extra_nuget_source_username:
         required: false
@@ -104,10 +104,10 @@ on:
     secrets:
       npm_auth_token:
         required: false
-        description: "Auth token brukt som NODE_AUTH_TOKEN i npm-jobben. Tom = fall tilbake til GITHUB_TOKEN."
+        description: "Auth token used as NODE_AUTH_TOKEN in the npm job. Empty = GITHUB_TOKEN."
       nuget_auth_token:
         required: false
-        description: "Auth token for NuGet-feeds (NUGET_AUTH_TOKEN for setup-dotnet og --password på ekstra-kilde). Tom = fall tilbake til GITHUB_TOKEN."
+        description: "Auth token for the NuGet feeds (NUGET_AUTH_TOKEN for setup-dotnet and --password on the extra source). Empty = GITHUB_TOKEN."
 
 jobs:
   dotnet-stryker:

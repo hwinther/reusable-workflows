@@ -1,4 +1,4 @@
-name: "Format-and-PR helper (gjenbrukbar)"
+name: "Format-and-PR helper (reusable)"
 
 # Multi-formatter helper. Each mode is its own job, gated by `inputs.mode`:
 #   mode=cleanupcode       → run `jb cleanupcode` against a .NET solution and
@@ -19,56 +19,56 @@ on:
       mode:
         required: true
         type: string
-        description: "Hvilken jobb som skal kjøres: 'cleanupcode', 'ruff-format' eller 'blame-ignore-revs'."
+        description: "Which job to run: 'cleanupcode', 'ruff-format' or 'blame-ignore-revs'."
       solution_path:
         required: false
         type: string
-        description: "Mappen som inneholder .NET solution-filen (kun brukt av mode=cleanupcode)."
+        description: "Directory containing the .NET solution file (mode=cleanupcode only)."
         default: ''
       solution_name:
         required: false
         type: string
-        description: "Navn på solution-filen, f.eks. Backend.slnx (kun brukt av mode=cleanupcode)."
+        description: "Solution file name, e.g. Backend.slnx (mode=cleanupcode only)."
         default: ''
       dotnet_version:
         required: false
         type: string
-        description: ".NET versjon, f.eks. 10.0.x (kun brukt av mode=cleanupcode)."
+        description: ".NET version, e.g. 10.0.x (mode=cleanupcode only)."
         default: "10.0.x"
       python_version:
         required: false
         type: string
-        description: "Python-versjon (kun brukt av mode=ruff-format). Sendes til actions/setup-python."
+        description: "Python version (mode=ruff-format only), passed to actions/setup-python."
         default: "3.13"
       ruff_version:
         required: false
         type: string
-        description: "Ruff-versjon å installere via pip (f.eks. '0.9.0'). Tom = pip henter siste tilgjengelige."
+        description: "Ruff version to install with pip (e.g. '0.9.0'). Empty = the latest available."
         default: ''
       target_path:
         required: false
         type: string
-        description: "Sti `ruff format` skal kjøre mot (kun brukt av mode=ruff-format)."
+        description: "Path `ruff format` runs against (mode=ruff-format only)."
         default: '.'
       commit_subject:
         required: false
         type: string
-        description: "Commit-subject brukt for formatter-PR-en (cleanupcode / ruff-format) og som søkestreng i blame-ignore-revs-syncen. Ruff-callere overstyrer typisk til f.eks. 'chore: ruff format'."
+        description: "Commit subject for the formatter PR (cleanupcode / ruff-format), and the search string for the blame-ignore-revs sync. Ruff callers typically override it, e.g. 'chore: ruff format'."
         default: "chore: ReSharper CleanupCode"
       primary_nuget_source:
         required: false
         type: string
-        description: "Primær NuGet-feed-URL sendt til actions/setup-dotnet via source-url. NB: `dotnet tool install JetBrains.ReSharper.GlobalTools` krever at nuget.org er nåbar — pek primær-feeden mot en feed som upstreamer til nuget.org dersom du overstyrer."
+        description: "Primary NuGet feed URL passed to actions/setup-dotnet as source-url. Note: `dotnet tool install JetBrains.ReSharper.GlobalTools` needs nuget.org, so when overriding, point it at a feed that upstreams nuget.org."
         default: ''
       extra_nuget_source:
         required: false
         type: string
-        description: "Ekstra privat NuGet-feed lagt til via `dotnet nuget add source` før restore."
+        description: "Extra private NuGet feed added with `dotnet nuget add source` before restore."
         default: ''
       extra_nuget_source_name:
         required: false
         type: string
-        description: "Navn på den ekstra NuGet-kilden."
+        description: "Name of the extra NuGet source."
         default: ''
       extra_nuget_source_username:
         required: false
@@ -78,7 +78,7 @@ on:
     secrets:
       nuget_auth_token:
         required: false
-        description: "Auth token for NuGet-feeds (NUGET_AUTH_TOKEN for setup-dotnet og --password på ekstra-kilde). Tom = fall tilbake til GITHUB_TOKEN."
+        description: "Auth token for the NuGet feeds (NUGET_AUTH_TOKEN for setup-dotnet and --password on the extra source). Empty = GITHUB_TOKEN."
 
 jobs:
   cleanupcode:
