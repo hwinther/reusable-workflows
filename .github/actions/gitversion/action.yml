@@ -113,14 +113,16 @@ runs:
     env:
       # Via env, not inline: on pull requests this carries the (sanitised) head branch name.
       SEMVER: ${{ steps.pr_label.outputs.semver }}
+      MAJOR_MINOR_PATCH: ${{ steps.determine_version_values.outputs.majorMinorPatch }}
+      REF_NAME: ${{ github.ref_name }}
       REGISTRY: ${{ inputs.container_registry }}
       IMAGE_NAME: ${{ inputs.container_image_name }}
     run: |
-      echo "GitVersion MajorMinorPatch: ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+      echo "GitVersion MajorMinorPatch: ${MAJOR_MINOR_PATCH}"
       echo "GitVersion SemVer: ${SEMVER}"
 
       LATEST_CONTAINER_IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:latest"
-      GITVERSION_MAJOR_MINOR_PATCH_TAG="${REGISTRY}/${IMAGE_NAME}:${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+      GITVERSION_MAJOR_MINOR_PATCH_TAG="${REGISTRY}/${IMAGE_NAME}:${MAJOR_MINOR_PATCH}"
       GITVERSION_SEMVER_TAG="${REGISTRY}/${IMAGE_NAME}:${SEMVER}"
 
       # `:latest` points at the highest stable release. We attach it if both hold:
@@ -129,8 +131,8 @@ runs:
       #      (v2.1.3 with nothing above it) gets it, while a hotfix on an older line (v2.0.5 after
       #      v2.1.0) can't move :latest backwards
       INCLUDE_LATEST=false
-      if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
-        CURRENT_TAG="v${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+      if [ -n "${REF_NAME}" ] && [[ "${REF_NAME}" == v* ]]; then
+        CURRENT_TAG="v${MAJOR_MINOR_PATCH}"
         # Only consider plain vMAJOR.MINOR.PATCH tags — exclude prereleases like v2.0.0-beta1.
         HIGHEST_TAG=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
         if [ "$CURRENT_TAG" = "$HIGHEST_TAG" ]; then
@@ -140,34 +142,34 @@ runs:
         fi
       fi
 
-      if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == "main" ]]; then
+      if [ -n "${REF_NAME}" ] && [[ "${REF_NAME}" == "main" ]]; then
         if [ -n "${IMAGE_NAME}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+          echo "image_tags=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
           echo "Using tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
 
-        echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-        echo "Setting version to ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+        echo "version=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
+        echo "Setting version to ${MAJOR_MINOR_PATCH}"
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to false"
-      elif [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref_name }}" == v* ]]; then
+      elif [ -n "${REF_NAME}" ] && [[ "${REF_NAME}" == v* ]]; then
         if [ -n "${IMAGE_NAME}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           if [ "$INCLUDE_LATEST" = "true" ]; then
             echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-            echo "image_tags=latest;${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+            echo "image_tags=latest;${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
             echo "Using tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
           else
             echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-            echo "image_tags=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
+            echo "image_tags=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
             echo "Using tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
           fi
         fi
 
-        echo "version=${{ steps.determine_version_values.outputs.majorMinorPatch }}" >> $GITHUB_OUTPUT
-        echo "Setting version to ${{ steps.determine_version_values.outputs.majorMinorPatch }}"
+        echo "version=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
+        echo "Setting version to ${MAJOR_MINOR_PATCH}"
         echo "is_alpha=false" >> $GITHUB_OUTPUT
         echo "Setting is_alpha to false"
       else
