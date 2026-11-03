@@ -10,6 +10,8 @@ name: "Prune GHCR images (reusable)"
 #     (and pr-<N>-<anything>), or a prerelease whose label is the PR form
 #     GitVersion emits for refs/pull/<N>/merge builds (PullRequest<N>). Tags of
 #     open PRs are kept, so running previews keep their pinned digests.
+#   - main-<sha> builds (pushed on every merge to main) beyond the newest
+#     `main_keep` of them. The moving `main` tag is always kept.
 #   - signatures and attestations whose parent manifest is being deleted in the
 #     same run or no longer exists: cosign legacy sha256-XXXX.{sig,att,sbom}
 #     tags, OCI referrers-tag indexes (bare sha256-XXXX tags), and untagged OCI
@@ -51,6 +53,11 @@ on:
         type: string
         required: false
         default: ""
+      main_keep:
+        description: "How many of the newest main-<sha> tagged versions to keep per package; older ones are pruned. The moving `main` tag is always kept."
+        type: number
+        required: false
+        default: 10
     secrets:
       GHCR_PRUNE_TOKEN:
         description: "Optional PAT with delete:packages (and read:packages for discovery). Falls back to GITHUB_TOKEN when not set."
@@ -69,6 +76,7 @@ jobs:
       DRY_RUN: ${{ inputs.dry_run }}
       IMAGES_INPUT: ${{ inputs.images }}
       NAMESPACE_PREFIX: ${{ inputs.package_namespace_prefix }}
+      MAIN_KEEP: ${{ inputs.main_keep }}
       GH_TOKEN: ${{ secrets.GHCR_PRUNE_TOKEN || secrets.GITHUB_TOKEN }}
     steps:
       - name: Nuke single package (destructive)
@@ -277,6 +285,9 @@ jobs:
             fi
             COUNT=$(wc -l < /tmp/versions.json | tr -d ' ')
             echo "  $COUNT versions"
+            # The versions API lists newest first, so the first MAIN_KEEP main-<sha> tags are the
+            # newest builds of main.
+            jq -r '.tags[]' /tmp/versions.json | grep -E '^main-[0-9a-f]{7,40}$'               | head -n "$MAIN_KEEP" > /tmp/main-keep.txt || true
 
             # Pass 1: classify each version.
             # Layout: id<TAB>verdict<TAB>reason<TAB>digest<TAB>tags(comma)
@@ -327,6 +338,16 @@ jobs:
                 fi
                 if echo "$t" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
                   keep=true; reasons="$reasons release($t)"; continue
+                fi
+                if [ "$t" = "main" ]; then
+                  keep=true; reasons="$reasons main"; continue
+                fi
+                if echo "$t" | grep -Eq '^main-[0-9a-f]{7,40}$'; then
+                  if grep -Fxq "$t" /tmp/main-keep.txt; then
+                    keep=true; reasons="$reasons recent-main($t)"; continue
+                  else
+                    reasons="$reasons old-main($t)"; continue
+                  fi
                 fi
                 # PR-scoped: pr-<N>[-…] or a PullRequest<N> prerelease label.
                 pr=""
