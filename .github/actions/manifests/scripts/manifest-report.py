@@ -41,7 +41,7 @@ def load(path):
         line = line.strip()
         if not line or line == "null":
             continue
-        obj = json.loads(line)
+        obj = helm_render.drop_nulls(json.loads(line))
         objs[key(obj)] = obj
     return objs
 

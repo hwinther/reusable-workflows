@@ -25,11 +25,22 @@ def run(args, **kwargs):
     ).stdout
 
 
+def drop_nulls(node):
+    """Removes null map values, recursively. Kubernetes reads a null field as absent, and charts
+    render plenty of them (`envFrom: null`); dropped, `.get(field, [])` covers both."""
+    if isinstance(node, dict):
+        return {k: drop_nulls(v) for k, v in node.items() if v is not None}
+    if isinstance(node, list):
+        return [drop_nulls(v) for v in node]
+    return node
+
+
 def yaml_docs(text):
-    """Every YAML document in text as Python objects (yq converts; null docs dropped)."""
+    """Every YAML document in text as Python objects (yq converts; null docs and null map values
+    dropped)."""
     out = run([shutil.which("yq") or "yq", "-o=json", "-I=0", "."], input=text)
     return [
-        json.loads(line)
+        drop_nulls(json.loads(line))
         for line in out.splitlines()
         if line.strip() not in ("", "null")
     ]
