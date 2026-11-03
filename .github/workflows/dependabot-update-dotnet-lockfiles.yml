@@ -1,4 +1,4 @@
-name: "Oppdater dotnet lockfiles i dependabot PR-er (gjenbrukbar)"
+name: "Update dotnet lockfiles in Dependabot PRs (reusable)"
 
 # Intended trigger in the caller workflow:
 #   on:
@@ -15,35 +15,35 @@ on:
       solution_path:
         required: true
         type: string
-        description: "Mappen som inneholder .NET solution-filen"
+        description: "Directory containing the .NET solution file"
       solution_name:
         required: true
         type: string
-        description: "Navn på solution-filen (f.eks. Backend.slnx)"
+        description: "Solution file name (e.g. Backend.slnx)"
       dotnet_version:
         required: false
         type: string
-        description: ".NET versjon, f.eks. 10.0.x"
+        description: ".NET version, e.g. 10.0.x"
         default: "10.0.x"
       label:
         required: false
         type: string
-        description: "PR-label som styrer om lockfile-oppdatering kjøres"
+        description: "PR label that controls whether the lockfile update runs"
         default: "update-dotnet-lockfiles"
       primary_nuget_source:
         required: false
         type: string
-        description: "Primær NuGet-feed-URL sendt til actions/setup-dotnet via source-url. Tom = standard nuget.org."
+        description: "Primary NuGet feed URL passed to actions/setup-dotnet as source-url. Empty = nuget.org."
         default: ''
       extra_nuget_source:
         required: false
         type: string
-        description: "Ekstra privat NuGet-feed lagt til via `dotnet nuget add source` før restore."
+        description: "Extra private NuGet feed added with `dotnet nuget add source` before restore."
         default: ''
       extra_nuget_source_name:
         required: false
         type: string
-        description: "Navn på den ekstra NuGet-kilden."
+        description: "Name of the extra NuGet source."
         default: ''
       extra_nuget_source_username:
         required: false
@@ -53,10 +53,10 @@ on:
     secrets:
       WORKFLOW_TOKEN:
         required: true
-        description: "PAT med contents:write som kan pushe tilbake til dependabot-PR-grenen"
+        description: "PAT with contents:write that can push back to the Dependabot PR branch"
       nuget_auth_token:
         required: false
-        description: "Auth token for NuGet-feeds (NUGET_AUTH_TOKEN for setup-dotnet og --password på ekstra-kilde). Tom = fall tilbake til GITHUB_TOKEN."
+        description: "Auth token for the NuGet feeds (NUGET_AUTH_TOKEN for setup-dotnet and --password on the extra source). Empty = GITHUB_TOKEN."
 
 jobs:
   update-lockfiles:
