@@ -1,4 +1,4 @@
-name: "Playwright E2E against locally-loaded container images"
+name: "Playwright E2E against locally-loaded container images or a deployed app"
 
 # Reusable e2e workflow that downloads pre-built image artifacts (from
 # build-and-scan-{docker,dotnet}.yml jobs in the same run), loads them into
@@ -7,14 +7,34 @@ name: "Playwright E2E against locally-loaded container images"
 # summary. The caller's docker-compose file references images via env vars
 # (e.g. ${API_IMAGE}); this workflow sets those env vars to the loaded
 # refs before `docker compose up`.
+#
+# Without compose_file it runs against a deployed app instead: base_url is exported as BASE_URL
+# for the Playwright config, and wait_url (if set) is polled until it answers 200, so a caller can
+# start the run right after a deploy.
 
 on:
   workflow_call:
     inputs:
       compose_file:
-        description: "Path to docker-compose file in the consumer repo (e.g. docker-compose.e2e.yml)."
-        required: true
+        description: "Path to docker-compose file in the consumer repo (e.g. docker-compose.e2e.yml). Empty = no compose stack; set base_url to test a deployed app."
+        required: false
         type: string
+        default: ""
+      base_url:
+        description: "URL of a deployed app to test instead of a compose stack, exported as BASE_URL for the Playwright run (the caller's config reads it). Only used without compose_file."
+        required: false
+        type: string
+        default: ""
+      wait_url:
+        description: "Polled until it answers 200 before Playwright starts, e.g. the deployed app's readiness URL. Empty = no wait."
+        required: false
+        type: string
+        default: ""
+      wait_timeout_seconds:
+        description: "How long to poll wait_url before failing (seconds)."
+        required: false
+        type: number
+        default: 600
       playwright_working_directory:
         description: "Directory containing package.json / playwright config."
         required: false
@@ -62,8 +82,10 @@ on:
           `image` output of build-image-{docker,dotnet}.yml, which may be a registry ref
           (repo@sha256:...) that compose pulls by digest. The env var is set before `docker compose up`.
           Example: {"API_IMAGE":"build-and-scan-api-image","FRONTEND_IMAGE":"ghcr.io/o/r/frontend@sha256:..."}
-        required: true
+          Only used with compose_file.
+        required: false
         type: string
+        default: "{}"
       report_paths_json:
         description: "JSON array of paths (relative to playwright_working_directory) to upload as the playwright-report artifact."
         required: false
@@ -257,7 +279,19 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
         run: npx playwright install-deps $BROWSERS
 
+      - name: Check the target
+        shell: bash
+        env:
+          COMPOSE_FILE: ${{ inputs.compose_file }}
+          BASE_URL_INPUT: ${{ inputs.base_url }}
+        run: |
+          if [ -z "$COMPOSE_FILE" ] && [ -z "$BASE_URL_INPUT" ]; then
+            echo "::error::Set compose_file (a local stack) or base_url (a deployed app)."
+            exit 1
+          fi
+
       - name: Resolve images (download artifacts, or use registry refs)
+        if: ${{ inputs.compose_file != '' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           IMAGE_ARTIFACTS_JSON: ${{ inputs.image_artifacts_json }}
@@ -292,6 +326,7 @@ jobs:
           done < <(echo "$IMAGE_ARTIFACTS_JSON" | jq -r 'to_entries[] | "\(.key)\t\(.value)"')
 
       - name: Pull non-artifact compose images
+        if: ${{ inputs.compose_file != '' }}
         shell: bash
         env:
           COMPOSE_FILE: ${{ inputs.compose_file }}
@@ -301,12 +336,42 @@ jobs:
           docker compose -f "$COMPOSE_FILE" pull --ignore-pull-failures || true
 
       - name: Start compose stack
+        if: ${{ inputs.compose_file != '' }}
         shell: bash
         env:
           COMPOSE_FILE: ${{ inputs.compose_file }}
           COMPOSE_TIMEOUT: ${{ inputs.compose_up_timeout_seconds }}
         run: |
           docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout "$COMPOSE_TIMEOUT"
+
+      - name: Point Playwright at the deployed app
+        if: ${{ inputs.compose_file == '' }}
+        shell: bash
+        env:
+          BASE_URL_INPUT: ${{ inputs.base_url }}
+        run: echo "BASE_URL=${BASE_URL_INPUT}" >> "$GITHUB_ENV"
+
+      - name: Wait for the app
+        if: ${{ inputs.wait_url != '' }}
+        shell: bash
+        env:
+          WAIT_URL: ${{ inputs.wait_url }}
+          WAIT_TIMEOUT: ${{ inputs.wait_timeout_seconds }}
+        run: |
+          deadline=$(( $(date +%s) + WAIT_TIMEOUT ))
+          while :; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$WAIT_URL" || true)
+            if [ "$code" = "200" ]; then
+              echo "$WAIT_URL answered 200."
+              break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::$WAIT_URL did not answer 200 within ${WAIT_TIMEOUT}s (last: $code)."
+              exit 1
+            fi
+            echo "$WAIT_URL: $code, retrying in 10s"
+            sleep 10
+          done
 
       - name: Export extra Playwright env vars
         if: ${{ inputs.playwright_env != '' }}
@@ -370,7 +435,7 @@ jobs:
           eval "$RUN_CMD"
 
       - name: Capture compose logs
-        if: always()
+        if: ${{ always() && inputs.compose_file != '' }}
         shell: bash
         env:
           COMPOSE_FILE: ${{ inputs.compose_file }}
