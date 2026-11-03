@@ -1,0 +1,35 @@
+name: "Slow spans report"
+description: "Markdown report of slow server-side calls (API requests, SQL queries) from an OTLP/JSON trace file"
+
+# Reads the file an OpenTelemetry collector's `file` exporter writes during an e2e run (one OTLP
+# ExportTraceServiceRequest per line) and reports the API requests and SQL queries that took longer
+# than the threshold at least once, plus the slowest few overall. playwright-e2e.yml appends it to
+# the job summary and the PR comment.
+
+inputs:
+  traces_file:
+    description: "Path of the OTLP/JSON trace file."
+    required: true
+  threshold_ms:
+    description: "Report requests and queries slower than this (milliseconds)."
+    required: false
+    default: "2000"
+  top:
+    description: "How many of the slowest spans to list regardless of the threshold."
+    required: false
+    default: "10"
+  output_file:
+    description: "Where to write the markdown."
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - name: Report slow spans
+      shell: bash
+      env:
+        TRACES_FILE: ${{ inputs.traces_file }}
+        THRESHOLD_MS: ${{ inputs.threshold_ms }}
+        TOP: ${{ inputs.top }}
+        OUTPUT_FILE: ${{ inputs.output_file }}
+      run: python3 "$GITHUB_ACTION_PATH/scripts/slow_spans.py" "$TRACES_FILE" "$THRESHOLD_MS" "$TOP" > "$OUTPUT_FILE"

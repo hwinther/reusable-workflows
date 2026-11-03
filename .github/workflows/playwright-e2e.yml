@@ -56,6 +56,26 @@ on:
         required: false
         type: string
         default: e2e
+      otel_traces_file:
+        description: |
+          OTLP/JSON trace file an OpenTelemetry collector in the compose stack writes during the run
+          (its `file` exporter), relative to the repository root, e.g. e2e/otel-out/traces.jsonl.
+          When set, the stack is stopped after the tests (so the app and the collector flush) and the
+          API requests and SQL queries slower than slow_span_threshold_ms are reported in the job
+          summary and the PR comment. Empty = no report.
+        required: false
+        type: string
+        default: ""
+      slow_span_threshold_ms:
+        description: "Report API requests and SQL queries slower than this, in milliseconds (with otel_traces_file)."
+        required: false
+        type: number
+        default: 2000
+      slow_span_top:
+        description: "How many of the slowest spans to list regardless of the threshold (with otel_traces_file)."
+        required: false
+        type: number
+        default: 10
       wait_timeout_seconds:
         description: "How long to poll wait_url before failing (seconds)."
         required: false
@@ -491,6 +511,23 @@ jobs:
           E2E_PASSWORD: ${{ secrets.e2e_password }}
           E2E_OTP_SECRET: ${{ secrets.e2e_otp_secret }}
         run: docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" run --rm "$SERVICE"
+      # Stopping the stack ends the app first and the collector last (compose stops dependents
+      # before their dependencies), so both flush their batches into the trace file.
+      - name: Stop the compose stack (flush traces)
+        if: ${{ always() && inputs.otel_traces_file != '' && inputs.compose_file != '' }}
+        shell: bash
+        env:
+          COMPOSE_FILE: ${{ inputs.compose_file }}
+        run: docker compose -f "$COMPOSE_FILE" stop
+
+      - name: Slow spans report
+        if: ${{ always() && inputs.otel_traces_file != '' }}
+        uses: hwinther/reusable-workflows/.github/actions/otel-slow-spans@v2
+        with:
+          traces_file: ${{ inputs.otel_traces_file }}
+          threshold_ms: ${{ inputs.slow_span_threshold_ms }}
+          top: ${{ inputs.slow_span_top }}
+          output_file: ${{ runner.temp }}/slow-spans.md
 
       - name: Capture compose logs
         if: ${{ always() && inputs.compose_file != '' }}
@@ -564,6 +601,10 @@ jobs:
               fi
               echo "Full report and traces: [download the \`playwright-report\` artifact](${RUN_URL}#artifacts)."
             } > "$out"
+          fi
+          # The slow spans report (otel_traces_file), under the test results.
+          if [ -s "${RUNNER_TEMP}/slow-spans.md" ]; then
+            { echo; cat "${RUNNER_TEMP}/slow-spans.md"; } >> "$out"
           fi
           # Job summary: always — useful for workflow_dispatch / push runs too, not just PRs.
           cat "$out" >> "$GITHUB_STEP_SUMMARY"
