@@ -24,6 +24,10 @@ inputs:
     required: false
     description: "Optional suffix appended to the staging tag (matrix callers)."
     default: ""
+  force_artifact:
+    required: false
+    description: "'true' takes the workflow artifact path even where the registry is allowed (to compare the two)."
+    default: "false"
 
 outputs:
   staging_ref:
@@ -47,12 +51,13 @@ runs:
         REPOSITORY: ${{ inputs.repository }}
         POSTFIX: ${{ inputs.container_image_name_postfix }}
         SUFFIX: ${{ inputs.suffix }}
+        FORCE_ARTIFACT: ${{ inputs.force_artifact }}
       run: |
         set -euo pipefail
-        if [ "$EVENT" = "pull_request" ] && [ "$HEAD_REPO" = "$BASE_REPO" ] && [ "$ACTOR" != "dependabot[bot]" ]; then
+        if [ "$FORCE_ARTIFACT" != "true" ] && [ "$EVENT" = "pull_request" ] && [ "$HEAD_REPO" = "$BASE_REPO" ] && [ "$ACTOR" != "dependabot[bot]" ]; then
           ref="${REGISTRY}/${REPOSITORY}/${POSTFIX}:pr-${PR_NUMBER}-${SHA:0:7}${SUFFIX:+-$SUFFIX}"
           echo "staging_ref=$ref" >> "$GITHUB_OUTPUT"
           echo "Hand-off: registry ($ref)"
         else
-          echo "Hand-off: workflow artifact (event=$EVENT, actor=$ACTOR, head=${HEAD_REPO:-n/a})"
+          echo "Hand-off: workflow artifact (event=$EVENT, actor=$ACTOR, head=${HEAD_REPO:-n/a}, forced=$FORCE_ARTIFACT)"
         fi

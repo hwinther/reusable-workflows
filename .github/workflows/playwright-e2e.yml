@@ -40,6 +40,22 @@ on:
         required: false
         type: string
         default: ""
+      compose_playwright_service:
+        description: |
+          Run the tests as this service of compose_file (`docker compose --profile <profile> run --rm
+          <service>`), e.g. a Playwright image with the tests baked in, instead of with Node and
+          browsers on the runner: the runner's Node, npm, browser and Playwright steps are skipped.
+          The service passes through E2E_USERNAME/E2E_PASSWORD/E2E_OTP_SECRET, CI and any
+          playwright_env vars it lists, and mounts its report directories into
+          playwright_working_directory so the summary and the report upload find them.
+        required: false
+        type: string
+        default: ""
+      compose_playwright_profile:
+        description: "Compose profile that enables compose_playwright_service (so a plain `up` doesn't start it)."
+        required: false
+        type: string
+        default: e2e
       wait_timeout_seconds:
         description: "How long to poll wait_url before failing (seconds)."
         required: false
@@ -198,6 +214,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Node
+        if: ${{ inputs.compose_playwright_service == '' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ inputs.node_version }}
@@ -211,7 +228,7 @@ jobs:
       # version is in the key because packages with native builds are tied to it.
       - name: node_modules cache key
         id: node-modules-key
-        if: ${{ inputs.node_modules_cache_enabled }}
+        if: ${{ inputs.compose_playwright_service == '' && (inputs.node_modules_cache_enabled) }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -230,14 +247,14 @@ jobs:
 
       - name: Restore node_modules
         id: node-modules-cache
-        if: ${{ steps.node-modules-key.outputs.key != '' }}
+        if: ${{ inputs.compose_playwright_service == '' && (steps.node-modules-key.outputs.key != '') }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.node-modules-key.outputs.path }}
           key: ${{ steps.node-modules-key.outputs.key }}
 
       - name: Install npm dependencies
-        if: ${{ steps.node-modules-cache.outputs.cache-hit != 'true' }}
+        if: ${{ inputs.compose_playwright_service == '' && (steps.node-modules-cache.outputs.cache-hit != 'true') }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -249,7 +266,7 @@ jobs:
 
       # Saved straight after the install, so a failing test run still leaves a warm cache.
       - name: Save node_modules
-        if: ${{ steps.node-modules-key.outputs.key != '' && steps.node-modules-cache.outputs.cache-hit != 'true' }}
+        if: ${{ inputs.compose_playwright_service == '' && (steps.node-modules-key.outputs.key != '' && steps.node-modules-cache.outputs.cache-hit != 'true') }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ steps.node-modules-key.outputs.path }}
@@ -257,7 +274,7 @@ jobs:
 
       - name: Resolve Playwright version (for cache key)
         id: playwright-version
-        if: ${{ inputs.container_image == '' && inputs.playwright_cache_enabled }}
+        if: ${{ inputs.compose_playwright_service == '' && (inputs.container_image == '' && inputs.playwright_cache_enabled) }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         run: |
@@ -272,14 +289,14 @@ jobs:
 
       - name: Restore Playwright browsers cache
         id: playwright-cache
-        if: ${{ inputs.container_image == '' && inputs.playwright_cache_enabled }}
+        if: ${{ inputs.compose_playwright_service == '' && (inputs.container_image == '' && inputs.playwright_cache_enabled) }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}-${{ inputs.playwright_browsers }}
 
       - name: Install Playwright browsers (with system deps)
-        if: ${{ inputs.container_image == '' && (!inputs.playwright_cache_enabled || steps.playwright-cache.outputs.cache-hit != 'true') }}
+        if: ${{ inputs.compose_playwright_service == '' && (inputs.container_image == '' && (!inputs.playwright_cache_enabled || steps.playwright-cache.outputs.cache-hit != 'true')) }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -288,7 +305,7 @@ jobs:
         run: npx playwright install --with-deps $BROWSERS
 
       - name: Install Playwright system deps only (cache hit)
-        if: ${{ inputs.container_image == '' && inputs.playwright_cache_enabled && steps.playwright-cache.outputs.cache-hit == 'true' }}
+        if: ${{ inputs.compose_playwright_service == '' && (inputs.container_image == '' && inputs.playwright_cache_enabled && steps.playwright-cache.outputs.cache-hit == 'true') }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -302,6 +319,7 @@ jobs:
           COMPOSE_FILE: ${{ inputs.compose_file }}
           BASE_URL_INPUT: ${{ inputs.base_url }}
           CONTAINER_IMAGE: ${{ inputs.container_image }}
+          PLAYWRIGHT_SERVICE: ${{ inputs.compose_playwright_service }}
         run: |
           if [ -z "$COMPOSE_FILE" ] && [ -z "$BASE_URL_INPUT" ]; then
             echo "::error::Set compose_file (a local stack) or base_url (a deployed app)."
@@ -309,6 +327,10 @@ jobs:
           fi
           if [ -n "$CONTAINER_IMAGE" ] && [ -n "$COMPOSE_FILE" ]; then
             echo "::error::container_image has no docker for a compose stack; use base_url."
+            exit 1
+          fi
+          if [ -n "$PLAYWRIGHT_SERVICE" ] && [ -z "$COMPOSE_FILE" ]; then
+            echo "::error::compose_playwright_service needs compose_file."
             exit 1
           fi
 
@@ -430,7 +452,7 @@ jobs:
           done <<< "$EXTRA_ENV"
 
       - name: Seed Playwright auth state (setup project)
-        if: ${{ inputs.playwright_setup_project != '' }}
+        if: ${{ inputs.compose_playwright_service == '' && (inputs.playwright_setup_project != '') }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -444,6 +466,7 @@ jobs:
           npx playwright test --project="$SETUP_PROJECT"
 
       - name: Run Playwright
+        if: ${{ inputs.compose_playwright_service == '' }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -455,6 +478,19 @@ jobs:
         run: |
           set -euo pipefail
           eval "$RUN_CMD"
+
+      - name: Run Playwright (compose service)
+        if: ${{ inputs.compose_playwright_service != '' }}
+        shell: bash
+        env:
+          CI: "true"
+          COMPOSE_FILE: ${{ inputs.compose_file }}
+          PROFILE: ${{ inputs.compose_playwright_profile }}
+          SERVICE: ${{ inputs.compose_playwright_service }}
+          E2E_USERNAME: ${{ secrets.e2e_username }}
+          E2E_PASSWORD: ${{ secrets.e2e_password }}
+          E2E_OTP_SECRET: ${{ secrets.e2e_otp_secret }}
+        run: docker compose -f "$COMPOSE_FILE" --profile "$PROFILE" run --rm "$SERVICE"
 
       - name: Capture compose logs
         if: ${{ always() && inputs.compose_file != '' }}
