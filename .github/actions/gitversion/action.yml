@@ -146,9 +146,9 @@ runs:
         if [ -n "${IMAGE_NAME}" ]; then
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
           echo "Using tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
         fi
+        echo "image_tags=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
 
         echo "version=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
         echo "Setting version to ${MAJOR_MINOR_PATCH}"
@@ -159,13 +159,18 @@ runs:
           echo "deploy_tag=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
           if [ "$INCLUDE_LATEST" = "true" ]; then
             echo "container_image_tags=$LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-            echo "image_tags=latest;${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
             echo "Using tags: $LATEST_CONTAINER_IMAGE_TAG,$GITVERSION_MAJOR_MINOR_PATCH_TAG"
           else
             echo "container_image_tags=$GITVERSION_MAJOR_MINOR_PATCH_TAG" >> $GITHUB_OUTPUT
-            echo "image_tags=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
             echo "Using tag: $GITVERSION_MAJOR_MINOR_PATCH_TAG"
           fi
+        fi
+        # Tag-only, so they don't depend on an image name: a caller computing the version once for
+        # several images (build-image-*.yml's version/image_tags inputs) has none.
+        if [ "$INCLUDE_LATEST" = "true" ]; then
+          echo "image_tags=latest;${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
+        else
+          echo "image_tags=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
         fi
 
         echo "version=${MAJOR_MINOR_PATCH}" >> $GITHUB_OUTPUT
@@ -179,9 +184,9 @@ runs:
           # package version and uniquely identifies which branch the build came from.
           echo "deploy_tag=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
           echo "container_image_tags=$GITVERSION_SEMVER_TAG" >> $GITHUB_OUTPUT
-          echo "image_tags=${SEMVER}" >> $GITHUB_OUTPUT
           echo "Using tag with prerelease label: $GITVERSION_SEMVER_TAG"
         fi
+        echo "image_tags=${SEMVER}" >> $GITHUB_OUTPUT
 
         echo "version=${SEMVER}" >> $GITHUB_OUTPUT
         echo "Setting version to ${SEMVER}"
