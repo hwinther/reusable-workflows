@@ -71,6 +71,21 @@ on:
         required: false
         type: string
         default: "az"
+      version:
+        description: "Version from a gitversion.yml run the caller shares between its images (its `version` output). With image_tags, this workflow skips its own GitVersion job; empty = compute it here."
+        required: false
+        type: string
+        default: ""
+      image_tags:
+        description: "Semicolon-separated tags from that same gitversion.yml run (its `image_tags` output). Required with version."
+        required: false
+        type: string
+        default: ""
+      is_alpha:
+        description: "is_alpha from that same gitversion.yml run, passed through to this workflow's output."
+        required: false
+        type: string
+        default: ""
     secrets:
       nuget_auth_token:
         description: "Auth token for NuGet feeds (NUGET_AUTH_TOKEN for setup-dotnet primary source and --password for the extra source). When unset, falls back to GITHUB_TOKEN."
@@ -90,16 +105,16 @@ on:
         value: ${{ jobs.build.outputs.image_digest }}
       container_image_tags:
         description: "Full image refs for the final push (registry/name:tag, comma-separated)."
-        value: ${{ jobs.gitversion.outputs.container_image_tags }}
+        value: ${{ jobs.build.outputs.container_tags }}
       image_tags:
         description: "Image tags only (semicolon-separated)."
-        value: ${{ jobs.gitversion.outputs.image_tags }}
+        value: ${{ jobs.build.outputs.image_tags }}
       version:
         description: "GitVersion-derived version string."
-        value: ${{ jobs.gitversion.outputs.version }}
+        value: ${{ jobs.build.outputs.version }}
       is_alpha:
         description: "Whether the build is from a feature/bugfix branch (string 'true'/'false')."
-        value: ${{ jobs.gitversion.outputs.is_alpha }}
+        value: ${{ jobs.gitversion.outputs.is_alpha || inputs.is_alpha }}
 
 jobs:
   prepare-repository-name:
@@ -114,6 +129,7 @@ jobs:
 
   gitversion:
     needs: prepare-repository-name
+    if: ${{ inputs.version == '' }}
     permissions:
       contents: read
     uses: hwinther/reusable-workflows/.github/workflows/gitversion.yml@v2
@@ -123,8 +139,10 @@ jobs:
       override_config: ${{ inputs.override_config }}
 
   build:
-    name: Build (${{ needs.gitversion.outputs.container_image_tags }})
+    name: Build (${{ needs.gitversion.outputs.container_image_tags || inputs.image_tags }})
     needs: [prepare-repository-name, gitversion]
+    # Runs when this workflow's GitVersion job succeeded or was skipped (the caller passed the version).
+    if: ${{ !cancelled() && needs.prepare-repository-name.result == 'success' && (needs.gitversion.result == 'success' || needs.gitversion.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -134,11 +152,45 @@ jobs:
       image_ref: ${{ steps.staging.outputs.image_ref }}
       image_artifact: ${{ steps.save.outputs.artifact_name }}
       image_digest: ${{ steps.local-id.outputs.image_id }}
+      container_tags: ${{ steps.version.outputs.container_image_tags }}
+      version: ${{ steps.version.outputs.version }}
+      image_tags: ${{ steps.version.outputs.image_tags }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # The version comes from this workflow's GitVersion job or, when the caller computed it once for
+      # all its images, from the version/image_tags inputs. The full refs are registry/name:<tag> for
+      # each tag, which is how GitVersion composes them too.
+      - name: Version and image refs
+        id: version
+        shell: bash
+        env:
+          VERSION: ${{ needs.gitversion.outputs.version || inputs.version }}
+          IMAGE_TAGS: ${{ needs.gitversion.outputs.image_tags || inputs.image_tags }}
+          REGISTRY: ${{ inputs.container_registry }}
+          REPO: ${{ needs.prepare-repository-name.outputs.repository }}
+          POSTFIX: ${{ inputs.container_image_name_postfix }}
+        run: |
+          set -euo pipefail
+          if [ -z "$VERSION" ] || [ -z "$IMAGE_TAGS" ]; then
+            echo "::error::No version: pass both version and image_tags, or neither."
+            exit 1
+          fi
+          refs=""
+          IFS=';' read -ra tags <<< "$IMAGE_TAGS"
+          for t in "${tags[@]}"; do
+            t="${t//[[:space:]]/}"
+            [ -z "$t" ] && continue
+            refs="${refs:+$refs,}${REGISTRY}/${REPO}/${POSTFIX}:${t}"
+          done
+          {
+            echo "version=$VERSION"
+            echo "image_tags=$IMAGE_TAGS"
+            echo "container_image_tags=$refs"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -156,10 +208,10 @@ jobs:
           solution_file: ${{ inputs.solution_file }}
           project_file: ${{ inputs.project_file }}
           cache_enabled: ${{ inputs.cache_enabled }}
-          image_tags: ${{ needs.gitversion.outputs.image_tags }}
+          image_tags: ${{ steps.version.outputs.image_tags }}
           repository: ${{ needs.prepare-repository-name.outputs.repository }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
-          version: ${{ needs.gitversion.outputs.version }}
+          version: ${{ steps.version.outputs.version }}
           git_sha: ${{ github.sha }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           nuget_auth_token: ${{ secrets.nuget_auth_token }}
