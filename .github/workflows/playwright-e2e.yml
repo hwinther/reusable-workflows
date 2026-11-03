@@ -30,6 +30,16 @@ on:
         required: false
         type: string
         default: ""
+      container_image:
+        description: |
+          Run the job in this image instead of on the runner, e.g. a Playwright image with the browsers
+          baked in: the browser cache and install steps are skipped, so the image's browsers must match
+          the @playwright/test version in package-lock.json. Pulled with the workflow token, so it must
+          be in GHCR. No docker in the container, so only with base_url, not compose_file. Empty = the
+          runner (default).
+        required: false
+        type: string
+        default: ""
       wait_timeout_seconds:
         description: "How long to poll wait_url before failing (seconds)."
         required: false
@@ -167,6 +177,12 @@ jobs:
       # `gh run download` (artifact fetch for image_artifacts_json) hits the Actions REST API,
       # which requires `actions: read` on the workflow token.
       actions: read
+    # An empty image runs the job on the runner itself.
+    container:
+      image: ${{ inputs.container_image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -174,6 +190,7 @@ jobs:
           persist-credentials: false
 
       - name: Log in to GHCR (for base-image and side-car pulls)
+        if: ${{ inputs.container_image == '' }}
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
@@ -240,7 +257,7 @@ jobs:
 
       - name: Resolve Playwright version (for cache key)
         id: playwright-version
-        if: ${{ inputs.playwright_cache_enabled }}
+        if: ${{ inputs.container_image == '' && inputs.playwright_cache_enabled }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         run: |
@@ -255,14 +272,14 @@ jobs:
 
       - name: Restore Playwright browsers cache
         id: playwright-cache
-        if: ${{ inputs.playwright_cache_enabled }}
+        if: ${{ inputs.container_image == '' && inputs.playwright_cache_enabled }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}-${{ inputs.playwright_browsers }}
 
       - name: Install Playwright browsers (with system deps)
-        if: ${{ !inputs.playwright_cache_enabled || steps.playwright-cache.outputs.cache-hit != 'true' }}
+        if: ${{ inputs.container_image == '' && (!inputs.playwright_cache_enabled || steps.playwright-cache.outputs.cache-hit != 'true') }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -271,7 +288,7 @@ jobs:
         run: npx playwright install --with-deps $BROWSERS
 
       - name: Install Playwright system deps only (cache hit)
-        if: ${{ inputs.playwright_cache_enabled && steps.playwright-cache.outputs.cache-hit == 'true' }}
+        if: ${{ inputs.container_image == '' && inputs.playwright_cache_enabled && steps.playwright-cache.outputs.cache-hit == 'true' }}
         shell: bash
         working-directory: ${{ inputs.playwright_working_directory }}
         env:
@@ -284,9 +301,14 @@ jobs:
         env:
           COMPOSE_FILE: ${{ inputs.compose_file }}
           BASE_URL_INPUT: ${{ inputs.base_url }}
+          CONTAINER_IMAGE: ${{ inputs.container_image }}
         run: |
           if [ -z "$COMPOSE_FILE" ] && [ -z "$BASE_URL_INPUT" ]; then
             echo "::error::Set compose_file (a local stack) or base_url (a deployed app)."
+            exit 1
+          fi
+          if [ -n "$CONTAINER_IMAGE" ] && [ -n "$COMPOSE_FILE" ]; then
+            echo "::error::container_image has no docker for a compose stack; use base_url."
             exit 1
           fi
 
