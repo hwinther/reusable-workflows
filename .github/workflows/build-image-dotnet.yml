@@ -46,6 +46,11 @@ on:
         required: false
         type: number
         default: 1
+      handoff:
+        description: "How the image reaches scan, e2e and push: 'auto' (registry staging tag on same-repo PRs, workflow artifact otherwise) or 'artifact' (always the artifact, e.g. to compare the two)."
+        required: false
+        type: string
+        default: auto
       artifact_name_suffix:
         description: "Disambiguates matrix callers that share container_image_name_postfix: appended to the staging tag and the artifact name."
         required: false
@@ -228,6 +233,7 @@ jobs:
           repository: ${{ needs.prepare-repository-name.outputs.repository }}
           container_image_name_postfix: ${{ inputs.container_image_name_postfix }}
           suffix: ${{ inputs.artifact_name_suffix }}
+          force_artifact: ${{ inputs.handoff == 'artifact' }}
 
       - name: Record local image ID
         id: local-id
