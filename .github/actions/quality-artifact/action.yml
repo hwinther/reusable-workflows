@@ -14,8 +14,9 @@ description: |
 
   `reports_dir` must hold one directory per component, as actions/download-artifact writes a
   `pattern: quality-*` download; quality-artifact.yml does that for the current run. Signed with
-  cosign keyless in the caller's job, so the certificate identity is the caller's workflow (same
-  as manifests and sign-image).
+  cosign keyless in the job it runs in: called directly from a caller's job, the certificate
+  identity is the caller's workflow (same as manifests and sign-image); through
+  quality-artifact.yml it is that reusable workflow (see docs/quality-artifact.md).
 
   Permissions: contents: read, packages: write, id-token: write (sign).
 
