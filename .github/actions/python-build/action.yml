@@ -20,6 +20,14 @@ inputs:
     required: false
     description: "Run pytest. Set to 'false' to skip."
     default: "true"
+  typecheck:
+    required: false
+    description: "Run mypy. Set to 'false' for projects without type stubs for their framework (e.g. Django without django-stubs)."
+    default: "true"
+  coverage_source:
+    required: false
+    description: "Space-separated import names to measure with --cov. Default: [project].name from pyproject.toml. Set it when the code spans several top-level packages (e.g. a Django project's apps)."
+    default: ""
 
 outputs:
   pr-comment:
@@ -115,7 +123,14 @@ runs:
       if: steps.dependency-install.outcome == 'success'
       shell: bash
       working-directory: ${{ inputs.working_directory }}
+      env:
+        COVERAGE_SOURCE: ${{ inputs.coverage_source }}
       run: |
+        if [ -n "$COVERAGE_SOURCE" ]; then
+          echo "Coverage modules (input): $COVERAGE_SOURCE"
+          echo "name=$COVERAGE_SOURCE" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         # Read [project].name from pyproject.toml and convert hyphens to
         # underscores. This matches the standard distribution → import name
         # mapping (e.g. "wshno-test-pypi-client" → "wshno_test_pypi_client").
@@ -202,7 +217,7 @@ runs:
 
     - name: Mypy
       id: mypy
-      if: steps.dependency-install.outcome == 'success'
+      if: steps.dependency-install.outcome == 'success' && inputs.typecheck == 'true'
       shell: bash
       working-directory: ${{ inputs.working_directory }}
       run: |
@@ -242,13 +257,14 @@ runs:
         COV_NAME: ${{ steps.cov-name.outputs.name }}
       run: |
         echo "::group::Pytest"
+        cov_args=()
         if [ -n "$COV_NAME" ]; then
-          cov_args=(--cov="$COV_NAME" --cov-report=term --cov-report=xml)
-        else
-          cov_args=()
+          read -r -a modules <<< "$COV_NAME"
+          for module in "${modules[@]}"; do cov_args+=(--cov="$module"); done
+          cov_args+=(--cov-report=term --cov-report=xml)
         fi
         set +e
-        pytest "${cov_args[@]}" 1>$TEMP_DIR/pytest.out 2>&1
+        pytest "${cov_args[@]}" --junitxml="$TEMP_DIR/junit.xml" 1>$TEMP_DIR/pytest.out 2>&1
         exit_code=$?
         set -e
         cat $TEMP_DIR/pytest.out
@@ -270,6 +286,33 @@ runs:
             [ -n "$summary" ] && echo "" && echo "\`$summary\`"
           } > $TEMP_DIR/pytest.md
         fi
+
+    # JUnit, Cobertura and the pytest warning count for quality-artifact.yml, which collects every
+    # `quality-*` artifact of the run. Staged outside the working tree so the uncommitted-changes
+    # check below ignores it.
+    - name: Stage quality reports
+      id: quality-stage
+      if: ${{ !cancelled() && steps.dependency-install.outcome == 'success' && inputs.test == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/quality-python"
+        rm -rf "$out" && mkdir -p "$out"
+        if [ -f "$TEMP_DIR/junit.xml" ]; then cp "$TEMP_DIR/junit.xml" "$out/"; fi
+        if [ -f coverage.xml ]; then cp coverage.xml "$out/"; fi
+        # pytest's summary line, e.g. "== 120 passed, 3 warnings in 4.2s ==".
+        warnings=$(grep -E "^=+ .* =+$" "$TEMP_DIR/pytest.out" 2>/dev/null | tail -n 1 | grep -oE "[0-9]+ warnings?" | grep -oE "[0-9]+" || echo 0)
+        printf '{"warnings": {"pytest": %d}}\n' "${warnings:-0}" > "$out/warnings.json"
+        echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+    - name: Upload quality reports (quality-python)
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: ${{ !cancelled() && steps.quality-stage.outcome == 'success' }}
+      with:
+        name: quality-python
+        path: ${{ steps.quality-stage.outputs.dir }}
+        if-no-files-found: ignore
 
     - name: Build smoke (python -m build)
       id: build-smoke
