@@ -10,8 +10,11 @@ name: "Publish a quality artifact"
 # publishes its failures. Any other job can join by uploading a `quality-<name>` artifact in a
 # format scripts/quality_summary.py reads.
 #
-# Signed in this job, so the cosign identity is the caller's workflow, e.g.
-# .github/workflows/pr-e2e.yml@refs/heads/main.
+# Signed in this reusable workflow's job, so the certificate identity (SAN) is this workflow at the
+# pinned commit, https://github.com/hwinther/reusable-workflows/.github/workflows/quality-artifact.yml@<sha>.
+# The caller is in the certificate's GitHub extensions: verify it with
+# `--certificate-github-workflow-repository <owner>/<repo>` (docs/quality-artifact.md). A caller
+# that needs its own workflow as the identity runs the quality-artifact action in its own job.
 
 on:
   workflow_call:

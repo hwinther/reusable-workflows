@@ -57,8 +57,26 @@ readers that have Actions read access but no registry credentials, e.g. on a pri
 
 The artifact type is `application/vnd.wsh.quality.v1`. Its manifest carries the
 `org.opencontainers.image.{source,revision,version,created}` annotations, and it is signed with
-cosign keyless. The certificate identity is the caller's workflow, e.g.
-`https://github.com/hwinther/ClutterStock/.github/workflows/pr-e2e.yml@refs/heads/main`.
+cosign keyless.
+
+Who signed it depends on where the signing ran:
+
+- **Through `quality-artifact.yml`** (a reusable workflow), the certificate identity is that
+  workflow at the caller's pinned commit,
+  `https://github.com/hwinther/reusable-workflows/.github/workflows/quality-artifact.yml@<sha>`. The
+  calling repo and ref are in the certificate's GitHub extensions:
+
+  ```sh
+  cosign verify ghcr.io/hwinther/clutterstock/quality:main \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity-regexp '^https://github[.]com/hwinther/reusable-workflows/[.]github/workflows/quality-artifact[.]yml@' \
+    --certificate-github-workflow-repository hwinther/ClutterStock \
+    --certificate-github-workflow-ref refs/heads/main
+  ```
+
+- **Through the `quality-artifact` action** in the caller's own job, the identity is the caller's
+  workflow, e.g. `https://github.com/hwinther/ClutterStock/.github/workflows/pr-e2e.yml@refs/heads/main`
+  (same as `manifests` and `sign-image`).
 
 Reading only the summary:
 
