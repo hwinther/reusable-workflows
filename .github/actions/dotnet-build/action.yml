@@ -388,6 +388,18 @@ runs:
       name: coverage-report
       path: ${{ steps.reportgenerator.outputs.report-path }}
 
+  # Raw TRX and Cobertura files for quality-artifact.yml, which collects every `quality-*` artifact
+  # of the run. Small, and uploaded on PRs too so the contract is the same on every event.
+  - name: Upload raw test results (quality-dotnet)
+    uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true' && !cancelled()
+    with:
+      name: quality-dotnet
+      path: |
+        ${{ inputs.working_directory || '.' }}/**/TestResults/*.trx
+        ${{ inputs.working_directory || '.' }}/**/coverage.cobertura.*.xml
+      if-no-files-found: ignore
+
   - name: Check for uncommitted changes
     shell: bash
     working-directory: ${{ inputs.working_directory }}

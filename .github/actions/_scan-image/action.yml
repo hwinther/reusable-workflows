@@ -111,6 +111,7 @@ runs:
         echo "cyclonedx_artifact_name=container-image-${POSTFIX}${name_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"
         echo "grype_artifact_name=container-image-${POSTFIX}${name_suffix}.grype.json" >> "$GITHUB_OUTPUT"
         echo "pr_comment_identifier=grype-summary-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
+        echo "quality_artifact_name=quality-scan-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
 
     # Downloading and installing the vulnerability DB is ~75s of every scan. Anchore
     # publishes one build a day (around 06:30 UTC), so the key rolls over at 08:00 UTC
@@ -234,6 +235,16 @@ runs:
         name: ${{ steps.paths.outputs.grype_artifact_name }}
         path: ${{ steps.paths.outputs.grype_json_path }}
         if-no-files-found: error
+
+    # The same Grype JSON for quality-artifact.yml, which collects every `quality-*` artifact of
+    # the run. Unconditional, unlike the attestation upload above.
+    - name: Upload Grype JSON (quality-scan)
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ steps.paths.outputs.quality_artifact_name }}
+        path: ${{ steps.paths.outputs.grype_json_path }}
+        if-no-files-found: ignore
 
     # Last, and on always(), so a failed gate still leaves the DB for the next run.
     # hashFiles() can't see outside the workspace, hence the explicit check.

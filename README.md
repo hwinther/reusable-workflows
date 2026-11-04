@@ -7,7 +7,7 @@ Reusable workflows, build and deploy for Node, .NET, Python, and Docker — plus
 Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 
 ### Build & PR checks
-- **`pr-build.yml`** — single PR-build entry point. Detects which stacks changed against the PR base and conditionally runs `node-build` and/or `dotnet-build`, plus optional ReSharper InspectCode and TODO commenter. Posts one combined PR comment.
+- **`pr-build.yml`** — single PR-build entry point. Detects which stacks changed against the PR base and conditionally runs `node-build` and/or `dotnet-build` (on `push` and `schedule` every enabled stack runs), plus optional ReSharper InspectCode and TODO commenter. Posts one combined PR comment.
 - **`playwright-e2e.yml`** — downloads images produced by `build-and-scan-*.yml`, runs Playwright via `docker compose up --wait`, posts a sticky PR summary, uploads the HTML report + traces + compose logs.
 
 ### Container build, scan, push
@@ -31,6 +31,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 - **`validate-version.yml`** — runs `scripts/validate-version-refs.mjs` to enforce that internal `uses:` refs match `.version-major` and that no `@main`/`@HEAD` floats slip in.
 
 ### Maintenance & quality
+- **`quality-artifact.yml`** — collects the run's `quality-*` workflow artifacts (unit test results and coverage from `node-build`/`dotnet-build`, Playwright JSON from `playwright-e2e.yml`, Grype JSON from the scans) and publishes them as the signed OCI artifact `ghcr.io/<owner>/<repo>/quality:<tag>`. Schema and formats: [docs/quality-artifact.md](docs/quality-artifact.md). Callers grant `contents: read`, `packages: write` and `id-token: write`.
 - **`stryker.yml`** — Stryker mutation testing for .NET (off by default — current MTP/dotnet-stryker hangs) and/or Node (on by default). Each is gated by an input flag.
 - **`format-and-create-pr.yml`** — multi-formatter helper. Runs `jb cleanupcode` against a .NET solution (`mode: cleanupcode`) or `ruff format` against a Python tree (`mode: ruff-format`) and opens a PR; a separate `mode: blame-ignore-revs` syncs `.git-blame-ignore-revs` from the matching merged commits.
 - **`dependabot-update-dotnet-lockfiles.yml`** — for `pull_request_target`: on labelled dependabot PRs, refreshes `packages.lock.json` files and pushes back to the PR branch via a caller-supplied `WORKFLOW_TOKEN`.
@@ -50,6 +51,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`.
 - **`package-version`** — computes a version from the latest reachable `v[X.Y.Z]` tag + commit count, in either `semver` or `pep440` format. Used by `package-deploy.yml` to share one version across ecosystems.
 - **`sign-image`** — runs cosign sign + cosign attest CycloneDX/vuln + `actions/attest` (SLSA build provenance) against an already-pushed digest. Designed to be called from the **consumer's own job** so the OIDC-keyless cert identity (`job_workflow_ref`) is the consumer's workflow, not this reusable repo. Verifies cross-job predicate-hash integrity and SBOM-image binding (`syft:image:manifestDigest` on the CycloneDX must equal the digest being attested) before publishing.
 - **`manifests`** — app manifests as a Flux OCI artifact. `mode: push` renders kustomize directories with images pinned to `tag@digest`, validates them (kubeconform + a `${VAR}` contract check against the nearest `README.md`), runs `flux push artifact` and cosign-signs the digest; `mode: diff` posts a PR report (change summary, Mermaid resource map per render, dyff per changed resource) to the job summary and a sticky comment. Runs in the **consumer's own job**, like `sign-image`, so the artifact's cosign identity is the consumer's workflow and the cluster's `OCIRepository.verify.matchOIDCIdentity` can pin it.
+- **`quality-artifact`** — the composite behind `quality-artifact.yml`: writes `summary.json` from a directory of reports, pushes it with the raw reports via ORAS and cosign-signs the digest in the consumer's job.
 - **`verify-image`** — read-only end-to-end smoke test. Pulls signature + attestation metadata back from the registry and runs `cosign verify`, `cosign verify-attestation --type cyclonedx`, `cosign verify-attestation --type vuln`, `gh attestation verify`, plus a tag → digest resolution check. Useful as a final job in the publishing pipeline so signing/attestation breakage shows up in CI instead of at the consumer's admission controller.
 
 Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_push-staging-image`, `_choose-image-handoff`, `_resolve-image-handoff`, `_dotnet-add-nuget-source`.
