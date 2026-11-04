@@ -17,6 +17,7 @@ already do this:
 | Producer | Artifact | Contents |
 |---|---|---|
 | `node-build` (via `pr-build.yml`) | `quality-node` | JUnit XML, Vitest JSON, Cobertura XML / Istanbul `coverage-summary.json` from `coverage/`; `warnings.json` (typecheck, build, lint) |
+| `python-build` (via `pr-build.yml`) | `quality-python` | pytest JUnit XML, Cobertura (`coverage.xml`), `warnings.json` (pytest warnings) |
 | `dotnet-build` (via `pr-build.yml`) | `quality-dotnet` | TRX and Cobertura XML from `**/TestResults`; `warnings.json` (restore, build, test) |
 | `playwright-e2e.yml` | `quality-e2e` | Playwright JSON report (`results_json_path`) |
 | `scan-image.yml` and the other image scans | `quality-scan-<postfix>` | Grype JSON |
