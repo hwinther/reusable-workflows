@@ -393,7 +393,9 @@ runs:
   # every event. Staged outside the working tree so the uncommitted-changes check below ignores it.
   - name: Stage quality reports
     id: quality-stage
-    if: ${{ !cancelled() }}
+    # Only a run with tests reports quality: pr-build's inspect-code job runs this action with
+    # test: false, and a second quality-* artifact of the same name would shadow the real one.
+    if: ${{ !cancelled() && inputs.test == 'true' }}
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     run: |
