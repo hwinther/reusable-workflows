@@ -67,7 +67,11 @@ Who signed it depends on where the signing ran:
   calling repo and ref are in the certificate's GitHub extensions:
 
   ```sh
-  cosign verify ghcr.io/hwinther/clutterstock/quality:main     --certificate-oidc-issuer https://token.actions.githubusercontent.com     --certificate-identity-regexp '^https://github[.]com/hwinther/reusable-workflows/[.]github/workflows/quality-artifact[.]yml@'     --certificate-github-workflow-repository hwinther/ClutterStock     --certificate-github-workflow-ref refs/heads/main
+  cosign verify ghcr.io/hwinther/clutterstock/quality:main \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    --certificate-identity-regexp '^https://github[.]com/hwinther/reusable-workflows/[.]github/workflows/quality-artifact[.]yml@' \
+    --certificate-github-workflow-repository hwinther/ClutterStock \
+    --certificate-github-workflow-ref refs/heads/main
   ```
 
 - **Through the `quality-artifact` action** in the caller's own job, the identity is the caller's
