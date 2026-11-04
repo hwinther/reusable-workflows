@@ -4,6 +4,10 @@
 
 # Dotnet expects a solution file (sln/slnx) and: build (dotnet build)
 
+# On push and schedule (e.g. every push to main, for quality-artifact.yml) every enabled language
+# builds and tests: there is no PR base to diff against. Pull requests, merge groups and manual runs
+# still build only the languages with changes against main.
+
 # Python expects a hatchling-style pyproject.toml in python_working_directory with a [project.optional-dependencies] dev group (ruff, mypy, pytest, pytest-cov, build). The action runs ruff check + ruff format --check + mypy + pytest + python -m build smoke.
 
 name: "Build and lint in PR"
@@ -185,10 +189,17 @@ jobs:
 
       - name: Set comparison base
         id: set-base
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
-            echo "base_ref=${{ github.event.pull_request.base.sha }}" >> $GITHUB_OUTPUT
-            echo "Comparing with PR base branch (${{ github.event.pull_request.base.ref }}): ${{ github.event.pull_request.base.sha }}"
+          if [ "$EVENT_NAME" == "push" ] || [ "$EVENT_NAME" == "schedule" ]; then
+            echo "base_ref=" >> "$GITHUB_OUTPUT"
+            echo "Push or schedule: building every enabled language"
+          elif [ "$EVENT_NAME" == "pull_request" ]; then
+            echo "base_ref=$PR_BASE_SHA" >> "$GITHUB_OUTPUT"
+            echo "Comparing with PR base branch ($PR_BASE_REF): $PR_BASE_SHA"
           else
             git fetch origin main
             echo "base_ref=origin/main" >> $GITHUB_OUTPUT
@@ -215,14 +226,14 @@ jobs:
 
           echo "Using regex pattern: $PATTERN"
           echo "Files to check against:"
-          git diff --name-only "$BASE_REF"...HEAD
+          [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD
 
           {
             echo "## 🔍 ${LABEL} change check"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
+          if [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
             echo "changes_detected=true" >> "$GITHUB_OUTPUT"
             echo "Changes detected in pattern."
             echo "✅ Changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
@@ -252,14 +263,14 @@ jobs:
 
           echo "Using regex pattern: $PATTERN"
           echo "Files to check against:"
-          git diff --name-only "$BASE_REF"...HEAD
+          [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD
 
           {
             echo "## 🔍 ${LABEL} change check"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
+          if [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
             echo "changes_detected=true" >> "$GITHUB_OUTPUT"
             echo "Changes detected in pattern."
             echo "✅ Changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
@@ -303,14 +314,14 @@ jobs:
 
           echo "Using regex pattern: $PATTERN"
           echo "Files to check against:"
-          git diff --name-only "$BASE_REF"...HEAD
+          [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD
 
           {
             echo "## 🔍 ${LABEL} change check"
             echo ""
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
+          if [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
             echo "changes_detected=true" >> "$GITHUB_OUTPUT"
             echo "Changes detected in pattern."
             echo "✅ Changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"

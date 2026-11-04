@@ -1,0 +1,84 @@
+name: "Publish a quality artifact"
+
+# Collects every `quality-*` workflow artifact of the calling run and publishes them as the signed
+# OCI artifact ghcr.io/<owner>/<repo>/quality:<tag> (see .github/actions/quality-artifact).
+#
+# Producers in this repo upload under that prefix: dotnet-build (quality-dotnet: TRX + Cobertura),
+# node-build (quality-node: JUnit, Vitest JSON, Cobertura), playwright-e2e (quality-e2e: Playwright
+# JSON) and the image scans (quality-scan-<postfix>: Grype JSON). Call this last, with `needs:` on
+# every job whose reports belong in it, and `if: ${{ !cancelled() }}` so a failed test job still
+# publishes its failures. Any other job can join by uploading a `quality-<name>` artifact in a
+# format scripts/quality_summary.py reads.
+#
+# Signed in this job, so the cosign identity is the caller's workflow, e.g.
+# .github/workflows/pr-e2e.yml@refs/heads/main.
+
+on:
+  workflow_call:
+    inputs:
+      tags:
+        description: "Artifact tags, one per line or space-separated (e.g. `main-abc1234 main`, or a release version)."
+        required: true
+        type: string
+      version:
+        description: "App version recorded in summary.json."
+        required: false
+        default: ""
+        type: string
+      artifact:
+        description: "OCI repository without tag. Default `ghcr.io/<owner>/<repo>/quality`, lowercased."
+        required: false
+        default: ""
+        type: string
+      sign:
+        description: "Sign the artifact with cosign keyless."
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      artifact:
+        description: "The OCI repository pushed to."
+        value: ${{ jobs.publish.outputs.artifact }}
+      digest:
+        description: "Digest of the pushed artifact."
+        value: ${{ jobs.publish.outputs.digest }}
+
+permissions: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    outputs:
+      artifact: ${{ steps.publish.outputs.artifact }}
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - name: Download quality-* artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: quality-*
+          path: ${{ runner.temp }}/quality-reports
+
+      - name: Summarize, push and sign
+        id: publish
+        uses: hwinther/reusable-workflows/.github/actions/quality-artifact@v2
+        with:
+          reports_dir: ${{ runner.temp }}/quality-reports
+          tags: ${{ inputs.tags }}
+          version: ${{ inputs.version }}
+          artifact: ${{ inputs.artifact }}
+          sign: ${{ inputs.sign }}
+
+      # The same summary as a workflow artifact, so a reader with only Actions read access (a
+      # GitHub App on a private repo, where the GHCR package is private too) can fetch it from
+      # the latest run without registry credentials.
+      - name: Upload summary.json (quality-summary)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-summary
+          path: ${{ runner.temp }}/quality-artifact/summary.json
+          retention-days: 90

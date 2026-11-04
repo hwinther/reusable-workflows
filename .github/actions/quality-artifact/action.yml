@@ -1,0 +1,127 @@
+name: "Publish a quality artifact"
+description: |
+  Public composite. Turns a run's test, coverage and scan reports into one signed OCI artifact,
+  `<registry>/<owner>/<repo>/quality:<tag>`, so a central repo can list every app's quality
+  without knowing how each one builds.
+
+  The artifact has two layers:
+    summary.json     application/vnd.wsh.quality.summary.v1+json: schemaVersion 1, repository,
+                     commit, ref, version, run, components (per `quality-*` artifact: kind, tests,
+                     coverage, vulnerabilities) and totals. The only layer a dashboard needs.
+    reports.tar.gz   application/vnd.wsh.quality.reports.v1.tar+gzip: the raw reports as uploaded
+                     (TRX/JUnit, Cobertura, Playwright JSON, Grype JSON).
+  scripts/quality_summary.py documents which formats it reads.
+
+  `reports_dir` must hold one directory per component, as actions/download-artifact writes a
+  `pattern: quality-*` download; quality-artifact.yml does that for the current run. Signed with
+  cosign keyless in the caller's job, so the certificate identity is the caller's workflow (same
+  as manifests and sign-image).
+
+  Permissions: contents: read, packages: write, id-token: write (sign).
+
+inputs:
+  reports_dir:
+    required: true
+    description: "Directory with one subdirectory per `quality-*` artifact."
+  tags:
+    required: true
+    description: "Artifact tags, one per line or space-separated (e.g. `main-abc1234` and `main`, or a release version). The first is pushed, the rest point at the same digest."
+  artifact:
+    required: false
+    description: "OCI repository without tag. Default `ghcr.io/<owner>/<repo>/quality`, lowercased."
+    default: ""
+  version:
+    required: false
+    description: "App version recorded in summary.json and as an annotation."
+    default: ""
+  sign:
+    required: false
+    description: "Sign the pushed digest with cosign keyless (needs id-token: write)."
+    default: "true"
+  registry_username:
+    required: false
+    description: "Registry login user."
+    default: ${{ github.actor }}
+  registry_token:
+    required: false
+    description: "Registry login token (packages: write)."
+    default: ${{ github.token }}
+
+outputs:
+  artifact:
+    description: "The OCI repository pushed to."
+    value: ${{ steps.push.outputs.artifact }}
+  digest:
+    description: "Digest of the pushed artifact."
+    value: ${{ steps.push.outputs.digest }}
+
+runs:
+  using: composite
+  steps:
+    - name: Summarize reports
+      shell: bash
+      env:
+        REPORTS_DIR: ${{ inputs.reports_dir }}
+        QUALITY_VERSION: ${{ inputs.version }}
+        SCRIPT: ${{ github.action_path }}/scripts/quality_summary.py
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/quality-artifact"
+        rm -rf "$out" && mkdir -p "$out"
+        python3 "$SCRIPT" "$REPORTS_DIR" "$out/summary.json" "$out/summary.md"
+        if [ -d "$REPORTS_DIR" ]; then
+          tar -czf "$out/reports.tar.gz" -C "$REPORTS_DIR" .
+        else
+          tar -czf "$out/reports.tar.gz" -T /dev/null
+        fi
+        cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Set up ORAS
+      uses: oras-project/setup-oras@005458ad77f1c8facd38a094e4af2e69e5607ff4 # v2.0.2
+
+    - name: Set up cosign
+      if: inputs.sign == 'true'
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+    - name: Push and sign
+      id: push
+      shell: bash
+      env:
+        ARTIFACT: ${{ inputs.artifact }}
+        TAGS: ${{ inputs.tags }}
+        VERSION: ${{ inputs.version }}
+        SIGN: ${{ inputs.sign }}
+        REGISTRY_USERNAME: ${{ inputs.registry_username }}
+        REGISTRY_TOKEN: ${{ inputs.registry_token }}
+      run: |
+        set -euo pipefail
+        ARTIFACT="${ARTIFACT:-ghcr.io/${GITHUB_REPOSITORY,,}/quality}"
+        read -r -a tags <<< "$(printf '%s' "$TAGS" | tr '\n' ' ')"
+        [ "${#tags[@]}" -gt 0 ] || { echo "::error::tags is empty"; exit 1; }
+
+        # oras and cosign both read ~/.docker/config.json.
+        printf '%s' "$REGISTRY_TOKEN" | docker login "${ARTIFACT%%/*}" --username "$REGISTRY_USERNAME" --password-stdin
+
+        cd "$RUNNER_TEMP/quality-artifact"
+        pushed="$(oras push "${ARTIFACT}:${tags[0]}" \
+          --artifact-type application/vnd.wsh.quality.v1 \
+          --annotation "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+          --annotation "org.opencontainers.image.revision=${GITHUB_SHA}" \
+          --annotation "org.opencontainers.image.version=${VERSION}" \
+          --annotation "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          --format json \
+          summary.json:application/vnd.wsh.quality.summary.v1+json \
+          reports.tar.gz:application/vnd.wsh.quality.reports.v1.tar+gzip)"
+        digest="$(printf '%s' "$pushed" | jq -r '.digest')"
+        if [ "${#tags[@]}" -gt 1 ]; then
+          oras tag "${ARTIFACT}@${digest}" "${tags[@]:1}"
+        fi
+        if [ "$SIGN" = true ]; then
+          cosign sign --yes "${ARTIFACT}@${digest}"
+        fi
+        echo "artifact=$ARTIFACT" >> "$GITHUB_OUTPUT"
+        echo "digest=$digest" >> "$GITHUB_OUTPUT"
+        {
+          echo
+          echo "\`${ARTIFACT}\` → \`${digest}\`, tags $(printf '`%s` ' "${tags[@]}")$([ "$SIGN" = true ] && echo '(signed, cosign keyless)')"
+        } >> "$GITHUB_STEP_SUMMARY"
