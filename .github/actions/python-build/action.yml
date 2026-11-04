@@ -280,10 +280,14 @@ runs:
           echo "failed=true" >> $GITHUB_OUTPUT
         else
           # Extract pytest's own summary line (e.g. "5 passed in 0.42s") if present.
-          summary=$(grep -E "^=+ .* (passed|failed|error|skipped|xfailed|xpassed) .* =+$" $TEMP_DIR/pytest.out | tail -n 1 || true)
+          # e.g. "== 5 passed in 0.42s ==" or "== 407 passed, 253 warnings in 128s ==".
+          summary=$(grep -E "^=+ .*(passed|failed|error|skipped|xfailed|xpassed).* =+$" $TEMP_DIR/pytest.out | tail -n 1 || true)
           {
             echo "## ✅ Pytest passed"
-            [ -n "$summary" ] && echo "" && echo "\`$summary\`"
+            if [ -n "$summary" ]; then
+              echo ""
+              echo "\`$summary\`"
+            fi
           } > $TEMP_DIR/pytest.md
         fi
 

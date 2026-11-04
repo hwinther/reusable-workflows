@@ -159,6 +159,11 @@ on:
         type: string
         description: "Space-separated import names for pytest --cov. Default: [project].name from pyproject.toml; set it when the code spans several top-level packages (a Django project's apps)."
         default: ""
+      runs_on:
+        required: false
+        type: string
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash, git and the network access the setup-* actions use."
+        default: "ubuntu-latest"
       todo_comment_enabled:
         required: false
         type: boolean
@@ -181,7 +186,7 @@ concurrency:
 
 jobs:
   detect-changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 5
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     permissions:
@@ -344,7 +349,7 @@ jobs:
   node-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.node_changes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -382,7 +387,7 @@ jobs:
   dotnet-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.dotnet_changes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 25
     permissions:
       contents: read
@@ -423,7 +428,7 @@ jobs:
   python-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -459,7 +464,7 @@ jobs:
   pr-build:
     needs: [detect-changes, node-build, dotnet-build, python-build]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 5
     permissions:
       pull-requests: write
@@ -555,7 +560,7 @@ jobs:
   dotnet-inspect-code:
     needs: detect-changes
     if: inputs.dotnet_inspect_code_enabled && needs.detect-changes.outputs.dotnet_changes == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -600,7 +605,7 @@ jobs:
   todo-comments:
     needs: detect-changes
     if: inputs.todo_comment_enabled && (needs.detect-changes.outputs.dotnet_changes == 'true' || needs.detect-changes.outputs.node_changes == 'true' || needs.detect-changes.outputs.python_changes == 'true')
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 5
     permissions:
       contents: read
