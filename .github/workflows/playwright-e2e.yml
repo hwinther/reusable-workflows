@@ -522,7 +522,7 @@ jobs:
 
       - name: Slow spans report
         if: ${{ always() && inputs.otel_traces_file != '' }}
-        uses: hwinther/reusable-workflows/.github/actions/otel-slow-spans@v2
+        uses: hwinther/reusable-workflows/.github/actions/otel-slow-spans@v2.18.0
         with:
           traces_file: ${{ inputs.otel_traces_file }}
           threshold_ms: ${{ inputs.slow_span_threshold_ms }}
