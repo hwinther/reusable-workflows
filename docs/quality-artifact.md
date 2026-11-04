@@ -16,8 +16,8 @@ already do this:
 
 | Producer | Artifact | Contents |
 |---|---|---|
-| `node-build` (via `pr-build.yml`) | `quality-node` | JUnit XML, Vitest JSON, Cobertura XML / Istanbul `coverage-summary.json` from `coverage/` |
-| `dotnet-build` (via `pr-build.yml`) | `quality-dotnet` | TRX and Cobertura XML from `**/TestResults` |
+| `node-build` (via `pr-build.yml`) | `quality-node` | JUnit XML, Vitest JSON, Cobertura XML / Istanbul `coverage-summary.json` from `coverage/`; `warnings.json` (typecheck, build, lint) |
+| `dotnet-build` (via `pr-build.yml`) | `quality-dotnet` | TRX and Cobertura XML from `**/TestResults`; `warnings.json` (restore, build, test) |
 | `playwright-e2e.yml` | `quality-e2e` | Playwright JSON report (`results_json_path`) |
 | `scan-image.yml` and the other image scans | `quality-scan-<postfix>` | Grype JSON |
 
@@ -52,6 +52,9 @@ Any other job can join by uploading a `quality-<name>` artifact in one of the fo
 | `summary.json` | `application/vnd.wsh.quality.summary.v1+json` | The summary below. The only layer a dashboard needs. |
 | `reports.tar.gz` | `application/vnd.wsh.quality.reports.v1.tar+gzip` | The raw reports, one directory per `quality-*` artifact. |
 
+The same `summary.json` is also uploaded as the workflow artifact `quality-summary` (90 days), for
+readers that have Actions read access but no registry credentials, e.g. on a private repo.
+
 The artifact type is `application/vnd.wsh.quality.v1`. Its manifest carries the
 `org.opencontainers.image.{source,revision,version,created}` annotations, and it is signed with
 cosign keyless. The certificate identity is the caller's workflow, e.g.
@@ -83,7 +86,8 @@ oras manifest fetch ghcr.io/hwinther/clutterstock/quality:main \
       "coverage": {
         "lines": { "covered": 1018, "total": 1152, "percent": 88.37 },
         "branches": { "covered": 110, "total": 162, "percent": 67.9 }
-      }
+      },
+      "warnings": { "restore": 0, "build": 3, "test": 1, "total": 4 }
     },
     "e2e": { "kind": "e2e", "tests": { "total": 20, "passed": 20, "failed": 0, "skipped": 0 } },
     "scan-api": {
@@ -97,13 +101,15 @@ oras manifest fetch ghcr.io/hwinther/clutterstock/quality:main \
   },
   "totals": {
     "tests": { "unit": { "total": 119, "passed": 119, "failed": 0, "skipped": 0 }, "e2e": { "total": 20, "passed": 20, "failed": 0, "skipped": 0 } },
+    "warnings": 4,
     "vulnerabilities": { "bySeverity": { "critical": 0, "high": 14, "medium": 33, "low": 4, "negligible": 8, "unknown": 0 }, "total": 59, "fixable": 2 }
   }
 }
 ```
 
 - A component's name is its artifact name without `quality-`. `kind` is `unit`, `e2e` or `scan`.
-- `tests`, `coverage` and `vulnerabilities` appear only when the component had reports of that kind.
+- `warnings` counts unique warning lines per source, as the PR comment lists them.
+- `tests`, `coverage`, `warnings` and `vulnerabilities` appear only when the component had reports of that kind.
 - `percent` is `null` when there is nothing to cover (`total` 0).
 - Adding fields is a compatible change. Renaming or removing one bumps `schemaVersion`.
 
@@ -114,6 +120,7 @@ oras manifest fetch ghcr.io/hwinther/clutterstock/quality:main \
 | tests | TRX, JUnit XML, Vitest/Jest JSON (`numTotalTests`), Playwright JSON (`stats`) |
 | coverage | Cobertura XML, Istanbul `coverage-summary.json` |
 | scan | Grype JSON |
+| warnings | `{"warnings": {"<source>": <count>}}` |
 
 Within one component JUnit is preferred over Vitest JSON, and Cobertura over Istanbul, so a project
 that writes both is not counted twice. Files of the same format add up, e.g. one TRX and one

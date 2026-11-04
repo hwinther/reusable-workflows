@@ -11,6 +11,7 @@ content, so any language can join by uploading one of these formats:
             Playwright JSON (stats.expected)
   coverage  Cobertura XML (<coverage lines-valid=...>), Istanbul coverage-summary.json
   scan      Grype JSON (matches[].vulnerability)
+  warnings  {"warnings": {"<source>": <count>, ...}} (dotnet-build and node-build write warnings.json)
 
 Within a component JUnit wins over Vitest JSON, and Cobertura over coverage-summary.json, so a
 project that writes both is not counted twice. Several files of the same format add up (one TRX
@@ -87,6 +88,8 @@ def parse_json(data):
     """Returns (kind, value) for a recognised JSON report, else (None, None)."""
     if not isinstance(data, dict):
         return None, None
+    if isinstance(data.get("warnings"), dict):  # warnings.json from dotnet-build / node-build
+        return "warnings", {str(k): num(v) for k, v in data["warnings"].items()}
     if "numTotalTests" in data:  # Vitest / Jest
         total = num(data.get("numTotalTests"))
         failed = num(data.get("numFailedTests"))
@@ -122,7 +125,7 @@ def percent(part):
 
 
 def read_component(directory):
-    found = {"trx": [], "junit": [], "vitest": [], "playwright": [], "cobertura": [], "istanbul": [], "grype": []}
+    found = {"trx": [], "junit": [], "vitest": [], "playwright": [], "cobertura": [], "istanbul": [], "grype": [], "warnings": []}
     for path in sorted(directory.rglob("*")):
         if not path.is_file():
             continue
@@ -168,6 +171,13 @@ def read_component(directory):
             part["percent"] = percent(part)
         component.setdefault("kind", "unit")
         component["coverage"] = coverage
+    if found["warnings"]:
+        warnings = {}
+        for value in found["warnings"]:
+            add(warnings, value)
+        warnings["total"] = sum(warnings.values())
+        component.setdefault("kind", "unit")
+        component["warnings"] = warnings
     if found["grype"]:
         vulns = {"bySeverity": {s: 0 for s in SEVERITIES}, "total": 0, "fixable": 0}
         for value in found["grype"]:
@@ -188,10 +198,12 @@ def build(reports):
         if component:
             components[name] = component
 
-    totals = {"tests": {}, "vulnerabilities": {"bySeverity": {s: 0 for s in SEVERITIES}, "total": 0, "fixable": 0}}
+    totals = {"tests": {}, "warnings": 0, "vulnerabilities": {"bySeverity": {s: 0 for s in SEVERITIES}, "total": 0, "fixable": 0}}
     for component in components.values():
         if "tests" in component:
             add(totals["tests"].setdefault(component["kind"], empty_tests()), component["tests"])
+        if "warnings" in component:
+            totals["warnings"] += component["warnings"]["total"]
         if "vulnerabilities" in component:
             add(totals["vulnerabilities"]["bySeverity"], component["vulnerabilities"]["bySeverity"])
             totals["vulnerabilities"]["total"] += component["vulnerabilities"]["total"]
@@ -224,14 +236,18 @@ def markdown(summary):
         shown = [f"{v['bySeverity'][s]} {s}" for s in SEVERITIES if v["bySeverity"][s]]
         return (", ".join(shown) or "none") + (f" ({v['fixable']} fixable)" if v["fixable"] else "")
 
-    rows = ["| Component | Kind | Tests | Coverage | Vulnerabilities |", "|---|---|---|---|---|"]
+    def warns(w):
+        return str(w["total"]) + (" (" + ", ".join(f"{k} {v}" for k, v in w.items() if k != "total" and v) + ")" if w["total"] else "")
+
+    rows = ["| Component | Kind | Tests | Coverage | Warnings | Vulnerabilities |", "|---|---|---|---|---|---|"]
     for name, c in summary["components"].items():
         rows.append(
             f"| `{name}` | {c.get('kind', '')} | {tests(c['tests']) if 'tests' in c else ''} "
-            f"| {cov(c['coverage']) if 'coverage' in c else ''} | {vulns(c['vulnerabilities']) if 'vulnerabilities' in c else ''} |"
+            f"| {cov(c['coverage']) if 'coverage' in c else ''} | {warns(c['warnings']) if 'warnings' in c else ''} "
+            f"| {vulns(c['vulnerabilities']) if 'vulnerabilities' in c else ''} |"
         )
     if not summary["components"]:
-        rows.append("| _no `quality-*` reports found_ | | | | |")
+        rows.append("| _no `quality-*` reports found_ | | | | | |")
     return "### Quality summary\n\n" + "\n".join(rows) + "\n"
 
 

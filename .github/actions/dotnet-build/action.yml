@@ -388,16 +388,33 @@ runs:
       name: coverage-report
       path: ${{ steps.reportgenerator.outputs.report-path }}
 
-  # Raw TRX and Cobertura files for quality-artifact.yml, which collects every `quality-*` artifact
-  # of the run. Small, and uploaded on PRs too so the contract is the same on every event.
-  - name: Upload raw test results (quality-dotnet)
+  # Raw TRX and Cobertura files plus warning counts for quality-artifact.yml, which collects every
+  # `quality-*` artifact of the run. Small, and uploaded on PRs too so the contract is the same on
+  # every event. Staged outside the working tree so the uncommitted-changes check below ignores it.
+  - name: Stage quality reports
+    id: quality-stage
+    if: ${{ !cancelled() }}
+    shell: bash
+    working-directory: ${{ inputs.working_directory }}
+    run: |
+      set -euo pipefail
+      out="$RUNNER_TEMP/quality-dotnet"
+      rm -rf "$out" && mkdir -p "$out"
+      find . \( -path "*/TestResults/*.trx" -o -name "coverage.cobertura.*.xml" \) -type f -print0 \
+        | while IFS= read -r -d '' f; do cp "$f" "$out/$(echo "${f#./}" | tr '/' '_')"; done
+      # Unique warning lines, as the PR comment lists them.
+      count() { if [ -f "$1" ]; then sort -u "$1" | sed '/^$/d' | wc -l; else echo 0; fi; }
+      printf '{"warnings": {"restore": %d, "build": %d, "test": %d}}\n' \
+        "$(count "$TEMP_DIR/restore.warn")" "$(count "$TEMP_DIR/build.warn")" "$(count "$TEMP_DIR/test.warn")" \
+        > "$out/warnings.json"
+      echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+  - name: Upload quality reports (quality-dotnet)
     uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true' && !cancelled()
+    if: ${{ !cancelled() && steps.quality-stage.outcome == 'success' }}
     with:
       name: quality-dotnet
-      path: |
-        ${{ inputs.working_directory || '.' }}/**/TestResults/*.trx
-        ${{ inputs.working_directory || '.' }}/**/coverage.cobertura.*.xml
+      path: ${{ steps.quality-stage.outputs.dir }}
       if-no-files-found: ignore
 
   - name: Check for uncommitted changes

@@ -72,3 +72,13 @@ jobs:
           version: ${{ inputs.version }}
           artifact: ${{ inputs.artifact }}
           sign: ${{ inputs.sign }}
+
+      # The same summary as a workflow artifact, so a reader with only Actions read access (a
+      # GitHub App on a private repo, where the GHCR package is private too) can fetch it from
+      # the latest run without registry credentials.
+      - name: Upload summary.json (quality-summary)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-summary
+          path: ${{ runner.temp }}/quality-artifact/summary.json
+          retention-days: 90
