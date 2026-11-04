@@ -390,6 +390,16 @@ runs:
       printf '{"warnings": {"typecheck": %d, "build": %d, "lint": %d}}\n' \
         "$(count "$TEMP_DIR/typecheck.warn")" "$(count "$TEMP_DIR/build.warn")" "$lint" \
         > "$out/warnings.json"
+      # The warning lines themselves, for the quality artifact's per-code breakdown (capped). ESLint
+      # warnings are rewritten from eslint.json as `file:line:col: warning <rule>: <message>`.
+      for f in typecheck build; do
+        if [ -s "$TEMP_DIR/$f.warn" ]; then sort -u "$TEMP_DIR/$f.warn" | awk 'NF && NR <= 2000' > "$out/$f.warn"; fi
+      done
+      if [ "$lint" -gt 0 ]; then
+        jq -r '.[] | .filePath as $f | .messages[] | select(.severity == 1)
+          | "\($f):\(.line // 0):\(.column // 0): warning \(.ruleId // "eslint"): \(.message)"' \
+          "$TEMP_DIR/eslint.json" 2>/dev/null | awk 'NR <= 2000' > "$out/lint.warn" || true
+      fi
       echo "dir=$out" >> "$GITHUB_OUTPUT"
 
   - name: Upload quality reports (quality-node)

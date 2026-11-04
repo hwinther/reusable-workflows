@@ -4,10 +4,13 @@ description: |
   `<registry>/<owner>/<repo>/quality:<tag>`, so a central repo can list every app's quality
   without knowing how each one builds.
 
-  The artifact has two layers:
+  The artifact has three layers:
     summary.json     application/vnd.wsh.quality.summary.v1+json: schemaVersion 1, repository,
                      commit, ref, version, run, components (per `quality-*` artifact: kind, tests,
-                     coverage, vulnerabilities) and totals. The only layer a dashboard needs.
+                     coverage, warnings, vulnerabilities) and totals. All an overview needs.
+    details.json     application/vnd.wsh.quality.details.v1+json: coverage per source file,
+                     warnings grouped by code with examples, every vulnerability match. For
+                     drill-down.
     reports.tar.gz   application/vnd.wsh.quality.reports.v1.tar+gzip: the raw reports as uploaded
                      (TRX/JUnit, Cobertura, Playwright JSON, Grype JSON).
   scripts/quality_summary.py documents which formats it reads.
@@ -69,7 +72,7 @@ runs:
         set -euo pipefail
         out="$RUNNER_TEMP/quality-artifact"
         rm -rf "$out" && mkdir -p "$out"
-        python3 "$SCRIPT" "$REPORTS_DIR" "$out/summary.json" "$out/summary.md"
+        python3 "$SCRIPT" "$REPORTS_DIR" "$out/summary.json" "$out/summary.md" "$out/details.json"
         if [ -d "$REPORTS_DIR" ]; then
           tar -czf "$out/reports.tar.gz" -C "$REPORTS_DIR" .
         else
@@ -112,6 +115,7 @@ runs:
           --annotation "org.opencontainers.image.created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
           --format json \
           summary.json:application/vnd.wsh.quality.summary.v1+json \
+          details.json:application/vnd.wsh.quality.details.v1+json \
           reports.tar.gz:application/vnd.wsh.quality.reports.v1.tar+gzip)"
         digest="$(printf '%s' "$pushed" | jq -r '.digest')"
         if [ "${#tags[@]}" -gt 1 ]; then
