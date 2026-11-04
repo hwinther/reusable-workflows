@@ -8,6 +8,9 @@ server spans (incoming HTTP requests) and database spans (SQL), and prints:
     statement, slowest first;
   - the slowest few overall, so the report says something even when nothing crossed the threshold.
 
+WebSocket upgrades (server spans answered 101, e.g. a SignalR hub) are left out and counted apart:
+their span lasts as long as the socket stays open, which says nothing about request latency.
+
 Usage: slow_spans.py <traces.jsonl> <threshold_ms> <top_n>
 """
 
@@ -44,7 +47,7 @@ def one_line(text):
 
 
 def classify(span, attrs):
-    """('api' | 'sql', label) for spans worth reporting, else None."""
+    """('api' | 'sql' | 'websocket', label) for spans worth reporting, else None."""
     if "db.system" in attrs or "db.system.name" in attrs:
         query = attrs.get("db.query.text") or attrs.get("db.statement") or span.get("name", "")
         return "sql", one_line(query)
@@ -56,7 +59,11 @@ def classify(span, attrs):
             or attrs.get("http.target")
             or span.get("name", "")
         )
-        return "api", one_line(f"{method} {route}".strip())
+        label = one_line(f"{method} {route}".strip())
+        status = attrs.get("http.response.status_code", attrs.get("http.status_code"))
+        if str(status) == "101":
+            return "websocket", label
+        return "api", label
     return None
 
 
@@ -105,6 +112,8 @@ def main():
         return
 
     spans = list(read_spans(path))
+    websockets = sum(1 for s in spans if s[0] == "websocket")
+    spans = [s for s in spans if s[0] != "websocket"]
     if not spans:
         print(f"{title}\n\nThe trace file has no server or database spans.")
         return
@@ -116,7 +125,8 @@ def main():
     print(title)
     print()
     counts = {c: sum(1 for s in spans if s[0] == c) for c in ("api", "sql")}
-    print(f"{counts['api']} API requests and {counts['sql']} SQL queries traced.")
+    left_out = f" {websockets} WebSocket connection{'s' if websockets != 1 else ''} left out (a socket's span is how long it stayed open)." if websockets else ""
+    print(f"{counts['api']} API requests and {counts['sql']} SQL queries traced.{left_out}")
     print()
 
     names = {"api": "API requests", "sql": "SQL queries"}
