@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Build summary.json (schema v1) and a markdown table from a run's `quality-*` artifacts.
+"""Build summary.json and details.json (schema v1) and a markdown table from a run's `quality-*`
+artifacts.
 
-Usage: quality_summary.py <reports-dir> <summary.json> <summary.md>
+Usage: quality_summary.py <reports-dir> <summary.json> <summary.md> [<details.json>]
 
 <reports-dir> holds one directory per artifact, as actions/download-artifact writes them: the
 directory name minus its `quality-` prefix is the component name. Each component is read by
@@ -11,16 +12,21 @@ content, so any language can join by uploading one of these formats:
             Playwright JSON (stats.expected)
   coverage  Cobertura XML (<coverage lines-valid=...>), Istanbul coverage-summary.json
   scan      Grype JSON (matches[].vulnerability)
-  warnings  {"warnings": {"<source>": <count>, ...}} (dotnet-build and node-build write warnings.json)
+  warnings  {"warnings": {"<source>": <count>, ...}} (dotnet-build and node-build write warnings.json),
+            plus the warning lines themselves as <source>.warn for details.json
 
 Within a component JUnit wins over Vitest JSON, and Cobertura over coverage-summary.json, so a
-project that writes both is not counted twice. Several files of the same format add up (one TRX
-and one Cobertura per .NET test project); when two test projects cover the same assembly, its
-lines count twice, so treat .NET line coverage as approximate.
+project that writes both is not counted twice. Test results of the same format add up (one TRX per
+.NET test project). Cobertura files are merged per source file and line (a line counts as covered
+if any report covers it), so two test projects covering the same assembly don't count it twice.
+
+details.json holds what a report needs to drill down: coverage per source file (paths relative to
+the repo), warnings grouped by source and code with examples, and every vulnerability match.
 """
 
 import json
 import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -120,6 +126,153 @@ def parse_json(data):
     return None, None
 
 
+def repo_relative(path):
+    """Strip the runner's checkout path, so file names read as repo paths."""
+    workspace = os.environ.get("GITHUB_WORKSPACE", "").rstrip("/")
+    path = path.replace("\\", "/")
+    if workspace and path.startswith(workspace + "/"):
+        return path[len(workspace) + 1:]
+    return re.sub(r"^/home/runner/work/[^/]+/[^/]+/", "", path)
+
+
+CONDITION = re.compile(r"\((\d+)/(\d+)\)")
+
+
+def cobertura_lines(root):
+    """{file: {line: (hits, branches_covered, branches_total)}} from one Cobertura report."""
+    sources = [s.text.strip() for s in root.iter() if local(s.tag) == "source" and s.text and s.text.strip()]
+    files = {}
+    for cls in (el for el in root.iter() if local(el.tag) == "class"):
+        name = (cls.get("filename") or "").replace("\\", "/")
+        if not name:
+            continue
+        if not name.startswith("/") and not re.match(r"^[A-Za-z]:", name) and sources:
+            name = sources[0].replace("\\", "/").rstrip("/") + "/" + name
+        lines = files.setdefault(repo_relative(name), {})
+        holder = next((el for el in cls if local(el.tag) == "lines"), None)
+        for line in (holder if holder is not None else []):
+            number = num(line.get("number"))
+            hits = num(line.get("hits"))
+            covered = total = 0
+            if (line.get("branch") or "").lower() == "true":
+                m = CONDITION.search(line.get("condition-coverage") or "")
+                if m:
+                    covered, total = int(m.group(1)), int(m.group(2))
+            old = lines.get(number, (0, 0, 0))
+            lines[number] = (max(old[0], hits), max(old[1], covered), max(old[2], total))
+    return files
+
+
+def merge_lines(into, more):
+    for name, lines in more.items():
+        target = into.setdefault(name, {})
+        for number, (hits, covered, total) in lines.items():
+            old = target.get(number, (0, 0, 0))
+            target[number] = (max(old[0], hits), max(old[1], covered), max(old[2], total))
+
+
+def file_coverage(files):
+    out = []
+    for name, lines in sorted(files.items()):
+        if not lines:
+            continue
+        entry = {
+            "file": name,
+            "lines": {"covered": sum(1 for h, _, _ in lines.values() if h > 0), "total": len(lines)},
+            "branches": {"covered": sum(c for _, c, _ in lines.values()), "total": sum(t for _, _, t in lines.values())},
+        }
+        for part in (entry["lines"], entry["branches"]):
+            part["percent"] = percent(part)
+        out.append(entry)
+    return out
+
+
+WARNING_CODE = re.compile(r"warning:?\s+([A-Za-z@][\w@/.-]*?)\s*:")
+WARNING_LOCATION = re.compile(r"^(?P<file>.+?)(?:\((?P<l1>\d+)(?:,\d+)?\)|:(?P<l2>\d+)(?::\d+)?)\s*[:-]\s*warning")
+
+
+def parse_warning(line):
+    line = re.sub(r"\s+\[[^\]]+\.(csproj|fsproj|vbproj|sln|slnx)\]$", "", line.strip())
+    code = WARNING_CODE.search(line)
+    location = WARNING_LOCATION.match(line)
+    message = line[code.end():].strip() if code else line
+    return {
+        "code": code.group(1) if code else "other",
+        "file": repo_relative(location.group("file")) if location else "",
+        "line": num(location.group("l1") or location.group("l2")) if location else 0,
+        "message": message[:300],
+    }
+
+
+def warning_groups(directory):
+    groups = {}
+    for path in sorted(directory.glob("*.warn")):
+        source = path.stem
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not raw.strip():
+                continue
+            w = parse_warning(raw)
+            group = groups.setdefault((source, w["code"]), {"source": source, "code": w["code"], "count": 0, "examples": []})
+            group["count"] += 1
+            if len(group["examples"]) < 10:
+                group["examples"].append({k: w[k] for k in ("file", "line", "message")})
+    return sorted(groups.values(), key=lambda g: (-g["count"], g["source"], g["code"]))
+
+
+def vulnerability_list(component, data):
+    seen, out = set(), []
+    for match in data.get("matches", []):
+        vuln = match.get("vulnerability") or {}
+        artifact = match.get("artifact") or {}
+        key = (vuln.get("id"), artifact.get("name"), artifact.get("version"))
+        if key in seen:
+            continue
+        seen.add(key)
+        fix = vuln.get("fix") or {}
+        out.append({
+            "component": component,
+            "id": vuln.get("id"),
+            "severity": str(vuln.get("severity") or "unknown").lower(),
+            "package": artifact.get("name"),
+            "version": artifact.get("version"),
+            "type": artifact.get("type"),
+            "fixedIn": (fix.get("versions") or []) if fix.get("state") == "fixed" else [],
+            "url": vuln.get("dataSource") or "",
+        })
+    return out
+
+
+def build_details(reports):
+    details = {"schemaVersion": 1, "coverage": {}, "warnings": {}, "vulnerabilities": []}
+    directories = sorted(p for p in reports.iterdir() if p.is_dir()) if reports.is_dir() else []
+    for directory in directories:
+        name = directory.name.removeprefix("quality-")
+        files = {}
+        for path in sorted(directory.rglob("*")):
+            if path.suffix.lower() == ".xml":
+                try:
+                    root = ET.parse(path).getroot()
+                except ET.ParseError:
+                    continue
+                if local(root.tag) == "coverage":
+                    merge_lines(files, cobertura_lines(root))
+            elif path.suffix.lower() == ".json":
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if isinstance(data, dict) and isinstance(data.get("matches"), list):
+                    details["vulnerabilities"] += vulnerability_list(name, data)
+        if files:
+            details["coverage"][name] = {"files": file_coverage(files)}
+        groups = warning_groups(directory)
+        if groups:
+            details["warnings"][name] = groups
+    order = {s: i for i, s in enumerate(SEVERITIES)}
+    details["vulnerabilities"].sort(key=lambda v: (order.get(v["severity"], 99), v["component"], v["id"] or ""))
+    return details
+
+
 def percent(part):
     return round(100 * part["covered"] / part["total"], 2) if part["total"] else None
 
@@ -189,12 +342,20 @@ def read_component(directory):
     return component
 
 
-def build(reports):
+def build(reports, details=None):
     components = {}
     directories = sorted(p for p in reports.iterdir() if p.is_dir()) if reports.is_dir() else []
     for directory in directories:
         name = directory.name.removeprefix("quality-")
         component = read_component(directory)
+        # Prefer the per-line merge over summed report totals when Cobertura had line data.
+        files = ((details or {}).get("coverage") or {}).get(name, {}).get("files")
+        if files and "coverage" in component:
+            coverage = {key: {"covered": sum(f[key]["covered"] for f in files), "total": sum(f[key]["total"] for f in files)}
+                        for key in ("lines", "branches")}
+            for part in coverage.values():
+                part["percent"] = percent(part)
+            component["coverage"] = coverage
         if component:
             components[name] = component
 
@@ -252,11 +413,14 @@ def markdown(summary):
 
 
 def main():
-    if len(sys.argv) != 4:
+    if len(sys.argv) not in (4, 5):
         sys.exit(__doc__)
     sys.stdout.reconfigure(encoding="utf-8")
     reports, out_json, out_md = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
-    summary = build(reports)
+    details = build_details(reports)
+    summary = build(reports, details)
+    if len(sys.argv) == 5:
+        Path(sys.argv[4]).write_text(json.dumps(details, separators=(",", ":")) + "\n", encoding="utf-8")
     out_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     out_md.write_text(markdown(summary), encoding="utf-8")
     print(markdown(summary))

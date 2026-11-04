@@ -49,11 +49,13 @@ Any other job can join by uploading a `quality-<name>` artifact in one of the fo
 
 | Layer | Media type | Contents |
 |---|---|---|
-| `summary.json` | `application/vnd.wsh.quality.summary.v1+json` | The summary below. The only layer a dashboard needs. |
+| `summary.json` | `application/vnd.wsh.quality.summary.v1+json` | The summary below. All an overview needs. |
+| `details.json` | `application/vnd.wsh.quality.details.v1+json` | Drill-down: coverage per file, warnings by code, every vulnerability (below). |
 | `reports.tar.gz` | `application/vnd.wsh.quality.reports.v1.tar+gzip` | The raw reports, one directory per `quality-*` artifact. |
 
-The same `summary.json` is also uploaded as the workflow artifact `quality-summary` (90 days), for
-readers that have Actions read access but no registry credentials, e.g. on a private repo.
+`summary.json` and `details.json` are also uploaded as the workflow artifact `quality-summary`
+(90 days), for readers that have Actions read access but no registry credentials, e.g. on a
+private repo.
 
 The artifact type is `application/vnd.wsh.quality.v1`. Its manifest carries the
 `org.opencontainers.image.{source,revision,version,created}` annotations, and it is signed with
@@ -131,6 +133,56 @@ oras manifest fetch ghcr.io/hwinther/clutterstock/quality:main \
 - `percent` is `null` when there is nothing to cover (`total` 0).
 - Adding fields is a compatible change. Renaming or removing one bumps `schemaVersion`.
 
+## details.json (schemaVersion 1)
+
+```json
+{
+  "schemaVersion": 1,
+  "coverage": {
+    "dotnet": {
+      "files": [
+        {
+          "file": "backend/src/Api/Endpoints/Items.cs",
+          "lines": { "covered": 40, "total": 52, "percent": 76.92 },
+          "branches": { "covered": 6, "total": 10, "percent": 60.0 }
+        }
+      ]
+    }
+  },
+  "warnings": {
+    "dotnet": [
+      {
+        "source": "build",
+        "code": "CS8618",
+        "count": 12,
+        "examples": [{ "file": "backend/src/Api/Foo.cs", "line": 12, "message": "Non-nullable property ..." }]
+      }
+    ]
+  },
+  "vulnerabilities": [
+    {
+      "component": "scan-frontend",
+      "id": "CVE-2026-1234",
+      "severity": "high",
+      "package": "openssl",
+      "version": "3.0.15-1",
+      "type": "deb",
+      "fixedIn": ["3.0.16-1"],
+      "url": "https://security-tracker.debian.org/tracker/CVE-2026-1234"
+    }
+  ]
+}
+```
+
+- `coverage` lists every source file in the component's Cobertura reports, merged per line across
+  reports, with paths relative to the repo. The component's summary totals are the sum of these
+  files.
+- `warnings` groups the `<source>.warn` lines (restore/build/test from dotnet-build,
+  typecheck/build/lint from node-build) by source and code, most frequent first, with up to 10
+  examples each.
+- `vulnerabilities` is every Grype match, once per id, package and version, sorted by severity.
+  `fixedIn` is empty when no fixed version exists.
+
 ## Formats read
 
 | Kind | Formats |
@@ -138,9 +190,9 @@ oras manifest fetch ghcr.io/hwinther/clutterstock/quality:main \
 | tests | TRX, JUnit XML, Vitest/Jest JSON (`numTotalTests`), Playwright JSON (`stats`) |
 | coverage | Cobertura XML, Istanbul `coverage-summary.json` |
 | scan | Grype JSON |
-| warnings | `{"warnings": {"<source>": <count>}}` |
+| warnings | `{"warnings": {"<source>": <count>}}` (counts), `<source>.warn` (one warning per line, for details.json) |
 
 Within one component JUnit is preferred over Vitest JSON, and Cobertura over Istanbul, so a project
-that writes both is not counted twice. Files of the same format add up, e.g. one TRX and one
-Cobertura file per .NET test project. When two test projects cover the same assembly, its lines
-count twice, so .NET line coverage is approximate.
+that writes both is not counted twice. Test results of the same format add up, e.g. one TRX per
+.NET test project. Cobertura files are merged per source file and line, so two test projects that
+cover the same assembly don't count its lines twice.

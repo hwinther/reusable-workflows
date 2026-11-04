@@ -409,6 +409,10 @@ runs:
       printf '{"warnings": {"restore": %d, "build": %d, "test": %d}}\n' \
         "$(count "$TEMP_DIR/restore.warn")" "$(count "$TEMP_DIR/build.warn")" "$(count "$TEMP_DIR/test.warn")" \
         > "$out/warnings.json"
+      # The warning lines themselves, for the quality artifact's per-code breakdown (capped).
+      for f in restore build test; do
+        if [ -s "$TEMP_DIR/$f.warn" ]; then sort -u "$TEMP_DIR/$f.warn" | awk 'NF && NR <= 2000' > "$out/$f.warn"; fi
+      done
       echo "dir=$out" >> "$GITHUB_OUTPUT"
 
   - name: Upload quality reports (quality-dotnet)
