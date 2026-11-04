@@ -149,6 +149,16 @@ on:
         type: boolean
         description: "Run pytest with coverage"
         default: true
+      python_typecheck_enabled:
+        required: false
+        type: boolean
+        description: "Run mypy. Disable for projects without type stubs for their framework (e.g. Django without django-stubs)."
+        default: true
+      python_coverage_source:
+        required: false
+        type: string
+        description: "Space-separated import names for pytest --cov. Default: [project].name from pyproject.toml; set it when the code spans several top-level packages (a Django project's apps)."
+        default: ""
       runs_on:
         required: false
         type: string
@@ -440,6 +450,8 @@ jobs:
           local_path_dependencies: ${{ inputs.python_local_path_dependencies }}
           extra_command: ${{ inputs.python_extra_command }}
           test: ${{ inputs.python_test_enabled }}
+          typecheck: ${{ inputs.python_typecheck_enabled }}
+          coverage_source: ${{ inputs.python_coverage_source }}
 
       - name: "Create or update PR comment for python"
         uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
