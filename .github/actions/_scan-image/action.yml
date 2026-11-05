@@ -107,10 +107,14 @@ runs:
         echo "grype_json_path=${RUNNER_TEMP_DIR}/grype-cosign-vuln${file_suffix}.json" >> "$GITHUB_OUTPUT"
         echo "sarif_path=${RUNNER_TEMP_DIR}/grype-results${file_suffix}.sarif" >> "$GITHUB_OUTPUT"
         echo "sarif_category=grype-container-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
-        echo "spdx_artifact_name=container-image-${POSTFIX}${name_suffix}.spdx.json" >> "$GITHUB_OUTPUT"
-        echo "cyclonedx_artifact_name=container-image-${POSTFIX}${name_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"
-        echo "grype_artifact_name=container-image-${POSTFIX}${name_suffix}.grype.json" >> "$GITHUB_OUTPUT"
-        echo "pr_comment_identifier=grype-summary-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
+        # Artifact names can't contain "/", and anchore/sbom-action also writes a temp file named after
+        # the artifact, so a nested postfix (e.g. proxmox/pbs/backup-client) fails with ENOENT. The
+        # SARIF category keeps the postfix as is, so existing Code Scanning alerts stay matched.
+        safe_postfix="${POSTFIX//\//-}"
+        echo "spdx_artifact_name=container-image-${safe_postfix}${name_suffix}.spdx.json" >> "$GITHUB_OUTPUT"
+        echo "cyclonedx_artifact_name=container-image-${safe_postfix}${name_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"
+        echo "grype_artifact_name=container-image-${safe_postfix}${name_suffix}.grype.json" >> "$GITHUB_OUTPUT"
+        echo "pr_comment_identifier=grype-summary-${safe_postfix}${name_suffix}" >> "$GITHUB_OUTPUT"
         echo "quality_artifact_name=quality-scan-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
 
     # Downloading and installing the vulnerability DB is ~75s of every scan. Anchore
