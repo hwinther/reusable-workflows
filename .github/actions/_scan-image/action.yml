@@ -115,7 +115,7 @@ runs:
         echo "cyclonedx_artifact_name=container-image-${safe_postfix}${name_suffix}.cyclonedx.json" >> "$GITHUB_OUTPUT"
         echo "grype_artifact_name=container-image-${safe_postfix}${name_suffix}.grype.json" >> "$GITHUB_OUTPUT"
         echo "pr_comment_identifier=grype-summary-${safe_postfix}${name_suffix}" >> "$GITHUB_OUTPUT"
-        echo "quality_artifact_name=quality-scan-${POSTFIX}${name_suffix}" >> "$GITHUB_OUTPUT"
+        echo "quality_artifact_name=quality-scan-${safe_postfix}${name_suffix}" >> "$GITHUB_OUTPUT"
 
     # Downloading and installing the vulnerability DB is ~75s of every scan. Anchore
     # publishes one build a day (around 06:30 UTC), so the key rolls over at 08:00 UTC
