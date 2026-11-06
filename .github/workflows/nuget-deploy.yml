@@ -94,26 +94,35 @@ jobs:
           nuget_auth_token: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
 
       - name: Restore
-        run: dotnet restore --locked-mode "${{ inputs.solution_file }}"
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_file }}
+        run: dotnet restore --locked-mode "$SOLUTION_FILE"
 
       - name: Build
-        run: dotnet build "${{ inputs.solution_file }}" -c Release --no-restore
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_file }}
+        run: dotnet build "$SOLUTION_FILE" -c Release --no-restore
 
       - name: Test
         if: inputs.tests_enabled
-        run: dotnet test --solution "${{ inputs.solution_file }}" -c Release --no-build
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_file }}
+        run: dotnet test --solution "$SOLUTION_FILE" -c Release --no-build
 
       - name: Pack
+        env:
+          SOLUTION_FILE: ${{ inputs.solution_file }}
+          PACKAGE_VERSION: ${{ inputs.package_version }}
         run: |
-          dotnet pack "${{ inputs.solution_file }}" \
+          dotnet pack "$SOLUTION_FILE" \
             -c Release --no-build -o nupkg \
-            -p:Version=${{ inputs.package_version }} \
+            -p:Version="$PACKAGE_VERSION" \
             -p:InformationalVersion=$INFORMATIONAL_VERSION
 
       - name: Push to NuGet feed
         env:
           NUGET_TOKEN: ${{ secrets.packages_pat || secrets.GITHUB_TOKEN }}
-        run: |
+        run: | # zizmor: ignore[use-trusted-publishing] -- GitHub Packages and private feeds have no trusted publishing
           # Push by URL so we don't depend on whichever name the source is
           # registered under in nuget.config / runtime config.
           dotnet nuget push 'nupkg/*.nupkg' \

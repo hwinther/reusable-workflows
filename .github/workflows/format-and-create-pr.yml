@@ -90,6 +90,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true # zizmor: ignore[artipacked] -- a later step pushes a branch
 
       - name: Set up .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -137,6 +139,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMIT_SUBJECT: ${{ inputs.commit_subject }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -144,15 +147,15 @@ jobs:
             echo "No changes after CleanupCode; skipping PR."
             exit 0
           fi
-          branch="jb/cleanupcode-${{ github.run_id }}"
+          branch="jb/cleanupcode-${GITHUB_RUN_ID}"
           git checkout -b "$branch"
           git add -A
           git commit -m "$COMMIT_SUBJECT"
           git push origin "$branch"
-          base_branch="${{ github.ref_name }}"
+          base_branch="$GITHUB_REF_NAME"
           if [ -z "$(git ls-remote origin "refs/heads/${base_branch}")" ]; then
-            base_branch="${{ github.event.repository.default_branch }}"
-            echo "::warning::Trigger branch ${{ github.ref_name }} is not on origin; opening PR against ${base_branch}."
+            base_branch="$DEFAULT_BRANCH"
+            echo "::warning::Trigger branch ${GITHUB_REF_NAME} is not on origin; opening PR against ${base_branch}."
           fi
           gh pr create \
             --base "$base_branch" \
@@ -169,6 +172,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true # zizmor: ignore[artipacked] -- a later step pushes a branch
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -196,6 +201,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMIT_SUBJECT: ${{ inputs.commit_subject }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -203,15 +209,15 @@ jobs:
             echo "No changes after ruff format; skipping PR."
             exit 0
           fi
-          branch="ruff/format-${{ github.run_id }}"
+          branch="ruff/format-${GITHUB_RUN_ID}"
           git checkout -b "$branch"
           git add -A
           git commit -m "$COMMIT_SUBJECT"
           git push origin "$branch"
-          base_branch="${{ github.ref_name }}"
+          base_branch="$GITHUB_REF_NAME"
           if [ -z "$(git ls-remote origin "refs/heads/${base_branch}")" ]; then
-            base_branch="${{ github.event.repository.default_branch }}"
-            echo "::warning::Trigger branch ${{ github.ref_name }} is not on origin; opening PR against ${base_branch}."
+            base_branch="$DEFAULT_BRANCH"
+            echo "::warning::Trigger branch ${GITHUB_REF_NAME} is not on origin; opening PR against ${base_branch}."
           fi
           gh pr create \
             --base "$base_branch" \
@@ -230,18 +236,20 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: true # zizmor: ignore[artipacked] -- a later step pushes a branch
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Sync .git-blame-ignore-revs from formatter commits on default branch
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMIT_SUBJECT: ${{ inputs.commit_subject }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          default_branch="${{ github.event.repository.default_branch }}"
+          default_branch="$DEFAULT_BRANCH"
           git fetch origin --prune
           git checkout "$default_branch"
           git reset --hard "origin/${default_branch}"
@@ -315,7 +323,7 @@ jobs:
 
           # Legacy branch prefix `jb/` kept to avoid churning consumer-side
           # branch-protection patterns; this job is formatter-agnostic.
-          branch="jb/blame-ignore-revs-${{ github.run_id }}"
+          branch="jb/blame-ignore-revs-${GITHUB_RUN_ID}"
           git checkout -b "$branch"
 
           mv "$tmpfile" "$ignore_file"
