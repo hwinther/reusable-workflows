@@ -70,6 +70,11 @@ on:
         required: false
         type: string
         default: ""
+      build_cache:
+        description: "Use a registry BuildKit layer cache (`<image>:buildcache[-<artifact_name_suffix>]`), read before and written after the build. Set false to build from scratch, e.g. to rule the cache out while debugging."
+        required: false
+        type: boolean
+        default: true
       version:
         description: "Version from a gitversion.yml run the caller shares between its images (its `version` output). With image_tags, this workflow skips its own GitVersion job; empty = compute it here."
         required: false
@@ -229,7 +234,8 @@ jobs:
           npm_auth_token: ${{ secrets.npm_auth_token }}
           # One shared layer cache per image. Read-only tokens (Dependabot, forks) still read it;
           # their write fails with a warning. Overwritten caches are pruned as untagged orphans.
-          cache_ref: ${{ inputs.container_registry }}/${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}:buildcache${{ inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '' }}
+          # Empty (no cache) with build_cache: false.
+          cache_ref: ${{ inputs.build_cache && format('{0}/{1}/{2}:buildcache{3}', inputs.container_registry, needs.prepare-repository-name.outputs.repository, inputs.container_image_name_postfix, inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '') || '' }}
 
       - name: Choose hand-off
         id: handoff
