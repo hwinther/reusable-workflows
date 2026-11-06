@@ -20,7 +20,9 @@ description: |
       `docker/build-push-action` with `push: true` to build and push a
       manifest list. BuildKit cache from a prior single-arch
       `_build-image-docker --load` call (used for scanning) makes this fast
-      for the native arch; non-native arches are built under QEMU.
+      for the native arch; non-native arches are built under QEMU, which the
+      registry layer cache (`cache_ref`) saves on any rebuild with unchanged
+      inputs.
 
   Cosign sign and attestation steps are shared across both paths and operate
   on the registry-resolved digest (the manifest-list digest in the multi-arch
@@ -104,6 +106,10 @@ inputs:
     required: false
     description: "When non-empty (and on the multi-arch path), exposed to the build as a BuildKit secret with id `npm_auth_token`. Mirrors the input on `_build-image-docker` so the manifest-list rebuild can authenticate the same way."
     default: ""
+  cache_ref:
+    required: false
+    description: "When non-empty (multi-arch path), a registry ref (e.g. ghcr.io/owner/repo/app:buildcache) used as the BuildKit layer cache for the manifest-list build: read before it and written after it (mode=max, every platform). Mirrors `_build-image-docker`'s input; a failed write only warns."
+    default: ""
 
 outputs:
   image_digest:
@@ -168,6 +174,10 @@ runs:
           ${{ inputs.build_args }}
         labels: ${{ inputs.labels }}
         secrets: ${{ inputs.npm_auth_token != '' && format('npm_auth_token={0}', inputs.npm_auth_token) || '' }}
+        # The non-native platforms build under QEMU here, so this cache is what saves time: a
+        # release tag rebuilding the commit main already built reuses every layer.
+        cache-from: ${{ inputs.cache_ref != '' && format('type=registry,ref={0}', inputs.cache_ref) || '' }}
+        cache-to: ${{ inputs.cache_ref != '' && format('type=registry,ref={0},mode=max,ignore-error=true', inputs.cache_ref) || '' }}
 
     - name: Resolve pushed image digest
       id: resolve-digest
