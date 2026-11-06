@@ -177,12 +177,16 @@ jobs:
       container_tags: ${{ steps.tags.outputs.container_tags }}
     env:
       # One shared BuildKit layer cache per image (and per matrix entry), the same ref
-      # build-image-docker.yml uses. The scan builds and the multi-arch push read and write it, so
-      # a rebuild with unchanged inputs (e.g. the release tag after main built the same commit)
-      # skips the QEMU work. Read-only tokens (Dependabot, forks) still read it; their write only
-      # warns. Overwritten caches are pruned as untagged orphans. Empty (no cache) with
-      # build_cache: false.
+      # build-image-docker.yml uses, so a rebuild with unchanged inputs (e.g. the release tag
+      # after main built the same commit) skips the QEMU work. Every build reads it; only the last
+      # build of a run writes it: the multi-arch push when `platforms` has several entries
+      # (otherwise the single-platform scan builds would overwrite its every-platform cache before
+      # the push reads it, and the non-native platforms would rebuild each run), else the amd64
+      # scan build. Read-only tokens (Dependabot, forks) still read it; their write only warns.
+      # Overwritten caches are pruned as untagged orphans. Empty (no cache) with build_cache: false.
       BUILD_CACHE_REF: ${{ inputs.build_cache && format('{0}/{1}/{2}:buildcache{3}', inputs.container_registry, needs.prepare-repository-name.outputs.repository, inputs.container_image_name_postfix, inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '') || '' }}
+      # 'true' when the scan builds are the last build of the run (single platform).
+      SCAN_WRITES_CACHE: ${{ !contains(inputs.platforms, ',') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -228,6 +232,7 @@ jobs:
           build_args: ${{ inputs.build_args }}
           npm_auth_token: ${{ secrets.npm_auth_token }}
           cache_ref: ${{ env.BUILD_CACHE_REF }}
+          cache_write: ${{ env.SCAN_WRITES_CACHE }}
 
       - name: Generate SBOM and scan with Grype (amd64)
         id: scan-amd64
@@ -266,6 +271,7 @@ jobs:
           build_args: ${{ inputs.build_args }}
           npm_auth_token: ${{ secrets.npm_auth_token }}
           cache_ref: ${{ env.BUILD_CACHE_REF }}
+          cache_write: ${{ env.SCAN_WRITES_CACHE }}
 
       - name: Generate SBOM and scan with Grype (arm64)
         id: scan-arm64

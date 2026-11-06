@@ -45,6 +45,10 @@ inputs:
     required: false
     description: "When non-empty, a registry ref (e.g. ghcr.io/owner/repo/app:buildcache) used as a BuildKit layer cache: read before the build and written after it (mode=max). A failed write only warns, so read-only tokens still benefit from the read."
     default: ""
+  cache_write:
+    required: false
+    description: "Write `cache_ref` after the build (default). Set 'false' to only read it, e.g. for a single-platform scan build whose cache would overwrite the multi-platform cache a later manifest-list build writes to the same ref."
+    default: "true"
 
 outputs:
   local_ref:
@@ -77,7 +81,7 @@ runs:
         labels: ${{ inputs.labels }}
         secrets: ${{ inputs.npm_auth_token != '' && format('npm_auth_token={0}', inputs.npm_auth_token) || '' }}
         cache-from: ${{ inputs.cache_ref != '' && format('type=registry,ref={0}', inputs.cache_ref) || '' }}
-        cache-to: ${{ inputs.cache_ref != '' && format('type=registry,ref={0},mode=max,ignore-error=true', inputs.cache_ref) || '' }}
+        cache-to: ${{ inputs.cache_ref != '' && inputs.cache_write == 'true' && format('type=registry,ref={0},mode=max,ignore-error=true', inputs.cache_ref) || '' }}
 
     - name: Resolve local ref (first tag)
       id: resolve-ref
