@@ -22,8 +22,9 @@ skip:
   # Composites that call this repo's own actions by @v{major}. That is deliberate: the release
   # workflow rewrites them to the immutable @vX.Y.Z it tags (docs/adr/0001-internal-ref-pinning.md),
   # so a consumer pinning a release tag or SHA gets fully pinned transitive code.
-  # _push-image-with-signatures has no internal ref; it's flagged for docker/setup-qemu-action,
-  # which pulls the mutable tonistiigi/binfmt:latest image by default (accepted).
+  # _build-image-docker and _push-image-with-signatures have no internal ref; they're flagged for
+  # the docker/* build actions (setup-buildx, build-push, setup-qemu), which pull mutable images
+  # such as BuildKit and tonistiigi/binfmt at runtime even when the action is SHA-pinned (accepted).
   - rule: unpinnable_action
     path:
       - .github/actions/_build-image-dotnet/action.yml
@@ -32,4 +33,5 @@ skip:
       - .github/actions/_scan-image/action.yml
       - .github/actions/dotnet-build/action.yml
       - .github/actions/node-build/action.yml
+      - .github/actions/_build-image-docker/action.yml
       - .github/actions/_push-image-with-signatures/action.yml
