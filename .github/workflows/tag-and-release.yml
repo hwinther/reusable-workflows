@@ -97,6 +97,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: true # zizmor: ignore[artipacked] -- pushes the freeze commit and tags below
           # Persist creds so the freeze commit + tags can be pushed. The freeze edits
           # .github/workflows/*, which GITHUB_TOKEN may not push — use WORKFLOW_TOKEN
           # (workflow scope) when set; consumers (no freeze) fall back to GITHUB_TOKEN.
@@ -223,12 +224,14 @@ jobs:
 
       - name: Create tag(s) ${{ steps.determine_tag.outputs.tag_name }}
         id: create_tag
+        env:
+          ACTOR: ${{ github.actor }}
+          FULL_TAG: ${{ steps.determine_tag.outputs.tag_name_full }}
+          MINOR_TAG: ${{ steps.determine_tag.outputs.tag_name_minor }}
+          MAJOR_TAG: ${{ steps.determine_tag.outputs.tag_name_major }}
         run: |
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor }}@users.noreply.github.com"
-          FULL_TAG="${{ steps.determine_tag.outputs.tag_name_full }}"
-          MINOR_TAG="${{ steps.determine_tag.outputs.tag_name_minor }}"
-          MAJOR_TAG="${{ steps.determine_tag.outputs.tag_name_major }}"
+          git config user.name "$ACTOR"
+          git config user.email "$ACTOR@users.noreply.github.com"
 
           if [ -n "$FULL_TAG" ]; then
             git tag "$FULL_TAG"
@@ -267,18 +270,24 @@ jobs:
 
       - name: Create release ${{ steps.determine_tag.outputs.tag_name }}
         id: create_release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         if: github.event.inputs.create_release == 'true'
-        with:
-          tag_name: ${{ steps.determine_tag.outputs.tag_name }}
-          draft: false
-          prerelease: false
-          make_latest: true
-          body: ${{ github.event.inputs.release_notes }}
-          generate_release_notes: true
-          previous_tag: ${{ steps.previous_tag.outputs.tag }}
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG_NAME: ${{ steps.determine_tag.outputs.tag_name }}
+          RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+          PREVIOUS_TAG: ${{ steps.previous_tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # --generate-notes appends GitHub's generated notes after RELEASE_NOTES.
+          # --verify-tag: the tag was pushed above; never let gh create one.
+          args=(--title "$TAG_NAME" --notes "$RELEASE_NOTES" --generate-notes --latest --verify-tag)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            args+=(--notes-start-tag "$PREVIOUS_TAG")
+          fi
+          url=$(gh release create "$TAG_NAME" "${args[@]}")
+          echo "url=$url" >> "$GITHUB_OUTPUT"
 
       - name: Show release link for ${{ steps.determine_tag.outputs.tag_name }}
         if: github.event.inputs.create_release == 'true'

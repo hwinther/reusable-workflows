@@ -143,7 +143,7 @@ on:
         type: string
         default: '[]'
       comment_identifier:
-        description: "Sticky PR comment identifier passed to im-open/update-pr-comment."
+        description: "Sticky PR comment identifier (see the _sticky-pr-comment action)."
         required: false
         type: string
         default: "e2e-results"
@@ -215,7 +215,7 @@ jobs:
       actions: read
     # An empty image runs the job on the runner itself.
     container:
-      image: ${{ inputs.container_image }}
+      image: ${{ inputs.container_image }} # zizmor: ignore[unpinned-images] -- the caller chooses (and pins) the image
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -617,11 +617,11 @@ jobs:
 
       - name: Post or update PR comment
         if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_comment_enabled }}
-        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-identifier: ${{ inputs.comment_identifier }}
-          comment-content: ${{ steps.e2e-summary.outputs.comment }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: ${{ inputs.comment_identifier }}
+          comment_content: ${{ steps.e2e-summary.outputs.comment }}
 
       - name: Resolve report and coverage paths
         id: resolve-paths

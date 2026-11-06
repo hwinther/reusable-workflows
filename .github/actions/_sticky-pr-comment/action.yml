@@ -1,0 +1,65 @@
+name: "Create or update a sticky PR comment"
+description: |
+  Internal composite: creates a PR comment, or updates the one this action
+  made earlier for the same `comment_identifier`, so a PR keeps one comment
+  per identifier instead of one per run.
+
+  The comment's first line is the hidden marker
+  `<!-- sticky-pr-comment: <identifier> -->`; the first comment on the PR that
+  starts with it is the one updated. Matches on the marker only, not the
+  author, so a PAT-authored comment is found too.
+
+  Does nothing outside a pull_request event unless `pr_number` is given.
+
+inputs:
+  github_token:
+    required: true
+    description: "Token with pull-requests: write (or issues: write) on the repository."
+  comment_identifier:
+    required: true
+    description: "Unchanging identifier of the comment to keep in sync."
+  comment_content:
+    required: true
+    description: "GitHub-flavored markdown for the comment body."
+  pr_number:
+    required: false
+    description: "PR to comment on. Defaults to the pull_request event's PR."
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create or update PR comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        COMMENT_ID: ${{ inputs.comment_identifier }}
+        COMMENT_CONTENT: ${{ inputs.comment_content }}
+        PR_NUMBER: ${{ inputs.pr_number != '' && inputs.pr_number || github.event.pull_request.number }}
+      run: |
+        set -euo pipefail
+        if [ -z "${PR_NUMBER:-}" ]; then
+          echo "No pull request for this event and no pr_number given; not commenting."
+          exit 0
+        fi
+
+        export MARKER="<!-- sticky-pr-comment: ${COMMENT_ID} -->"
+        body_file="$(mktemp)"
+        printf '%s\n%s' "$MARKER" "$COMMENT_CONTENT" > "$body_file"
+
+        # One id per line across all pages; take the first. Not piped to head, so
+        # pipefail can't trip on SIGPIPE.
+        ids="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+          --jq '.[] | select((.body // "") | startswith($ENV.MARKER)) | .id')"
+        existing="${ids%%$'\n'*}"
+
+        if [ -n "$existing" ]; then
+          jq -n --rawfile body "$body_file" '{body: $body}' \
+            | gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input - > /dev/null
+          echo "Updated PR #${PR_NUMBER} comment ${existing} (${COMMENT_ID})."
+        else
+          jq -n --rawfile body "$body_file" '{body: $body}' \
+            | gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --input - > /dev/null
+          echo "Created PR #${PR_NUMBER} comment (${COMMENT_ID})."
+        fi
+        rm -f "$body_file"

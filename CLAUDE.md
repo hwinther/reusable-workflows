@@ -33,7 +33,20 @@ node ./scripts/freeze-internal-refs.mjs --root "$tmp" --tag v2.0.0
 (cd "$tmp" && node "$OLDPWD/scripts/validate-version-refs.mjs" --release); rm -rf "$tmp"
 ```
 
-There is no build/test/lint suite for the repo itself — all "testing" happens by the workflows being exercised in consumer repos. Prettier config (`.prettierrc`) is set up for JSON only.
+```bash
+# Script tests (all three run in validate-version.yml on every PR). Each exits non-zero on failure.
+bash scripts/format.test.sh         # _format-output/scripts/format.sh — golden-file cases in scripts/format.test/cases/<name>/
+bash scripts/grype-summary.test.sh  # _grype-summary/scripts/parse.sh against sample SARIF in scripts/grype-summary.test/
+bash scripts/manifests.test.sh      # manifests/ scripts; stubs kubeconform + dyff, needs kubectl, python3, yq
+
+# Workflow lint (same as lint-workflows.yml)
+yamllint -c .yamllint.yml .github
+actionlint
+```
+
+To add a `format.sh` case, create `scripts/format.test/cases/<name>/` with `env.sh` (must set `FORMAT`), input files (`errors`/`warnings`/`eslint.json`) and `expected.md` (+ optional `expected.stdout`/`expected.outputs`); the header of `format.test.sh` documents the contract. Test work dirs live in the gitignored `.test-work/` under the repo, not `/tmp` — native Windows binaries under MSYS can't read `/tmp`.
+
+Beyond these script tests, the workflows themselves are only exercised in consumer repos. Prettier config (`.prettierrc`) is set up for JSON only.
 
 ## Repository layout
 
@@ -43,6 +56,7 @@ There is no build/test/lint suite for the repo itself — all "testing" happens 
   - `gitversion/` — runs GitVersion and emits `version`, `is_alpha`, container `deploy_tag` / `container_image_tags` / `image_tags`. Behaviour branches on whether `github.ref_name` is `main`, a `v*` tag, or anything else (alpha/prerelease).
   - `_format-output/` — **internal** helper (leading `_` signals not part of the public surface). Takes pre-extracted error/warning lines (or an ESLint JSON report) and emits the GitHub annotations + structured markdown that `node-build` and `dotnet-build` concatenate into their PR comment. Lives next to the actions that use it so the runner fetches its `scripts/format.sh` automatically when the parent action resolves — no extra `actions/checkout` of this repo is needed.
   - `_grype-summary/` — **internal**. Renders Grype SARIF findings as a job-summary table and as a sticky PR comment. Used by `_scan-image`.
+  - `_sticky-pr-comment/` — **internal**. Create-or-update one PR comment per identifier via `gh api`, found by its first-line marker `<!-- sticky-pr-comment: <id> -->`. Changing the marker format orphans existing comments (open PRs get a second one), so don't change it casually.
   - `_build-image-docker/`, `_build-image-dotnet/` — **internal**. Build a container locally (`buildx --load` for Docker; `dotnet publish -t:PublishContainer` to archive then `docker load` for .NET) and return the loaded ref.
   - `_scan-image/` — **internal**. Generates SPDX (always) and CycloneDX (when supply-chain attestation is on) SBOMs, runs Grype, uploads SARIF, and produces the Grype JSON used as a cosign-vuln attestation predicate.
   - `_save-image-artifact/`, `_load-image-artifact/` — **internal**. `docker save | gzip` to a workflow artifact and the inverse — used to ship a built image between jobs (build → e2e → push) byte-identically without round-tripping through a registry.
@@ -50,13 +64,17 @@ There is no build/test/lint suite for the repo itself — all "testing" happens 
   - `sign-image/` — **public**. The signing/attestation half of `_push-image-with-signatures` as a standalone composite a consumer runs in its OWN job AFTER an already-pushed digest. Because a composite runs inline in the caller's job, the OIDC token carries the **consumer's** `job_workflow_ref`, so cosign/attest signatures bind to the consumer's workflow identity — not this repo's. This is the canonical way to get per-consumer signature identities (see "Image signing strategy" below). Accepts the predicate files directly (`sbom_cyclonedx_path`/`grype_json_path`, for in-job callers) or downloads them itself from `sbom_artifact_name`/`grype_artifact_name`; resolves `image_digest` from the first `container_tags` entry when left empty. Keeps the cross-job sha256 + SBOM-binding integrity checks.
   - `manifests/` — **public**, two modes. `push`: `scripts/render-all.sh` renders each `renders` entry (`<out-path>=<deploy-dir>[,<component>]`) via `render-manifests.sh` (pins `images` with a kustomize overlay, fails on an undocumented `${VAR}` without a default), kubeconform-validates, then `flux push artifact` + `cosign sign`. `diff`: renders head (validated) and the PR base (best effort, with this action's scripts), then `manifest-report.py` builds one sticky comment for all renders. Inline in the caller's job on purpose (cosign identity = consumer workflow, same reasoning as `sign-image`). Self-contained (no internal `uses:`), so a consumer can test it by SHA before a release. Uses the cosign-installer default (cosign v3): Flux `OCIRepository` verification works with it, unlike the Kyverno image path that keeps container signing on v2.4.3. Tests: `scripts/manifests.test.sh` (stubs kubeconform and dyff).
   - `_compose-image-tags/` — **internal**. Builds the comma-separated push-tag list from gitversion tags (optionally `tag_suffix`'d) plus `additional_tags`. Extracted from the formerly-duplicated "Compose final container tags" step; called by `docker-container.yml`, `build-and-scan-docker.yml`, and `dotnet-container.yml` (each passes only the dimensions it uses).
+  - `_choose-image-handoff/`, `_push-staging-image/`, `_resolve-image-handoff/` — **internal**, the split-pipeline hand-off (see "PR-time container e2e" below): choose staging-ref vs artifact, push the `pr-<N>-<sha7>` staging tag, and turn either form back into a usable local ref.
+  - Other public composites: `python-build/` (ruff/mypy/pytest/build, same PR-comment pattern as node/dotnet-build), `verify-image/` (read-only check that a pushed image is signed/attested), `quality-artifact/` (signed OCI `quality:<tag>` artifact of test/coverage/scan reports — see `docs/quality-artifact.md`), `package-version/` (version from latest `vX.Y.Z` tag + commit count), `otel-slow-spans/` (slow-call report from an OTLP/JSON trace file). `_prune-package-versions/` is shared by `prune-npm.yml`/`prune-nuget.yml`.
 - `.github/workflows/` — reusable workflows (`on: workflow_call`) that compose the actions:
   - `pr-build.yml` — one entry-point for PR builds. Runs a `detect-changes` job comparing against the PR base (or `origin/main` on push), then conditionally runs `node-build` and/or `dotnet-build` plus optional ReSharper InspectCode and TODO commenter.
   - `docker-container.yml` / `dotnet-container.yml` — gitversion → build → SBOM (Anchore) → Grype scan → push to GHCR → Cosign keyless sign → Cosign CycloneDX + vuln attestations → GitHub build provenance attestation. **Single-job, push-always.** Used for `main` and tag pushes.
   - `build-and-scan-docker.yml` / `build-and-scan-dotnet.yml` — same build + SBOM + Grype gate as the container workflows but **without push**. Uploads the loaded image as a workflow artifact (plus SBOM and Grype JSON as separate artifacts) so a downstream e2e job and an optional `image-push.yml` can use the byte-identical content. Used in PR flows that need an e2e gate before any registry write.
   - `playwright-e2e.yml` — downloads image artifacts produced by `build-and-scan-*.yml`, `docker load`s them, runs Playwright via `docker compose up --wait`, posts a sticky PR comment summarising results, uploads the Playwright HTML report + traces + compose logs (and optionally a coverage artifact). Caller passes a JSON map of compose env-var names to artifact names.
   - `image-push.yml` — downloads the image artifact from `build-and-scan-*.yml`, asserts byte-identity with the build-time digest, then runs `_push-image-with-signatures`. Caller is responsible for the `if:` gate (PR label, branch, etc.).
+  - `build-image-docker.yml` / `build-image-dotnet.yml` + `scan-image.yml` — the **split** PR pipeline: build only, then scan in its own workflow so it runs in parallel with e2e (a caller's `needs:` waits for every job of a called workflow). Output `image` is either a staging `repo@digest` or an artifact name; `scan-image.yml`, `playwright-e2e.yml` and `image-push.yml` accept both.
   - `npm-deploy.yml` — publishes to GitHub Packages; uses `--tag alpha` when `is_alpha=true`.
+  - Also: `nuget-deploy.yml`, `pypi-deploy.yml` (builds only; caller publishes via OIDC), `package-deploy.yml` (layer-2 fan-out over the per-ecosystem deploys with one shared version), `prune-{ghcr,npm,nuget}.yml`, `gitops-preview-{upsert,teardown}.yml` (per-PR overlays in a GitOps repo), `quality-artifact.yml`. Each file's header comment explains its contract.
   - `gitversion.yml` — thin reusable wrapper around the `gitversion` composite action.
   - `tag-and-release.yml` — manual or workflow_call; creates `vX.Y.Z` tag (+ floating `vX.Y` and `vX` when `floating_tags=true`) and a GitHub Release. Refuses to tag if HEAD already points at the latest semver tag.
   - `validate-version.yml` — runs the version-refs validator on PRs.
@@ -68,7 +86,7 @@ There is no build/test/lint suite for the repo itself — all "testing" happens 
     Caller owns the `workflow_dispatch` trigger and the `mode` choice input. Uses the auto `GITHUB_TOKEN` for branch push and PR creation.
   - `stryker.yml` — runs Stryker mutation testing for .NET (`dotnet stryker`, off by default — MTP/dotnet-stryker 4.14.0 hangs) and/or Node (`npm run stryker`, on by default), each gated by an input flag and uploading its report as a workflow artifact. Caller owns the trigger; concurrency lives caller-side.
   - `poutine.yml`, `zizmor.yml` — Actions-targeted SAST that uploads SARIF to Code Scanning.
-  - `lint-workflows.yml` — **self-running on this repo** (not reusable). Runs `actionlint` (Actions schema/expressions/contexts + shellcheck on `run:` blocks) and `yamllint` (rules in `.yamllint.yml`) over `.github/`; on PRs it keeps a sticky comment (via `im-open/update-pr-comment`, same as `pr-build.yml`) in sync and writes a job summary when issues are found, and fails the check on any issue. shellcheck gates at `--severity=warning` (info/style like SC2086 don't fail); actionlint `-ignore`s the `needs.<job>.result` false-positive on reusable-workflow jobs. Run locally with `yamllint -c .yamllint.yml .github` and `actionlint`.
+  - `lint-workflows.yml` — **self-running on this repo** (not reusable). Runs `actionlint` (Actions schema/expressions/contexts + shellcheck on `run:` blocks) and `yamllint` (rules in `.yamllint.yml`) over `.github/`; on PRs it keeps a sticky comment (via the internal `_sticky-pr-comment` composite, referenced as `./.github/actions/_sticky-pr-comment` since this workflow runs on this repo and `@v2` may not contain it yet; not the `$/…` form zizmor suggests, which actionlint can't parse yet) in sync and writes a job summary when issues are found, and fails the check on any issue. shellcheck gates at `--severity=warning` (info/style like SC2086 don't fail); actionlint `-ignore`s the `needs.<job>.result` false-positive on reusable-workflow jobs. Run locally with `yamllint -c .yamllint.yml .github` and `actionlint`.
 
 ## Where shared scripts can live (and where they can't)
 
@@ -156,14 +174,15 @@ Keep `sign-image` **centralized here** (pinned by consumers to a commit SHA), no
 
 ## PR-time container e2e and label-gated push
 
-There are two parallel container flows in this repo:
+There are three parallel container flows in this repo:
 
 | Trigger | Workflow(s) | Behaviour |
 |---|---|---|
 | Push to `main`, push to `v*` tag | `docker-container.yml` / `dotnet-container.yml` | Single job: build → scan → **push** → sign → attest. Always pushes. |
 | Pull request | `build-and-scan-{docker,dotnet}.yml` → `playwright-e2e.yml` → `image-push.yml` | Three composable workflows. Build + scan **without push**, transfer the image to e2e via a workflow artifact, run Playwright against the loaded image, and (gated by an `if:` on the consumer side, e.g. PR label) push the byte-identical image afterwards. |
+| Pull request (split) | `build-image-{docker,dotnet}.yml` → (`scan-image.yml` ∥ `playwright-e2e.yml`) → `image-push.yml` | Build only; scan runs next to e2e instead of before it. Same-repo, non-Dependabot PRs push a staging tag `pr-<N>-<sha7>[-suffix]` and hand on `repo@digest` (scan/e2e/push all pull that digest; `image-push.yml` copies it to the final tags and asserts the digest unchanged). Dependabot, fork and non-PR runs fall back to the workflow artifact. Callers grant `packages: write`. |
 
-Both flows go through the same composite-action building blocks (`_build-image-{docker,dotnet}`, `_scan-image`, `_push-image-with-signatures`) so the produced image and its supply-chain artefacts are equivalent. The PR flow extras are `_save-image-artifact` (after build) and `_load-image-artifact` (in e2e and push) for byte-identical inter-job transfer; `image-push.yml` asserts the loaded local digest matches the digest captured at build time before pushing.
+All three flows go through the same composite-action building blocks (`_build-image-{docker,dotnet}`, `_scan-image`, `_push-image-with-signatures`) so the produced image and its supply-chain artefacts are equivalent. The artifact-based PR flow adds `_save-image-artifact` (after build) and `_load-image-artifact` (in e2e and push) for byte-identical inter-job transfer; `image-push.yml` asserts the loaded local digest matches the digest captured at build time before pushing. The split flow adds `_choose-image-handoff` / `_push-staging-image` / `_resolve-image-handoff` for the staging-ref hand-off (artifact fallback reuses the save/load pair).
 
 ### Consumer wrapper shape (~30 lines for a single image)
 

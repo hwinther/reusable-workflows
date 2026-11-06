@@ -377,12 +377,12 @@ jobs:
           test: ${{ inputs.node_test_enabled }}
 
       - name: "Create or update PR comment for node"
-        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: always() && github.event_name == 'pull_request'
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-identifier: "build-results-node"
-          comment-content: ${{ steps.node-build.outputs.pr-comment }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "build-results-node"
+          comment_content: ${{ steps.node-build.outputs.pr-comment }}
 
   dotnet-build:
     needs: detect-changes
@@ -418,12 +418,12 @@ jobs:
           test: ${{ inputs.dotnet_test_enabled }}
 
       - name: "Create or update PR comment for dotnet"
-        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: always() && github.event_name == 'pull_request'
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-identifier: "build-results-dotnet"
-          comment-content: ${{ steps.dotnet-build.outputs.pr-comment }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "build-results-dotnet"
+          comment_content: ${{ steps.dotnet-build.outputs.pr-comment }}
 
   python-build:
     needs: detect-changes
@@ -454,12 +454,12 @@ jobs:
           coverage_source: ${{ inputs.python_coverage_source }}
 
       - name: "Create or update PR comment for python"
-        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: always() && github.event_name == 'pull_request'
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-identifier: "build-results-python"
-          comment-content: ${{ steps.python-build.outputs.pr-comment }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "build-results-python"
+          comment_content: ${{ steps.python-build.outputs.pr-comment }}
 
   pr-build:
     needs: [detect-changes, node-build, dotnet-build, python-build]
@@ -550,12 +550,12 @@ jobs:
           exit 0
 
       - name: "Create or update PR comment (no relevant changes)"
-        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped'
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-identifier: "build-results"
-          comment-content: "## ✅ No relevant changes found for build or lint."
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "build-results"
+          comment_content: "## ✅ No relevant changes found for build or lint."
 
   dotnet-inspect-code:
     needs: detect-changes

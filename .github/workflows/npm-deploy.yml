@@ -89,7 +89,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm_auth_token != '' && secrets.npm_auth_token || secrets.GITHUB_TOKEN }}
           IS_ALPHA: ${{ inputs.is_alpha }}
-        run: |
+        run: | # zizmor: ignore[use-trusted-publishing] -- GitHub Packages and private registries have no trusted publishing
           if [ "$IS_ALPHA" = "true" ]; then
             npm publish --tag alpha
           else

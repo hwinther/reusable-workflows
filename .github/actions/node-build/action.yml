@@ -43,7 +43,7 @@ runs:
   - name: Create temp directory
     id: temp-dir
     shell: bash
-    run: |
+    run: | # zizmor: ignore[github-env] -- TEMP_DIR is mktemp output, not user input
       TEMP_DIR=$(mktemp -d)
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
@@ -494,8 +494,10 @@ runs:
     if: always()
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      WORKING_DIRECTORY: ${{ inputs.working_directory }}
     run: |
-      echo "# Node build status (${{ inputs.working_directory }})" > $TEMP_DIR/combined.md
+      echo "# Node build status (${WORKING_DIRECTORY})" > $TEMP_DIR/combined.md
       cat $TEMP_DIR/dependency.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md

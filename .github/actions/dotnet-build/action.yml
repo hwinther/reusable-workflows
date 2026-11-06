@@ -58,7 +58,7 @@ runs:
   - name: Create temp directory
     id: temp-dir
     shell: bash
-    run: |
+    run: | # zizmor: ignore[github-env] -- TEMP_DIR is mktemp output, not user input
       TEMP_DIR=$(mktemp -d)
       echo "TEMP_DIR=$TEMP_DIR" >> $GITHUB_ENV
 
@@ -86,10 +86,12 @@ runs:
     id: dotnet-restore
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      SOLUTION_FILE: ${{ inputs.solution_file }}
     run: |
       echo "::group::Restore"
       set +e
-      dotnet restore ${{ inputs.solution_file }} --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
+      dotnet restore "$SOLUTION_FILE" --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
       set -e
       echo "::endgroup::"
 
@@ -121,10 +123,12 @@ runs:
     if: steps.format-restore.outputs.failed != 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      SOLUTION_FILE: ${{ inputs.solution_file }}
     run: |
       echo "::group::Build"
       set +e
-      dotnet build ${{ inputs.solution_file }} -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1
+      dotnet build "$SOLUTION_FILE" -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1
       set -e
       cat $TEMP_DIR/build.out
       echo "::endgroup::"
@@ -172,11 +176,13 @@ runs:
     if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      SOLUTION_FILE: ${{ inputs.solution_file }}
     run: |
       echo "::group::Test"
       TEST_EXIT_CODE=0
       set +e
-      dotnet test --solution ${{ inputs.solution_file }} --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx 2>&1 | tee $TEMP_DIR/test.out
+      dotnet test --solution "$SOLUTION_FILE" --no-restore --coverlet --coverlet-output-format cobertura --report-xunit-trx 2>&1 | tee $TEMP_DIR/test.out
       TEST_EXIT_CODE=${PIPESTATUS[0]}
       set -e
       echo "::endgroup::"
@@ -355,10 +361,12 @@ runs:
     shell: bash
     if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
     continue-on-error: true
+    env:
+      REPORTGENERATOR_CACHE_HIT: ${{ steps.cache-reportgenerator.outputs.cache-hit }}
     run: |
       COVERAGE_REPORT_DIR="$TEMP_DIR/coverage-report"
       echo "::group::ReportGenerator"
-      if [ "${{ steps.cache-reportgenerator.outputs.cache-hit }}" != "true" ]; then
+      if [ "$REPORTGENERATOR_CACHE_HIT" != "true" ]; then
         dotnet tool install -g dotnet-reportgenerator-globaltool --version 5.4.4
       fi
       reportgenerator -reports:**/coverage.cobertura.*.xml -targetdir:"$COVERAGE_REPORT_DIR" "-reporttypes:MarkdownSummaryGithub;Html"
@@ -462,8 +470,10 @@ runs:
     if: always()
     shell: bash
     working-directory: ${{ inputs.working_directory }}
+    env:
+      SOLUTION_FILE: ${{ inputs.solution_file }}
     run: |
-      echo "# Dotnet build status (${{ inputs.solution_file }})" > $TEMP_DIR/combined.md
+      echo "# Dotnet build status (${SOLUTION_FILE})" > $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
       [ -f $TEMP_DIR/tests.md ] && cat $TEMP_DIR/tests.md >> $TEMP_DIR/combined.md

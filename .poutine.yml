@@ -1,8 +1,37 @@
 # poutine (.github/workflows/poutine.yml) configuration.
 skip:
-  # hwinther/reusable-workflows is our own action and workflow repo, not a third party: its owner
-  # just isn't a GitHub "verified creator". The prefix covers every workflow and action in it
-  # (poutine matches the purl up to the @ref / #subpath).
+  # Owners that aren't GitHub "verified creators" but are accepted after review. Every use is
+  # pinned to a commit SHA and bumped by Dependabot. poutine matches the purl up to the @ref /
+  # #subpath, so one entry covers every action in that repository.
+  #   hwinther/reusable-workflows: our own action and workflow repo.
+  #   The rest are third-party actions we'd rather not reimplement (test/coverage reporting,
+  #   GitVersion, ReSharper InspectCode, Flux/ORAS CLI setup, zizmor). Simple ones (sticky PR
+  #   comment, GitHub release) were replaced by in-repo code instead of being listed here.
   - rule: github_action_from_unverified_creator_used
     purl:
       - pkg:githubactions/hwinther/reusable-workflows
+      - pkg:githubactions/dorny/test-reporter
+      - pkg:githubactions/irongut/codecoveragesummary
+      - pkg:githubactions/gittools/actions
+      - pkg:githubactions/muno92/resharper_inspectcode
+      - pkg:githubactions/gkampitakis/github-action-todo-commenter
+      - pkg:githubactions/oras-project/setup-oras
+      - pkg:githubactions/fluxcd/flux2
+      - pkg:githubactions/zizmorcore/zizmor-action
+
+  # Composites that call this repo's own actions by @v{major}. That is deliberate: the release
+  # workflow rewrites them to the immutable @vX.Y.Z it tags (docs/adr/0001-internal-ref-pinning.md),
+  # so a consumer pinning a release tag or SHA gets fully pinned transitive code.
+  # _build-image-docker and _push-image-with-signatures have no internal ref; they're flagged for
+  # the docker/* build actions (setup-buildx, build-push, setup-qemu), which pull mutable images
+  # such as BuildKit and tonistiigi/binfmt at runtime even when the action is SHA-pinned (accepted).
+  - rule: unpinnable_action
+    path:
+      - .github/actions/_build-image-dotnet/action.yml
+      - .github/actions/_grype-summary/action.yml
+      - .github/actions/_resolve-image-handoff/action.yml
+      - .github/actions/_scan-image/action.yml
+      - .github/actions/dotnet-build/action.yml
+      - .github/actions/node-build/action.yml
+      - .github/actions/_build-image-docker/action.yml
+      - .github/actions/_push-image-with-signatures/action.yml

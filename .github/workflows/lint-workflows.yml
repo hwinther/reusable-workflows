@@ -131,11 +131,13 @@ jobs:
       - name: Create or update PR comment
         if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         continue-on-error: true
-        uses: im-open/update-pr-comment@add297ea3bc82b349c880eb70a1c2d7d5eaff93d # v2.0.0
+        # Local path, not @v2: the composite may be newer than the last release. Not the `$/` form
+        # zizmor suggests either, because actionlint can't parse it yet (rhysd/actionlint#711).
+        uses: ./.github/actions/_sticky-pr-comment # zizmor: ignore[self-repository]
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          comment-identifier: "lint-workflows"
-          comment-content: ${{ steps.report.outputs.comment }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "lint-workflows"
+          comment_content: ${{ steps.report.outputs.comment }}
 
       - name: Fail if issues were found
         if: steps.report.outputs.has_issues == 'true'
