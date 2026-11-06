@@ -4,10 +4,10 @@ description: |
   made earlier for the same `comment_identifier`, so a PR keeps one comment
   per identifier instead of one per run.
 
-  Replaces im-open/update-pr-comment and keeps its marker
-  (`<!-- im-open/update-pr-comment - <identifier> -->` as the first line), so
-  comments posted before the switch are found and updated, not duplicated.
-  Matches on the marker only, not the author, as im-open did.
+  The comment's first line is the hidden marker
+  `<!-- sticky-pr-comment: <identifier> -->`; the first comment on the PR that
+  starts with it is the one updated. Matches on the marker only, not the
+  author, so a PAT-authored comment is found too.
 
   Does nothing outside a pull_request event unless `pr_number` is given.
 
@@ -43,7 +43,7 @@ runs:
           exit 0
         fi
 
-        export MARKER="<!-- im-open/update-pr-comment - ${COMMENT_ID} -->"
+        export MARKER="<!-- sticky-pr-comment: ${COMMENT_ID} -->"
         body_file="$(mktemp)"
         printf '%s\n%s' "$MARKER" "$COMMENT_CONTENT" > "$body_file"
 
