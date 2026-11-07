@@ -68,7 +68,7 @@ jobs:
 
       - name: Summarize, push and sign
         id: publish
-        uses: hwinther/reusable-workflows/.github/actions/quality-artifact@v2
+        uses: hwinther/reusable-workflows/.github/actions/quality-artifact@v2.23.0
         with:
           reports_dir: ${{ runner.temp }}/quality-reports
           tags: ${{ inputs.tags }}
