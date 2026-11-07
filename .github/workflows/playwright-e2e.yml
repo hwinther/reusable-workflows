@@ -522,7 +522,7 @@ jobs:
 
       - name: Slow spans report
         if: ${{ always() && inputs.otel_traces_file != '' }}
-        uses: hwinther/reusable-workflows/.github/actions/otel-slow-spans@v2
+        uses: hwinther/reusable-workflows/.github/actions/otel-slow-spans@v2.21.0
         with:
           traces_file: ${{ inputs.otel_traces_file }}
           threshold_ms: ${{ inputs.slow_span_threshold_ms }}
@@ -617,7 +617,7 @@ jobs:
 
       - name: Post or update PR comment
         if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_comment_enabled }}
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.21.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: ${{ inputs.comment_identifier }}
