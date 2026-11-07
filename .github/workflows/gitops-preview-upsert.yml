@@ -18,7 +18,7 @@ name: GitOps preview upsert
 # the `databases/` subtree, and the database step no-ops.
 #
 # Auth: a GitHub App installed on the target repo (default name in callers: proxmox-gitops-bot).
-# Caller passes app_id + app_private_key as secrets.
+# Caller passes the app's Client ID as the client_id input (a repository variable) and app_private_key as a secret.
 
 on:
   workflow_call:
@@ -88,15 +88,10 @@ on:
         type: string
         default: ""
       client_id:
-        required: false
+        required: true
         type: string
-        default: ""
-        description: "The GitHub App's Client ID (Iv23…), not its numeric App ID. Not a secret; pass it from a repository variable. Falls back to the deprecated app_id secret."
+        description: "The GitHub App's Client ID (Iv23…), not its numeric App ID. Not a secret; pass it from a repository variable (e.g. vars.PROXMOX_GITOPS_CLIENT_ID)."
     secrets:
-      # Deprecated: the GitHub App's numeric App ID. Pass the Client ID as `client_id` instead;
-      # this stays as a fallback so existing callers keep working.
-      app_id:
-        required: false
       app_private_key:
         required: true
     outputs:
@@ -131,9 +126,8 @@ jobs:
         id: token
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          # create-github-app-token v3 deprecates app-id. client-id takes the Client ID; GitHub also accepts
-          # the numeric App ID as the JWT issuer, which is what the app_id fallback relies on.
-          client-id: ${{ inputs.client_id || secrets.app_id }}
+          # The Client ID, not the numeric App ID (create-github-app-token v3 deprecates app-id).
+          client-id: ${{ inputs.client_id }}
           private-key: ${{ secrets.app_private_key }}
           owner: ${{ steps.parse.outputs.owner }}
           repositories: ${{ steps.parse.outputs.name }}
