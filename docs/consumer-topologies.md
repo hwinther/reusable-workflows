@@ -174,7 +174,7 @@ registry `pushed_digest`, and verify confirms the signature exists under your id
 ## PR build (lint / test) — `test-{npm,nuget,pypi}/*-pr.yml`
 
 One reusable job per package, gated to the files that changed. `pr-build.yml`
-auto-detects stacks; pass `node_enabled` / `dotnet_enabled` / `python_enabled`.
+auto-detects stacks; pass `node_enabled` / `dotnet_enabled` / `python_enabled` / `go_enabled`.
 
 ```mermaid
 flowchart LR

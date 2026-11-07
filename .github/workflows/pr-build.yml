@@ -1,4 +1,4 @@
-# Build and lint in PR - supports node, dotnet, and python
+# Build and lint in PR - supports node, dotnet, python and go
 
 # Node expects a package lock from npm and the following scripts: typecheck (tsc), lint:ci (eslint -f json), build (npm run build), coverage:ci (test and generate coverage report)
 
@@ -9,6 +9,8 @@
 # still build only the languages with changes against main.
 
 # Python expects a hatchling-style pyproject.toml in python_working_directory with a [project.optional-dependencies] dev group (ruff, mypy, pytest, pytest-cov, build). The action runs ruff check + ruff format --check + mypy + pytest + python -m build smoke.
+
+# Go expects a go.mod in go_working_directory. The action runs gofmt -l + go vet + go build + go test (-race, JUnit via gotestsum, coverage as Cobertura).
 
 name: "Build and lint in PR"
 
@@ -159,6 +161,41 @@ on:
         type: string
         description: "Space-separated import names for pytest --cov. Default: [project].name from pyproject.toml; set it when the code spans several top-level packages (a Django project's apps)."
         default: ""
+      go_enabled:
+        required: false
+        type: boolean
+        description: "Run the go build (gofmt, go vet, go build, go test) and file change detection. Opt-in: callers must set this explicitly."
+        default: false
+      go_version:
+        required: false
+        type: string
+        description: "Go version, e.g. 1.27 or stable. Default: the go (or toolchain) directive of go.mod in go_working_directory."
+        default: ""
+      go_working_directory:
+        required: false
+        type: string
+        description: "Working directory for the go build. The go.mod is expected to be in this directory."
+        default: ""
+      go_changes_regex:
+        required: false
+        type: string
+        description: "Regex for files to check for changes. When unset, derived from go_working_directory (everything when that is empty too)."
+        default: ""
+      go_extra_command:
+        required: false
+        type: string
+        description: "Extra command to run after go mod download, before the checks (e.g. go generate ./...)"
+        default: ""
+      go_test_enabled:
+        required: false
+        type: boolean
+        description: "Run go test with a JUnit report (gotestsum) and coverage"
+        default: true
+      go_race_enabled:
+        required: false
+        type: boolean
+        description: "Run go test with -race"
+        default: true
       runs_on:
         required: false
         type: string
@@ -195,6 +232,7 @@ jobs:
       node_changes: ${{ steps.node-check.outputs.changes_detected || 'false' }}
       dotnet_changes: ${{ steps.dotnet-check.outputs.changes_detected || 'false' }}
       python_changes: ${{ steps.python-check.outputs.changes_detected || 'false' }}
+      go_changes: ${{ steps.go-check.outputs.changes_detected || 'false' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -346,6 +384,43 @@ jobs:
             echo "⏭️ No changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      - name: Check for go changes
+        id: go-check
+        if: inputs.go_enabled
+        env:
+          SOURCE_PATH: ${{ inputs.go_working_directory }}
+          REGEX: ${{ inputs.go_changes_regex }}
+          BASE_REF: ${{ steps.set-base.outputs.base_ref }}
+          LABEL: "Go"
+        run: |
+          set -euo pipefail
+          if [ -n "$REGEX" ]; then
+            PATTERN="$REGEX"
+          elif [ -n "$SOURCE_PATH" ]; then
+            PATTERN="^${SOURCE_PATH}/"
+          else
+            PATTERN=".*"
+          fi
+
+          echo "Using regex pattern: $PATTERN"
+          echo "Files to check against:"
+          [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD
+
+          {
+            echo "## 🔍 ${LABEL} change check"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -z "$BASE_REF" ] || git diff --name-only "$BASE_REF"...HEAD | grep -qE "$PATTERN"; then
+            echo "changes_detected=true" >> "$GITHUB_OUTPUT"
+            echo "Changes detected in pattern."
+            echo "✅ Changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changes_detected=false" >> "$GITHUB_OUTPUT"
+            echo "No changes detected in pattern."
+            echo "⏭️ No changes detected matching pattern \`${PATTERN}\`." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
   node-build:
     needs: detect-changes
     if: needs.detect-changes.outputs.node_changes == 'true'
@@ -461,8 +536,42 @@ jobs:
           comment_identifier: "build-results-python"
           comment_content: ${{ steps.python-build.outputs.pr-comment }}
 
+  go-build:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changes == 'true'
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build go
+        id: go-build
+        uses: hwinther/reusable-workflows/.github/actions/go-build@v2
+        with:
+          go_version: ${{ inputs.go_version }}
+          working_directory: ${{ inputs.go_working_directory }}
+          extra_command: ${{ inputs.go_extra_command }}
+          test: ${{ inputs.go_test_enabled }}
+          race: ${{ inputs.go_race_enabled }}
+
+      - name: "Create or update PR comment for go"
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        if: always() && github.event_name == 'pull_request'
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "build-results-go"
+          comment_content: ${{ steps.go-build.outputs.pr-comment }}
+
   pr-build:
-    needs: [detect-changes, node-build, dotnet-build, python-build]
+    needs: [detect-changes, node-build, dotnet-build, python-build, go-build]
     if: always()
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 5
@@ -478,6 +587,7 @@ jobs:
           NODE_RESULT="${{ needs.node-build.result }}"
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
           PYTHON_RESULT="${{ needs.python-build.result }}"
+          GO_RESULT="${{ needs.go-build.result }}"
           # Derive "changes detected" from whether the build ran (outputs can be empty when jobs are skipped + always())
           if [ "$NODE_RESULT" = "skipped" ]; then
             NODE_STATUS="No"
@@ -514,17 +624,30 @@ jobs:
               PYTHON_BUILD="❌ $PYTHON_RESULT"
             fi
           fi
+          if [ "$GO_RESULT" = "skipped" ]; then
+            GO_STATUS="No"
+            GO_BUILD="— (skipped)"
+          else
+            GO_STATUS="✅ Yes"
+            if [ "$GO_RESULT" = "success" ]; then
+              GO_BUILD="✅ Success"
+            else
+              GO_BUILD="❌ $GO_RESULT"
+            fi
+          fi
           echo "| Node (frontend) | $NODE_STATUS | $NODE_BUILD |" >> $GITHUB_STEP_SUMMARY
           echo "| Dotnet (backend) | $DOTNET_STATUS | $DOTNET_BUILD |" >> $GITHUB_STEP_SUMMARY
           echo "| Python | $PYTHON_STATUS | $PYTHON_BUILD |" >> $GITHUB_STEP_SUMMARY
+          echo "| Go | $GO_STATUS | $GO_BUILD |" >> $GITHUB_STEP_SUMMARY
 
       - name: Check build status
         run: |
           NODE_RESULT="${{ needs.node-build.result }}"
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
           PYTHON_RESULT="${{ needs.python-build.result }}"
+          GO_RESULT="${{ needs.go-build.result }}"
 
-          if [ "$NODE_RESULT" = "skipped" ] && [ "$DOTNET_RESULT" = "skipped" ] && [ "$PYTHON_RESULT" = "skipped" ]; then
+          if [ "$NODE_RESULT" = "skipped" ] && [ "$DOTNET_RESULT" = "skipped" ] && [ "$PYTHON_RESULT" = "skipped" ] && [ "$GO_RESULT" = "skipped" ]; then
             echo "✅ No relevant changes found for build or lint."
             exit 0
           fi
@@ -542,6 +665,10 @@ jobs:
             echo "❌ Python build failed or did not run."
             FAILED=1
           fi
+          if [ "$GO_RESULT" != "skipped" ] && [ "$GO_RESULT" != "success" ]; then
+            echo "❌ Go build failed or did not run."
+            FAILED=1
+          fi
 
           if [ $FAILED -eq 1 ]; then
             exit 1
@@ -551,7 +678,7 @@ jobs:
 
       - name: "Create or update PR comment (no relevant changes)"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped'
+        if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped' && needs.go-build.result == 'skipped'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: "build-results"

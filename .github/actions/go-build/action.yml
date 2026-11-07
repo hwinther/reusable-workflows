@@ -1,0 +1,324 @@
+name: "Go Build"
+description: "Go gofmt/vet/build/test pipeline. Mirrors node-build / dotnet-build / python-build: every step runs even when an earlier one fails, each emits a markdown fragment, the action concatenates them into a single pr-comment output, and a final fail-workflow step exits non-zero if any reported failure."
+
+inputs:
+  go_version:
+    required: false
+    description: "Go version for actions/setup-go, e.g. '1.27' or 'stable'. Default: the go (or toolchain) directive of go.mod in working_directory."
+    default: ""
+  working_directory:
+    required: false
+    description: "Directory containing the go.mod of the module being built. Default: the repository root."
+    default: ""
+  extra_command:
+    required: false
+    description: "Optional shell command to run after go mod download, before the checks (e.g. go generate ./...)."
+    default: ""
+  test:
+    required: false
+    description: "Run go test (JUnit via gotestsum, coverage as Cobertura). Set to 'false' to skip."
+    default: "true"
+  race:
+    required: false
+    description: "Run the tests with -race (needs cgo; the GitHub-hosted Ubuntu runners have a C compiler)."
+    default: "true"
+
+outputs:
+  pr-comment:
+    description: "Combined PR comment with build status."
+    value: ${{ steps.pr-comment-combiner.outputs.result }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create temp directory and resolve inputs
+      id: temp-dir
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        TEMP_DIR=$(mktemp -d)
+        # Single grouped redirect with quoted "$GITHUB_ENV" — closes the zizmor 'dangerous use of
+        # environment file' finding.
+        {
+          printf '%s\n' "TEMP_DIR=$TEMP_DIR"
+        } >> "$GITHUB_ENV"
+        # setup-go's module cache keys on go.sum; a stdlib-only module has none, and setup-go
+        # warns on every run when caching is on without it.
+        if [ -f go.sum ]; then echo "cache=true" >> "$GITHUB_OUTPUT"; else echo "cache=false" >> "$GITHUB_OUTPUT"; fi
+
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      name: Set up Go
+      with:
+        go-version: ${{ inputs.go_version }}
+        go-version-file: ${{ inputs.go_version == '' && (inputs.working_directory != '' && format('{0}/go.mod', inputs.working_directory) || 'go.mod') || '' }}
+        cache: ${{ steps.temp-dir.outputs.cache }}
+        cache-dependency-path: ${{ inputs.working_directory != '' && format('{0}/go.sum', inputs.working_directory) || 'go.sum' }}
+
+    - name: Download and verify modules
+      id: dependency-install
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::go mod download"
+        set +e
+        { go mod download && go mod verify; } 1>$TEMP_DIR/dependency.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/dependency.out
+        echo "::endgroup::"
+        if [ $exit_code -ne 0 ]; then
+          echo "::error::go mod download / verify failed."
+          {
+            echo "## ❌ Module download failed"
+            echo ""
+            echo "\`\`\`"
+            tail -n 50 $TEMP_DIR/dependency.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/dependency.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+          exit $exit_code
+        fi
+        echo "## ✅ Modules downloaded and verified ($(go env GOVERSION))" > $TEMP_DIR/dependency.md
+
+    - name: Run extra command
+      if: steps.dependency-install.outcome == 'success' && inputs.extra_command != ''
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        # Passed via env (not template expansion) to avoid the runner interpolating the input into
+        # the run-script source — closes a zizmor 'code injection via template expansion' finding.
+        # The command is still executed as shell since that's the input's documented contract.
+        EXTRA_COMMAND: ${{ inputs.extra_command }}
+      run: |
+        echo "::group::Extra command"
+        bash -c "$EXTRA_COMMAND"
+        echo "::endgroup::"
+
+    - name: gofmt
+      id: gofmt
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::gofmt -l"
+        unformatted=$(gofmt -l . 2>&1 || true)
+        echo "$unformatted"
+        echo "::endgroup::"
+        if [ -n "$unformatted" ]; then
+          while IFS= read -r f; do
+            [ -n "$f" ] && echo "::error file=${WORKING_DIRECTORY:+$WORKING_DIRECTORY/}$f::File is not gofmt-formatted (run gofmt -w)"
+          done <<< "$unformatted"
+          {
+            echo "## ❌ gofmt: files need formatting (run \`gofmt -w .\` locally)"
+            echo ""
+            echo "\`\`\`"
+            echo "$unformatted"
+            echo "\`\`\`"
+          } > $TEMP_DIR/gofmt.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          echo "## ✅ gofmt clean" > $TEMP_DIR/gofmt.md
+        fi
+
+    - name: go vet
+      id: vet
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::go vet"
+        set +e
+        go vet ./... 1>$TEMP_DIR/vet.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/vet.out
+        echo "::endgroup::"
+        # file.go:12:3: message → annotations.
+        grep -E '^[^ #][^:]*\.go:[0-9]+:[0-9]+: ' $TEMP_DIR/vet.out | while IFS= read -r line; do
+          file=${line%%:*}; file="${WORKING_DIRECTORY:+$WORKING_DIRECTORY/}${file#./}"; rest=${line#*:}; ln=${rest%%:*}; rest=${rest#*:}; col=${rest%%:*}; msg=${rest#*: }
+          echo "::error file=$file,line=$ln,col=$col::$msg"
+        done || true
+        grep -cE '\.go:[0-9]+:[0-9]+: ' $TEMP_DIR/vet.out > $TEMP_DIR/vet.count || true
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ go vet reported issues"
+            echo ""
+            echo "\`\`\`"
+            cat $TEMP_DIR/vet.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/vet.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          echo "## ✅ go vet clean" > $TEMP_DIR/vet.md
+        fi
+
+    - name: go build
+      id: build
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "::group::go build"
+        set +e
+        go build ./... 1>$TEMP_DIR/build.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/build.out
+        echo "::endgroup::"
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ go build failed"
+            echo ""
+            echo "\`\`\`"
+            tail -n 100 $TEMP_DIR/build.out
+            echo "\`\`\`"
+          } > $TEMP_DIR/build.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          echo "## ✅ go build succeeded" > $TEMP_DIR/build.md
+        fi
+
+    # gotestsum wraps go test for the JUnit report; its summary line ("DONE 42 tests in 1.2s") goes
+    # into the comment along with the total statement coverage.
+    - name: go test
+      id: test
+      if: steps.dependency-install.outcome == 'success' && inputs.test == 'true'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        RACE: ${{ inputs.race }}
+      run: |
+        echo "::group::go test"
+        race=()
+        [ "$RACE" = "true" ] && race=(-race)
+        set +e
+        go run gotest.tools/gotestsum@v1.13.0 --junitfile "$TEMP_DIR/junit.xml" --format testname -- \
+          "${race[@]}" -count=1 -covermode=atomic -coverprofile="$TEMP_DIR/cover.out" ./... 1>$TEMP_DIR/test.out 2>&1
+        exit_code=$?
+        set -e
+        cat $TEMP_DIR/test.out
+        echo "::endgroup::"
+        summary=$(grep -E '^DONE ' $TEMP_DIR/test.out | tail -n 1 || true)
+        coverage=""
+        if [ -s "$TEMP_DIR/cover.out" ]; then
+          coverage=$(go tool cover -func="$TEMP_DIR/cover.out" 2>/dev/null | awk '/^total:/ {print $NF}' || true)
+        fi
+        if [ $exit_code -ne 0 ]; then
+          {
+            echo "## ❌ go test failed (exit $exit_code)"
+            echo ""
+            echo "\`\`\`"
+            grep -vE '^(PASS|EMPTY) ' $TEMP_DIR/test.out | tail -n 200
+            echo "\`\`\`"
+          } > $TEMP_DIR/test.md
+          echo "failed=true" >> $GITHUB_OUTPUT
+        else
+          {
+            echo "## ✅ go test passed"
+            echo ""
+            [ -n "$summary" ] && echo "\`$summary\`"
+            [ -n "$coverage" ] && echo "" && echo "Coverage: **$coverage** of statements"
+          } > $TEMP_DIR/test.md
+        fi
+
+    # JUnit, Cobertura and the vet finding count for quality-artifact.yml, which collects every
+    # `quality-*` artifact of the run. Staged outside the working tree so the uncommitted-changes
+    # check below ignores it. gocover-cobertura runs in the module so it can resolve package paths
+    # to files.
+    - name: Stage quality reports
+      id: quality-stage
+      if: ${{ !cancelled() && steps.dependency-install.outcome == 'success' && inputs.test == 'true' }}
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/quality-go"
+        rm -rf "$out" && mkdir -p "$out"
+        if [ -f "$TEMP_DIR/junit.xml" ]; then cp "$TEMP_DIR/junit.xml" "$out/"; fi
+        if [ -s "$TEMP_DIR/cover.out" ]; then
+          go run github.com/boumenot/gocover-cobertura@v1.5.0 < "$TEMP_DIR/cover.out" > "$out/coverage.xml" \
+            || { echo "::warning::Cobertura conversion failed; the quality artifact has no coverage."; rm -f "$out/coverage.xml"; }
+        fi
+        vet=$(cat "$TEMP_DIR/vet.count" 2>/dev/null || echo 0)
+        printf '{"warnings": {"vet": %d}}\n' "${vet:-0}" > "$out/warnings.json"
+        echo "dir=$out" >> "$GITHUB_OUTPUT"
+
+    - name: Upload quality reports (quality-go)
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      if: ${{ !cancelled() && steps.quality-stage.outcome == 'success' }}
+      with:
+        name: quality-go
+        path: ${{ steps.quality-stage.outputs.dir }}
+        if-no-files-found: ignore
+
+    - name: Check for uncommitted changes
+      if: steps.dependency-install.outcome == 'success'
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      run: |
+        echo "Checking for uncommitted changes..."
+        git config core.fileMode false
+        git -c core.safecrlf=false status --porcelain
+
+        if [ -n "$(git -c core.safecrlf=false status --porcelain)" ]; then
+          echo "Found changes, staging files to see if they are normalized away..."
+          git add -A
+
+          if [ -n "$(git diff --cached)" ]; then
+            echo "::error::Actual content changes in files after build and test (go.mod / go.sum not tidy, or generated code out of date?):"
+            git status
+            git diff --cached
+            {
+              echo "## ❌ Changes in files after build and test"
+              echo ""
+              echo "The following files have actual changes (run \`go mod tidy\` / \`go generate ./...\` locally):"
+              echo "\`\`\`"
+              git diff --cached --name-only
+              echo "\`\`\`"
+            } > $TEMP_DIR/git-status.md
+            git reset HEAD
+            exit 1
+          else
+            echo "No actual changes - only line endings or file mode were normalized."
+            git reset HEAD
+            echo "## ✅ No changes in files after build and test were found" > $TEMP_DIR/git-status.md
+          fi
+        else
+          echo "No changes in files after build and test were found."
+          echo "## ✅ No changes in files after build and test were found" > $TEMP_DIR/git-status.md
+        fi
+
+    - name: Combine output into PR comment
+      id: pr-comment-combiner
+      if: always()
+      shell: bash
+      env:
+        # Passed via env (not template expansion) so the runner doesn't interpolate the input into
+        # the run-script source — closes a zizmor 'code injection via template expansion' finding.
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        echo "# Go build status (${WORKING_DIRECTORY:-.})" > $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/dependency.md ] && cat $TEMP_DIR/dependency.md >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/gofmt.md ]      && cat $TEMP_DIR/gofmt.md      >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/vet.md ]        && cat $TEMP_DIR/vet.md        >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/build.md ]      && cat $TEMP_DIR/build.md      >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/test.md ]       && cat $TEMP_DIR/test.md       >> $TEMP_DIR/combined.md
+        [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
+        echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
+        cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
+
+    - name: Fail workflow on format/vet/build/test errors
+      if: |
+        steps.dependency-install.outputs.failed == 'true'
+        || steps.gofmt.outputs.failed == 'true'
+        || steps.vet.outputs.failed == 'true'
+        || steps.build.outputs.failed == 'true'
+        || steps.test.outputs.failed == 'true'
+      shell: bash
+      run: |
+        echo "::error::One or more checks reported errors. See PR comment for details."
+        exit 1
