@@ -5,7 +5,8 @@ description: |
   action a consumer's own job can call AFTER an already-pushed digest:
     - GitHub artifact-build-provenance attestation (when enabled)
     - Cosign keyless signature (when enabled)
-    - Cosign CycloneDX SBOM and Grype vuln attestations (when enabled)
+    - Cosign CycloneDX SBOM and Grype vuln attestations (when enabled), both as
+      Cosign v2.4.3 `.att` tags and as Cosign v3 Sigstore bundle referrers
 
   Because this action runs inline in the caller's job, the OIDC token minted
   for cosign and actions/attest carries the CALLER's
@@ -379,3 +380,32 @@ runs:
         [ -f "$CYCLONEDX_PATH" ] || { echo "::error::Missing CycloneDX SBOM: $CYCLONEDX_PATH"; exit 1; }
         cosign attest --yes --type cyclonedx --predicate "$CYCLONEDX_PATH" "$IMAGE_REF"
         cosign attest --yes --type vuln --predicate "$VULN_PREDICATE" "$IMAGE_REF"
+
+    # Kyverno's CEL ImageValidatingPolicy (the successor of the ClusterPolicy `verifyImages` that Kyverno
+    # 1.20 removes) reads ONLY Sigstore bundle referrers once an image has any, and the actions/attest SLSA
+    # provenance above is one. So the v2 `.att` attestations from the previous step are invisible to it.
+    # Publish the same two predicates as cosign v3 Sigstore bundles too (OCI referrers; on GHCR via the
+    # `sha256-<digest>` referrers-tag index). Keep the v2 `.att` copies until the legacy ClusterPolicies are
+    # gone from the clusters, then drop the v2 attest step. Installed into its own directory and run by
+    # full path; it is the last cosign use here, so its PATH entry can't change which cosign the steps
+    # above ran.
+    - name: Install Cosign v3 (Sigstore bundle attestations)
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      with:
+        cosign-release: v3.1.4
+        install-dir: ${{ runner.temp }}/cosign-v3
+
+    - name: Cosign attest CycloneDX and vulnerability scan (Sigstore bundles)
+      if: ${{ inputs.cosign_sign_enabled == 'true' && inputs.cosign_supply_chain_attest_enabled == 'true' }}
+      shell: bash
+      env:
+        IMAGE_REF: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}@${{ steps.digest.outputs.value }}
+        CYCLONEDX_PATH: ${{ inputs.sbom_cyclonedx_path }}
+        VULN_PREDICATE: ${{ runner.temp }}/cosign-vuln-predicate.json
+        COSIGN_V3: ${{ runner.temp }}/cosign-v3/cosign
+      run: |
+        set -euo pipefail
+        "$COSIGN_V3" version
+        "$COSIGN_V3" attest --yes --new-bundle-format --type cyclonedx --predicate "$CYCLONEDX_PATH" "$IMAGE_REF"
+        "$COSIGN_V3" attest --yes --new-bundle-format --type vuln --predicate "$VULN_PREDICATE" "$IMAGE_REF"
