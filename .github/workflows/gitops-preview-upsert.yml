@@ -219,10 +219,35 @@ jobs:
           HOST: ${{ inputs.host }}
           TARGET_REF: ${{ inputs.target_ref }}
           APP_NAME: ${{ inputs.app_name }}
+          # The caller's token, only used to read the PR's state (GET /pulls/N).
+          GH_TOKEN: ${{ github.token }}
+          CALLER_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           git config user.name  "proxmox-gitops-bot[bot]"
           git config user.email "proxmox-gitops-bot[bot]@users.noreply.github.com"
+
+          # A PR merged right after a push races its own pipeline: the teardown runs on close, then
+          # this upsert (still finishing build/scan/e2e) re-adds the overlay minutes later and the
+          # preview lives on forever (skylens #184/#185, 2026-11-07). So only push while the PR is
+          # still open, checked right before every push attempt. If the state can't be read (token
+          # lacks pull-requests: read on a private repo), warn and keep the old behaviour.
+          pr_still_open() {
+            local state
+            # Non-PR previews (e.g. ClutterStock's pr_number "nightly") have no PR to check.
+            [[ "$PR" =~ ^[0-9]+$ ]] || return 0
+            if ! state=$(gh api "repos/$CALLER_REPO/pulls/$PR" --jq .state 2>/dev/null); then
+              echo "::warning::Could not read the state of $CALLER_REPO#$PR; pushing anyway."
+              return 0
+            fi
+            [ "$state" = "open" ]
+          }
+          skip_closed() {
+            echo "::notice::$CALLER_REPO#$PR is no longer open; not re-adding its preview (the teardown owns it now)."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
 
           git add -A
           if git diff --cached --quiet; then
@@ -234,6 +259,7 @@ jobs:
           git commit -m "preview(${APP_NAME:-preview}): upsert pr-$PR ($HOST)"
 
           n=0
+          pr_still_open || skip_closed
           until git push origin "HEAD:$TARGET_REF"; do
             n=$((n+1))
             if [ "$n" -ge 3 ]; then
@@ -242,6 +268,7 @@ jobs:
             fi
             echo "Push rejected; rebasing and retrying ($n/3)"
             git pull --rebase --autostash origin "$TARGET_REF"
+            pr_still_open || skip_closed
           done
 
       # Mirror of the sticky PR comment most callers post: surface the preview URL + what was
