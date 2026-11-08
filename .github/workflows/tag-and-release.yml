@@ -5,7 +5,7 @@
 # workflow scenarios where consumers pin to floating major/minor refs.
 # The canonical release tag is always full semver (vX.Y.Z) in auto mode — that's
 # what GitVersion expects and what immutable releases need.
-name: "Create tag and release"
+name: "Create release"
 
 on:
   workflow_dispatch:
