@@ -166,11 +166,11 @@ runs:
     run: |
       bin="$RUNNER_TEMP/manifests-bin"
       mkdir -p "$bin"
-      curl -fsSLo "$RUNNER_TEMP/kubeconform.tgz" "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+      curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$RUNNER_TEMP/kubeconform.tgz" "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
       echo "${KUBECONFORM_SHA256}  $RUNNER_TEMP/kubeconform.tgz" | sha256sum -c -
       tar -xzf "$RUNNER_TEMP/kubeconform.tgz" -C "$bin" kubeconform
       if [ "$MODE" = diff ]; then
-        curl -fsSLo "$RUNNER_TEMP/dyff.tgz" "https://github.com/homeport/dyff/releases/download/v${DYFF_VERSION}/dyff_${DYFF_VERSION}_linux_amd64.tar.gz"
+        curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o "$RUNNER_TEMP/dyff.tgz" "https://github.com/homeport/dyff/releases/download/v${DYFF_VERSION}/dyff_${DYFF_VERSION}_linux_amd64.tar.gz"
         echo "${DYFF_SHA256}  $RUNNER_TEMP/dyff.tgz" | sha256sum -c -
         tar -xzf "$RUNNER_TEMP/dyff.tgz" -C "$bin" dyff
       fi

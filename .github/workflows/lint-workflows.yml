@@ -47,7 +47,7 @@ jobs:
         run: |
           set -euo pipefail
           cd "${RUNNER_TEMP}"
-          curl -fsSL -o actionlint.tar.gz \
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o actionlint.tar.gz \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           tar -xzf actionlint.tar.gz actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
