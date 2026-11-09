@@ -18,7 +18,10 @@ list="$3"
 mode="${4:-validate}"
 
 # Same default as action.yml's kubeconform_args (built-in schemas plus the datree CRDs-catalog).
-read -ra kubeconform_args <<< "${KUBECONFORM_ARGS:--strict -summary -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json}"
+# Kept in a variable: written inline as ${KUBECONFORM_ARGS:-...}, the first `}` of {{.Group}} would
+# end the expansion and append the rest of the URL to a set KUBECONFORM_ARGS.
+default_kubeconform_args='-strict -summary -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+read -ra kubeconform_args <<< "${KUBECONFORM_ARGS:-$default_kubeconform_args}"
 rm -rf "$outdir"
 mkdir -p "$outdir"
 : > "$list"

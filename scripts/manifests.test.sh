@@ -24,6 +24,7 @@ trap 'rm -rf "$WORK"' EXIT
 cat > "$WORK/bin/kubeconform" <<'EOF'
 #!/usr/bin/env bash
 echo "kubeconform stub: $*"
+for a in "$@"; do printf 'argv: [%s]\n' "$a"; done
 # Echo the files it was given, so the tests can check what was validated. Like kubeconform, only
 # .yaml/.yml/.json files count; anything else is skipped silently.
 for f in "$@"; do
@@ -139,7 +140,16 @@ expect_grep "image pinned to tag@digest" "image: ghcr.io/example/app/api:1.2.3@$
 expect_grep "production render keeps envFrom" "envFrom" "$WORK/out/app.yaml"
 if grep -q envFrom "$WORK/out/preview/app.yaml"; then bad "component removes envFrom"; else pass "component removes envFrom"; fi
 expect_grep "kubeconform ran" "kubeconform stub" "$WORK/log"
-expect_grep "default args include the CRDs-catalog" "kubeconform stub: .*-schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/" "$WORK/log"
+catalog='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+if grep -qxF "argv: [$catalog]" "$WORK/log"; then pass "default args pass the CRDs-catalog URL intact"; else bad "default args pass the CRDs-catalog URL intact"; grep '^argv:' "$WORK/log"; fi
+# The action always sets KUBECONFORM_ARGS; a set value must reach kubeconform unchanged.
+KUBECONFORM_ARGS="-strict -schema-location $catalog" RENDERS="app.yaml=deploy" \
+  bash "$SCRIPTS/render-all.sh" . "$WORK/out" "$WORK/list" validate > "$WORK/log" 2>&1
+if grep -qxF "argv: [$catalog]" "$WORK/log" && [ "$(grep -c '^argv:' "$WORK/log")" = 4 ]; then
+  pass "KUBECONFORM_ARGS reaches kubeconform unchanged"
+else
+  bad "KUBECONFORM_ARGS reaches kubeconform unchanged"; grep '^argv:' "$WORK/log"
+fi
 expect_grep "validation resolves a default" "validated: .*value: production" "$WORK/log"
 expect_grep "validation uses a DNS-safe stand-in for a required var" "validated: .*host: app-host" "$WORK/log"
 if grep -q 'validated: .*\${' "$WORK/log"; then bad "no placeholders left in the validated copy"; else pass "no placeholders left in the validated copy"; fi
