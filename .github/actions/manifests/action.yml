@@ -38,6 +38,14 @@ inputs:
         app/manifests.yaml=deploy/app
         migrate/manifests.yaml=deploy/migrate
     default: "manifests.yaml=deploy"
+  renders_file:
+    required: false
+    description: |
+      Path (relative to the workspace) of a file with the `renders` lines instead; blank lines and
+      `#` comments are ignored. When set it wins over `renders`. Lets one workflow file serve every
+      repo, with the list kept in the repo (e.g. `.github/manifest-renders.txt`). In diff mode the
+      PR head's file is used for both head and base.
+    default: ""
   images:
     required: false
     description: "push: image refs to pin, one per line, `registry/name:tag@sha256:...`. Applied to every render."
@@ -178,10 +186,33 @@ runs:
         tar -xzf "$RUNNER_TEMP/dyff.tgz" -C "$bin" dyff
       fi
 
-  - name: Render and validate
+  - name: Resolve the render list
     shell: bash
     env:
       RENDERS: ${{ inputs.renders }}
+      RENDERS_FILE: ${{ inputs.renders_file }}
+    run: |
+      set -euo pipefail
+      list="$RUNNER_TEMP/manifests-renders-input.txt"
+      if [ -n "$RENDERS_FILE" ]; then
+        if [ ! -f "$RENDERS_FILE" ]; then
+          echo "::error file=$RENDERS_FILE::renders_file $RENDERS_FILE not found; list the renders, one '<out-path>=<deploy-dir>[,<component>]' per line."
+          exit 1
+        fi
+        grep -vE '^[[:space:]]*(#|$)' "$RENDERS_FILE" > "$list" || true
+        if [ ! -s "$list" ]; then
+          echo "::error file=$RENDERS_FILE::renders_file $RENDERS_FILE lists no renders."
+          exit 1
+        fi
+      else
+        printf '%s\n' "$RENDERS" > "$list"
+      fi
+      echo "Renders:"
+      cat "$list"
+
+  - name: Render and validate
+    shell: bash
+    env:
       IMAGES: ${{ inputs.mode == 'push' && inputs.images || '' }}
       KUBECONFORM_ARGS: ${{ inputs.kubeconform_args }}
       VALIDATE: ${{ inputs.validate }}
@@ -190,6 +221,8 @@ runs:
     # writing GITHUB_PATH for the rest of the caller's job.
     run: |
       export PATH="$RUNNER_TEMP/manifests-bin:$PATH"
+      RENDERS="$(cat "$RUNNER_TEMP/manifests-renders-input.txt")"
+      export RENDERS
       bash "$GITHUB_ACTION_PATH/scripts/render-all.sh" . "$RUNNER_TEMP/manifests-head" "$RUNNER_TEMP/manifests-renders.txt" validate
 
   # --- diff -------------------------------------------------------------------------------------
@@ -206,11 +239,13 @@ runs:
     if: inputs.mode == 'diff'
     shell: bash
     env:
-      RENDERS: ${{ inputs.renders }}
       CONTRACT: ${{ inputs.contract }}
     # The base is rendered with this action's scripts, so a script change can't break it, and
-    # its contract isn't this PR's problem.
-    run: bash "$GITHUB_ACTION_PATH/scripts/render-all.sh" .manifests-base "$RUNNER_TEMP/manifests-base" "$RUNNER_TEMP/manifests-base-renders.txt" best-effort
+    # its contract isn't this PR's problem. Same render list as the head.
+    run: |
+      RENDERS="$(cat "$RUNNER_TEMP/manifests-renders-input.txt")"
+      export RENDERS
+      bash "$GITHUB_ACTION_PATH/scripts/render-all.sh" .manifests-base "$RUNNER_TEMP/manifests-base" "$RUNNER_TEMP/manifests-base-renders.txt" best-effort
 
   - name: Build the report
     if: inputs.mode == 'diff'
