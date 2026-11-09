@@ -17,7 +17,8 @@ outdir="$2"
 list="$3"
 mode="${4:-validate}"
 
-read -ra kubeconform_args <<< "${KUBECONFORM_ARGS:--strict -summary}"
+# Same default as action.yml's kubeconform_args (built-in schemas plus the datree CRDs-catalog).
+read -ra kubeconform_args <<< "${KUBECONFORM_ARGS:--strict -summary -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json}"
 rm -rf "$outdir"
 mkdir -p "$outdir"
 : > "$list"
