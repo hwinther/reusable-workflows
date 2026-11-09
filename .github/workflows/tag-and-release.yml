@@ -63,6 +63,14 @@ on:
         type: string
         required: false
         default: ""
+      environment:
+        description: >-
+          Environment to run the job in, so `app_private_key` can be an environment secret limited
+          to the default branch (deployment branch policy) instead of a repository secret that a
+          workflow on any branch can read. Empty = no environment.
+        type: string
+        required: false
+        default: ""
     outputs:
       tag_name:
         description: "Name of the created tag"
@@ -83,6 +91,8 @@ on:
 jobs:
   tag:
     runs-on: ubuntu-latest
+    # An empty name runs the job without an environment.
+    environment: ${{ inputs.environment }}
     permissions:
       contents: write
     env:
