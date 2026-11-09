@@ -143,12 +143,13 @@ expect_grep "kubeconform ran" "kubeconform stub" "$WORK/log"
 catalog='https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 if grep -qxF "argv: [$catalog]" "$WORK/log"; then pass "default args pass the CRDs-catalog URL intact"; else bad "default args pass the CRDs-catalog URL intact"; grep '^argv:' "$WORK/log"; fi
 # The action always sets KUBECONFORM_ARGS; a set value must reach kubeconform unchanged.
+# Own out dir, list and log, so the checks below still see case 1's output.
 KUBECONFORM_ARGS="-strict -schema-location $catalog" RENDERS="app.yaml=deploy" \
-  bash "$SCRIPTS/render-all.sh" . "$WORK/out" "$WORK/list" validate > "$WORK/log" 2>&1
-if grep -qxF "argv: [$catalog]" "$WORK/log" && [ "$(grep -c '^argv:' "$WORK/log")" = 4 ]; then
+  bash "$SCRIPTS/render-all.sh" . "$WORK/out-args" "$WORK/list-args" validate > "$WORK/log-args" 2>&1
+if grep -qxF "argv: [$catalog]" "$WORK/log-args" && [ "$(grep -c '^argv:' "$WORK/log-args")" = 4 ]; then
   pass "KUBECONFORM_ARGS reaches kubeconform unchanged"
 else
-  bad "KUBECONFORM_ARGS reaches kubeconform unchanged"; grep '^argv:' "$WORK/log"
+  bad "KUBECONFORM_ARGS reaches kubeconform unchanged"; grep '^argv:' "$WORK/log-args"
 fi
 expect_grep "validation resolves a default" "validated: .*value: production" "$WORK/log"
 expect_grep "validation uses a DNS-safe stand-in for a required var" "validated: .*host: app-host" "$WORK/log"
