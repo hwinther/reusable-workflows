@@ -5,7 +5,8 @@
 #   render-all.sh <src-root> <out-dir> <list-file> [validate|best-effort]
 #
 # validate:    also run kubeconform ($KUBECONFORM_ARGS) on each render, unless VALIDATE=false;
-#              any failure fails.
+#              any failure fails. kubeconform sees a copy with the Flux postBuild variables
+#              resolved (see resolve_vars); the render itself keeps them for the cluster.
 # best-effort: a render that fails is skipped (used for the PR base, whose tree or contract
 #              isn't this PR's problem).
 set -euo pipefail
@@ -20,6 +21,14 @@ read -ra kubeconform_args <<< "${KUBECONFORM_ARGS:--strict -summary}"
 rm -rf "$outdir"
 mkdir -p "$outdir"
 : > "$list"
+
+# The render keeps ${VAR} placeholders for Flux postBuild.substitute. Schemas with patterns (e.g.
+# Gateway API HTTPRoute hostnames, parentRefs namespace/sectionName) reject a literal "${APP_HOST}",
+# so validate a copy where ${VAR:=default}, ${VAR:-default} and ${VAR=default} become the default,
+# and a required ${VAR} becomes a DNS-safe stand-in (APP_HOST -> app-host).
+resolve_vars() {
+  perl -pe 's/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?[=-]([^}]*))?\}/defined $2 ? $2 : lc($1 =~ tr|_|-|r)/ge' "$1"
+}
 
 status=0
 while IFS= read -r line; do
@@ -55,8 +64,15 @@ while IFS= read -r line; do
 
   echo "::group::Render $out from $dir${component:+ + $component}"
   if "$here/render-manifests.sh" "$root/$dir" "$outdir/$out" "$component"; then
-    if [ "$mode" = validate ] && [ "${VALIDATE:-true}" != false ] && ! kubeconform "${kubeconform_args[@]}" "$outdir/$out"; then
-      status=1
+    if [ "$mode" = validate ] && [ "${VALIDATE:-true}" != false ]; then
+      # Outside $outdir: everything in there is pushed as the artifact.
+      resolved="$(mktemp)"
+      resolve_vars "$outdir/$out" > "$resolved"
+      echo "Validating $out with variables resolved (defaults; required ones as lowercase stand-ins)."
+      if ! kubeconform "${kubeconform_args[@]}" "$resolved"; then
+        status=1
+      fi
+      rm -f "$resolved"
     fi
   elif [ "$mode" = best-effort ]; then
     echo "Render of $dir failed; treating it as empty."
