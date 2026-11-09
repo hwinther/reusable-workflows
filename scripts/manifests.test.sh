@@ -24,8 +24,11 @@ trap 'rm -rf "$WORK"' EXIT
 cat > "$WORK/bin/kubeconform" <<'EOF'
 #!/usr/bin/env bash
 echo "kubeconform stub: $*"
-# Echo the files it was given, so the tests can check what was validated.
-for f in "$@"; do [ -f "$f" ] && sed 's/^/validated: /' "$f"; done
+# Echo the files it was given, so the tests can check what was validated. Like kubeconform, only
+# .yaml/.yml/.json files count; anything else is skipped silently.
+for f in "$@"; do
+  case "$f" in *.yaml | *.yml | *.json) [ -f "$f" ] && sed 's/^/validated: /' "$f" ;; esac
+done
 exit 0
 EOF
 cat > "$WORK/bin/dyff" <<'EOF'
