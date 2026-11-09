@@ -68,7 +68,7 @@ inputs:
     default: ${{ github.token }}
   kubeconform_args:
     required: false
-    description: "kubeconform flags, e.g. add `-ignore-missing-schemas` for CRDs without a schema."
+    description: "kubeconform flags, e.g. add `-ignore-missing-schemas` for CRDs without a schema. kubeconform validates a copy with the ${VAR} placeholders resolved (default, or a lowercase stand-in for required ones), so patterned fields like HTTPRoute hostnames pass."
     default: "-strict -summary"
   validate:
     required: false

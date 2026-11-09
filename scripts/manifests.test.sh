@@ -24,6 +24,9 @@ trap 'rm -rf "$WORK"' EXIT
 cat > "$WORK/bin/kubeconform" <<'EOF'
 #!/usr/bin/env bash
 echo "kubeconform stub: $*"
+# Echo the files it was given, so the tests can check what was validated.
+for f in "$@"; do [ -f "$f" ] && sed 's/^/validated: /' "$f"; done
+exit 0
 EOF
 cat > "$WORK/bin/dyff" <<'EOF'
 #!/usr/bin/env bash
@@ -133,6 +136,10 @@ expect_grep "image pinned to tag@digest" "image: ghcr.io/example/app/api:1.2.3@$
 expect_grep "production render keeps envFrom" "envFrom" "$WORK/out/app.yaml"
 if grep -q envFrom "$WORK/out/preview/app.yaml"; then bad "component removes envFrom"; else pass "component removes envFrom"; fi
 expect_grep "kubeconform ran" "kubeconform stub" "$WORK/log"
+expect_grep "validation resolves a default" "validated: .*value: production" "$WORK/log"
+expect_grep "validation uses a DNS-safe stand-in for a required var" "validated: .*host: app-host" "$WORK/log"
+if grep -q 'validated: .*\${' "$WORK/log"; then bad "no placeholders left in the validated copy"; else pass "no placeholders left in the validated copy"; fi
+expect_grep "render keeps the placeholder for Flux" 'host: ${APP_HOST}' "$WORK/out/app.yaml"
 if [ "$(cat "$WORK/list")" = $'app.yaml\npreview/app.yaml' ]; then pass "list file"; else bad "list file: $(cat "$WORK/list")"; fi
 
 # 2. Placeholder tags stay when IMAGES is empty (PR diffs).
