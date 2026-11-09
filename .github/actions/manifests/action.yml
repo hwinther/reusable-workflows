@@ -69,7 +69,10 @@ inputs:
   kubeconform_args:
     required: false
     description: "kubeconform flags, e.g. add `-ignore-missing-schemas` for CRDs without a schema. kubeconform validates a copy with the ${VAR} placeholders resolved (default, or a lowercase stand-in for required ones), so patterned fields like HTTPRoute hostnames pass."
-    default: "-strict -summary"
+    # The datree CRDs-catalog covers common CRDs (Gateway API HTTPRoute, Traefik, cert-manager, ...),
+    # so artifacts that ship them validate without per-repo flags. Keep the URL unquoted: render-all.sh
+    # splits this with `read -ra`, which doesn't handle quotes.
+    default: "-strict -summary -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json"
   validate:
     required: false
     description: "Run kubeconform on the head renders."

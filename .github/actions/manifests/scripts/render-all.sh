@@ -17,7 +17,8 @@ outdir="$2"
 list="$3"
 mode="${4:-validate}"
 
-read -ra kubeconform_args <<< "${KUBECONFORM_ARGS:--strict -summary}"
+# Same default as action.yml's kubeconform_args (built-in schemas plus the datree CRDs-catalog).
+read -ra kubeconform_args <<< "${KUBECONFORM_ARGS:--strict -summary -schema-location default -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json}"
 rm -rf "$outdir"
 mkdir -p "$outdir"
 : > "$list"
@@ -65,14 +66,16 @@ while IFS= read -r line; do
   echo "::group::Render $out from $dir${component:+ + $component}"
   if "$here/render-manifests.sh" "$root/$dir" "$outdir/$out" "$component"; then
     if [ "$mode" = validate ] && [ "${VALIDATE:-true}" != false ]; then
-      # Outside $outdir: everything in there is pushed as the artifact.
-      resolved="$(mktemp)"
+      # Outside $outdir (everything in there is pushed as the artifact), and under the render's own
+      # file name: kubeconform silently skips files without a .yaml/.yml/.json extension.
+      resolved_dir="$(mktemp -d)"
+      resolved="$resolved_dir/${out##*/}"
       resolve_vars "$outdir/$out" > "$resolved"
       echo "Validating $out with variables resolved (defaults; required ones as lowercase stand-ins)."
       if ! kubeconform "${kubeconform_args[@]}" "$resolved"; then
         status=1
       fi
-      rm -f "$resolved"
+      rm -rf "$resolved_dir"
     fi
   elif [ "$mode" = best-effort ]; then
     echo "Render of $dir failed; treating it as empty."
