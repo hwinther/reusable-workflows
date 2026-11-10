@@ -34,7 +34,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 - **`quality-artifact.yml`** — collects the run's `quality-*` workflow artifacts (unit test results and coverage from `node-build`/`dotnet-build`, Playwright JSON from `playwright-e2e.yml`, Grype JSON from the scans) and publishes them as the signed OCI artifact `ghcr.io/<owner>/<repo>/quality:<tag>`. Schema and formats: [docs/quality-artifact.md](docs/quality-artifact.md). Callers grant `contents: read`, `packages: write` and `id-token: write`.
 - **`stryker.yml`** — Stryker mutation testing for .NET (off by default — current MTP/dotnet-stryker hangs) and/or Node (on by default). Each is gated by an input flag.
 - **`format-and-create-pr.yml`** — multi-formatter helper. Runs `jb cleanupcode` against a .NET solution (`mode: cleanupcode`) or `ruff format` against a Python tree (`mode: ruff-format`) and opens a PR; a separate `mode: blame-ignore-revs` syncs `.git-blame-ignore-revs` from the matching merged commits.
-- **`dependabot-update-dotnet-lockfiles.yml`** — for `pull_request_target`: on labelled dependabot PRs, refreshes `packages.lock.json` files and pushes back to the PR branch via a caller-supplied `WORKFLOW_TOKEN`.
+- **`dependabot-update-dotnet-lockfiles.yml`** — for `pull_request_target`: on labelled dependabot PRs, refreshes `packages.lock.json` files and pushes back to the PR branch. Restores every tracked `.sln`/`.slnx` unless `solution_path`/`solution_name` are given; pushes with a GitHub App token (`app_client_id` + `app_private_key`, optionally from a main-only `environment`) or a `WORKFLOW_TOKEN` PAT.
 
 ### Security scanning
 - **`poutine.yml`** — Actions-targeted SAST; uploads SARIF to Code Scanning.
