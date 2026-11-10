@@ -77,6 +77,11 @@ on:
           Environment to run the job in, so `app_private_key` can be an environment secret limited
           to the default branch. Empty = no environment.
         default: ""
+      commit_message:
+        required: false
+        type: string
+        description: "Message of the lockfile commit pushed to the PR branch (Conventional Commits)."
+        default: "chore(deps): update packages.lock.json"
     secrets:
       WORKFLOW_TOKEN:
         required: false
@@ -147,6 +152,7 @@ jobs:
         env:
           SOLUTION_PATH: ${{ inputs.solution_path }}
           SOLUTION_NAME: ${{ inputs.solution_name }}
+          COMMIT_MESSAGE: ${{ inputs.commit_message }}
         run: |
           set -euo pipefail
           if [ -n "$SOLUTION_NAME" ]; then
@@ -173,6 +179,6 @@ jobs:
             exit 0
           else
             echo "Add and commit changes"
-            git commit -a -m "Update lockfiles"
+            git commit -a -m "$COMMIT_MESSAGE"
             git push
           fi
