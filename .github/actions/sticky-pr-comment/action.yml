@@ -1,0 +1,39 @@
+name: "Create or update a sticky PR comment"
+description: |
+  Keeps one PR comment per `comment_identifier`: creates it the first time, updates it after that,
+  so a PR keeps one comment per identifier instead of one per run. For consumers (e.g. a preview
+  env's URL comment, created by one workflow and marked torn down by another); the workflows here
+  use the same implementation (`_sticky-pr-comment`).
+
+  The comment's first line is the hidden marker `<!-- sticky-pr-comment: <identifier> -->`; the
+  first comment on the PR that starts with it is the one updated, whoever wrote it. A different
+  tool's sticky comment (another marker) isn't found, so switching to this action adds one new
+  comment on PRs that already had one.
+
+  Does nothing outside a pull_request event unless `pr_number` is given.
+
+inputs:
+  github_token:
+    required: true
+    description: "Token with pull-requests: write (or issues: write) on the repository."
+  comment_identifier:
+    required: true
+    description: "Unchanging identifier of the comment to keep in sync."
+  comment_content:
+    required: true
+    description: "GitHub-flavored markdown for the comment body."
+  pr_number:
+    required: false
+    description: "PR to comment on. Defaults to the pull_request event's PR."
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create or update PR comment
+      uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+      with:
+        github_token: ${{ inputs.github_token }}
+        comment_identifier: ${{ inputs.comment_identifier }}
+        comment_content: ${{ inputs.comment_content }}
+        pr_number: ${{ inputs.pr_number }}
