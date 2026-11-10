@@ -8,18 +8,30 @@ name: "Update dotnet lockfiles in Dependabot PRs (reusable)"
 # The job's `if:` gates on user.login == 'dependabot[bot]' and the configured
 # label, so the reusable workflow can be invoked unconditionally — runs for
 # unrelated PRs are skipped at the job level.
+#
+# With solution_path and solution_name empty, every tracked .sln/.slnx is restored, so one
+# identical caller works in every repo. The push needs a token that triggers the PR's workflows
+# (GITHUB_TOKEN doesn't): a GitHub App token (app_client_id + app_private_key, optionally from a
+# main-only environment; pull_request_target runs on the base branch, so the policy lets it in)
+# or the WORKFLOW_TOKEN PAT.
+#
+# The job runs `dotnet restore` on the PR's code (MSBuild props/targets) while holding that token.
+# Only Dependabot-authored PRs get here, and only people with write access can push to their
+# branches; the App token is scoped to this repository and Contents: write.
 
 on:
   workflow_call:
     inputs:
       solution_path:
-        required: true
+        required: false
         type: string
-        description: "Directory containing the .NET solution file"
+        description: "Directory containing the .NET solution file. Empty (with solution_name empty) = every tracked .sln/.slnx."
+        default: ""
       solution_name:
-        required: true
+        required: false
         type: string
-        description: "Solution file name (e.g. Backend.slnx)"
+        description: "Solution file name (e.g. Backend.slnx). Empty = every tracked .sln/.slnx."
+        default: ""
       dotnet_version:
         required: false
         type: string
@@ -50,10 +62,28 @@ on:
         type: string
         description: "Username for `dotnet nuget add source` on the extra source."
         default: 'az'
+      app_client_id:
+        required: false
+        type: string
+        description: >-
+          Client ID (Iv23…) of a GitHub App to push the lockfiles with, instead of WORKFLOW_TOKEN.
+          Not a secret; pass it from a repository variable. Needs `app_private_key`. The App needs
+          Contents: write on the repo.
+        default: ""
+      environment:
+        required: false
+        type: string
+        description: >-
+          Environment to run the job in, so `app_private_key` can be an environment secret limited
+          to the default branch. Empty = no environment.
+        default: ""
     secrets:
       WORKFLOW_TOKEN:
-        required: true
-        description: "PAT with contents:write that can push back to the Dependabot PR branch"
+        required: false
+        description: "PAT with contents:write that can push back to the Dependabot PR branch. Not needed with app_client_id."
+      app_private_key:
+        required: false
+        description: "Private key of the GitHub App in app_client_id."
       nuget_auth_token:
         required: false
         description: "Auth token for the NuGet feeds (NUGET_AUTH_TOKEN for setup-dotnet and --password on the extra source). Empty = GITHUB_TOKEN."
@@ -63,6 +93,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    environment: ${{ inputs.environment }}
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       (
@@ -71,11 +102,22 @@ jobs:
           contains(join(github.event.pull_request.labels.*.name, ','), inputs.label))
       )
     steps:
+      - name: Mint GitHub App token for the push
+        id: app-token
+        if: inputs.app_client_id
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ inputs.app_client_id }}
+          private-key: ${{ secrets.app_private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+
       - name: Checkout ${{ github.head_ref }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.head_ref }}
-          token: ${{ secrets.WORKFLOW_TOKEN }}
+          token: ${{ steps.app-token.outputs.token || secrets.WORKFLOW_TOKEN }}
           persist-credentials: true # zizmor: ignore[artipacked] -- pushes the refreshed lockfiles back to the PR branch
 
       - name: Setup .NET
@@ -94,7 +136,7 @@ jobs:
           extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
           extra_nuget_source_username: ${{ inputs.extra_nuget_source_username }}
           nuget_auth_token: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
-          working_directory: ${{ inputs.solution_path }}
+          working_directory: ${{ inputs.solution_path || '.' }}
 
       - name: Setup git user
         run: |
@@ -102,20 +144,32 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
       - name: Update lockfiles
-        working-directory: ${{ inputs.solution_path }}
         env:
+          SOLUTION_PATH: ${{ inputs.solution_path }}
           SOLUTION_NAME: ${{ inputs.solution_name }}
         run: |
           set -euo pipefail
-          dotnet restore "$SOLUTION_NAME"
-          if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
-            git checkout HEAD -- nuget.config
+          if [ -n "$SOLUTION_NAME" ]; then
+            solutions=("${SOLUTION_PATH:-.}/$SOLUTION_NAME")
           else
-            rm -f nuget.config || true
+            mapfile -t solutions < <(git ls-files '*.sln' '*.slnx')
+            if [ "${#solutions[@]}" -eq 0 ]; then
+              echo "::error::No tracked .sln/.slnx; set solution_path and solution_name."
+              exit 1
+            fi
           fi
+          for sln in "${solutions[@]}"; do
+            dir=$(dirname "$sln")
+            echo "::group::dotnet restore $sln"
+            (cd "$dir" && dotnet restore "$(basename "$sln")")
+            echo "::endgroup::"
+          done
+          # setup-dotnet's source-url and the extra-source step edit or write a nuget.config; only the
+          # lockfiles go back. Tracked ones are reset; untracked ones aren't committed by `commit -a`.
+          { git diff --name-only | grep -iE '(^|/)nuget\.config$' || true; } | while read -r f; do git checkout HEAD -- "$f"; done
           git status
-          if output=$(git status --porcelain) && [ -z "$output" ]; then
-            echo "Working directory clean"
+          if git diff --quiet; then
+            echo "No lockfile changes"
             exit 0
           else
             echo "Add and commit changes"
