@@ -17,7 +17,7 @@ The whole repo ships under one semver line. The current major lives in `.version
 
 > v2 (this line) folded in breaking renames: npm scope/registry inputs standardized to `npm_scope` / `npm_registry_url` (no more `scope` / `node_scope` / `node_registry_url`); `npm-deploy.yml`'s `working-directory` input → `working_directory` (and the file was translated from Norwegian to English); `image-push.yml` outputs `pushed_tags`/`pushed_digest` → `container_image_tags`/`image_digest`; and `grype_fail_build` changed from a boolean to the string enum `auto|always|never` (see the grype convention below).
 
-`tag-and-release.yml` in `auto` mode bumps **minor** from the latest `vX.Y.Z` tag (resets patch to `0`) and force-pushes the floating `vX.Y` and `vX` tags.
+`tag-and-release.yml` in `auto` mode bumps from the latest `vX.Y.Z` tag by the Conventional Commits since it: **patch** when every commit's type is in `patch_types` (default `fix,chore,ci,build,docs,test,style`; `feat`, `refactor` and `perf` give minor, since a refactor or perf change can introduce bugs), otherwise **minor** (patch reset to `0`; a breaking change or a non-conventional subject also gives minor, major stays manual). It force-pushes the floating `vX.Y` and `vX` tags.
 
 ## Local commands
 
@@ -77,7 +77,7 @@ Beyond these script tests, the workflows themselves are only exercised in consum
   - `npm-deploy.yml` — publishes to GitHub Packages; uses `--tag alpha` when `is_alpha=true`.
   - Also: `nuget-deploy.yml`, `pypi-deploy.yml` (builds only; caller publishes via OIDC), `package-deploy.yml` (layer-2 fan-out over the per-ecosystem deploys with one shared version), `prune-{ghcr,npm,nuget}.yml`, `gitops-preview-{upsert,teardown}.yml` (per-PR overlays in a GitOps repo), `quality-artifact.yml`. Each file's header comment explains its contract.
   - `gitversion.yml` — thin reusable wrapper around the `gitversion` composite action.
-  - `tag-and-release.yml` — manual or workflow_call; creates `vX.Y.Z` tag (+ floating `vX.Y` and `vX` when `floating_tags=true`) and a GitHub Release. Refuses to tag if HEAD already points at the latest semver tag.
+  - `tag-and-release.yml` — manual or workflow_call; creates `vX.Y.Z` tag (+ floating `vX.Y` and `vX` when `floating_tags=true`) and a GitHub Release. Refuses to tag if there are no commits since the latest semver tag.
   - `validate-version.yml` — runs the version-refs validator on PRs.
   - `dependabot-update-dotnet-lockfiles.yml` — for `pull_request_target` triggers; on dependabot PRs that carry a configurable label (default `update-dotnet-lockfiles`), runs `dotnet restore` (every tracked `.sln`/`.slnx` when `solution_path`/`solution_name` are empty, so one caller fits every repo) to refresh `packages.lock.json` files and pushes the result back to the PR branch with a GitHub App token (`app_client_id` + secret `app_private_key`, `environment` input for a main-only environment secret; `pull_request_target` runs on the base branch so the policy admits it) or the `WORKFLOW_TOKEN` PAT. Caller owns the `pull_request_target` trigger; the job-level `if:` does the dependabot/label gating.
   - `format-and-create-pr.yml` — `workflow_dispatch`-style multi-formatter helper. Three modes, each a separate job gated by `inputs.mode`:
