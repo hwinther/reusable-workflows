@@ -1,7 +1,8 @@
 # Creates a tag and release based on user input or automatic version increment.
 # When tag_name is set to "auto", the latest semver tag in the repo is found and bumped
 # from the Conventional Commits subjects since it: patch when every commit's type is in
-# `patch_types` (default fix,chore), otherwise minor (patch reset to 0). A breaking change
+# `patch_types` (default fix,chore,ci,build,docs,test,style: nothing that changes what ships;
+# feat, refactor and perf give minor), otherwise minor (patch reset to 0). A breaking change
 # (`type!:` or a BREAKING CHANGE footer) or a subject that isn't a Conventional Commit
 # always gives minor; major stays manual.
 # Floating tags (vX and vX.Y) are updated with `git push -f`; useful for reusable
@@ -20,7 +21,7 @@ on:
       patch_types:
         description: "In auto mode: Conventional Commit types that only bump patch when every commit since the last tag has one of them (comma-separated)"
         required: false
-        default: "fix,chore"
+        default: "fix,chore,ci,build,docs,test,style"
       release_notes:
         description: "Release notes for this tag"
         required: false
@@ -48,7 +49,7 @@ on:
           Empty = always minor (the old behaviour).
         type: string
         required: false
-        default: "fix,chore"
+        default: "fix,chore,ci,build,docs,test,style"
       release_notes:
         description: "Release notes for this tag"
         type: string

@@ -17,7 +17,7 @@ The whole repo ships under one semver line. The current major lives in `.version
 
 > v2 (this line) folded in breaking renames: npm scope/registry inputs standardized to `npm_scope` / `npm_registry_url` (no more `scope` / `node_scope` / `node_registry_url`); `npm-deploy.yml`'s `working-directory` input → `working_directory` (and the file was translated from Norwegian to English); `image-push.yml` outputs `pushed_tags`/`pushed_digest` → `container_image_tags`/`image_digest`; and `grype_fail_build` changed from a boolean to the string enum `auto|always|never` (see the grype convention below).
 
-`tag-and-release.yml` in `auto` mode bumps from the latest `vX.Y.Z` tag by the Conventional Commits since it: **patch** when every commit's type is in `patch_types` (default `fix,chore`), otherwise **minor** (patch reset to `0`; a breaking change or a non-conventional subject also gives minor, major stays manual). It force-pushes the floating `vX.Y` and `vX` tags.
+`tag-and-release.yml` in `auto` mode bumps from the latest `vX.Y.Z` tag by the Conventional Commits since it: **patch** when every commit's type is in `patch_types` (default `fix,chore,ci,build,docs,test,style`; `feat`, `refactor` and `perf` give minor, since a refactor or perf change can introduce bugs), otherwise **minor** (patch reset to `0`; a breaking change or a non-conventional subject also gives minor, major stays manual). It force-pushes the floating `vX.Y` and `vX` tags.
 
 ## Local commands
 
