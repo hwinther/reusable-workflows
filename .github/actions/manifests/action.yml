@@ -8,7 +8,8 @@ description: |
                 `flux push artifact`, and signs it with cosign keyless.
     mode: diff  renders the PR head (validated) and base (best effort) and posts a report to the
                 job summary and a sticky PR comment: a change summary and a Mermaid resource map
-                per render, plus a collapsible dyff per changed resource.
+                per render, plus a collapsible dyff per changed resource. A render is a
+                kustomize directory or a Helm chart (`helm:<chart-dir>`).
 
   Runs inline in the caller's job, so the cosign certificate identity is the CALLER's workflow
   (e.g. `.../container.yml@refs/tags/v1.2.3`), not this repo; pin that in the OCIRepository's
@@ -37,6 +38,15 @@ inputs:
       Component path under deploy-dir. Example for an app with a migration Job:
         app/manifests.yaml=deploy/app
         migrate/manifests.yaml=deploy/migrate
+      `<out-path>=helm:<chart-dir>[,<values-file>...]` renders a Helm chart with `helm template`
+      instead (values files relative to the chart dir, in order; dependencies fetched with
+      `helm dependency update`, so log in to a private chart registry first). `images` pinning
+      and the contract check don't apply to it. RELEASE_NAME, HELM_NAMESPACE and
+      HELM_KUBE_VERSION (job env) set the release name (default: the chart dir's name), the
+      namespace and --kube-version. In diff mode the `helm.sh/chart` label is ignored, so a
+      chart version bump alone shows no change. Example for a chart and two environments:
+        dev.yaml=helm:deploy,values-dev.yaml
+        prod.yaml=helm:deploy,values-prod.yaml
     default: "manifests.yaml=deploy"
   renders_file:
     required: false

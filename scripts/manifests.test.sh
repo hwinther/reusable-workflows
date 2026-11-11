@@ -5,7 +5,7 @@
 # Builds a small fixture app (deploy/ with a Deployment, Service, Ingress, a README contract and
 # a preview Component) in a work dir, then checks image pinning, components, the contract check,
 # renders-entry validation, best-effort base rendering and the multi-render report. kubeconform
-# and dyff are stubbed: this tests our scripts, not those tools. Needs kubectl (kustomize),
+# and dyff are stubbed: this tests our scripts, not those tools. Needs kubectl (kustomize), helm,
 # python3 and yq, which the GitHub runners ship.
 #
 # Run: bash scripts/manifests.test.sh
@@ -223,5 +223,113 @@ if [ "$(grep -c 'Secret/app-secrets' "$WORK/report.md")" = 1 ]; then pass "previ
 python3 "$SCRIPTS/manifest-report.py" app.yaml "$WORK/head/app.yaml.jsonl" "$WORK/head/app.yaml.jsonl" > "$WORK/report1.md"
 if grep -q '^####' "$WORK/report1.md"; then bad "single render has no heading"; else pass "single render has no heading"; fi
 expect_grep "no-change summary" "No change (3 unchanged)." "$WORK/report1.md"
+
+# 9. A Helm chart render: values files in order, release name from the chart dir.
+mkdir -p chart/templates
+cat > chart/Chart.yaml <<'EOF'
+apiVersion: v2
+name: web
+version: 1.0.0
+EOF
+cat > chart/values.yaml <<'EOF'
+image: ghcr.io/example/web:1.0.0
+replicas: 1
+EOF
+printf 'replicas: 2\n' > chart/values-prod.yaml
+cat > chart/templates/all.yaml <<'EOF'
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+---
+apiVersion: external-secrets.io/v1
+kind: SecretStore
+metadata:
+  name: {{ .Release.Name }}-kv
+spec:
+  provider:
+    azurekv:
+      authType: WorkloadIdentity
+      vaultUrl: https://example.vault.azure.net
+      serviceAccountRef:
+        name: {{ .Release.Name }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Release.Name }}-secrets
+spec:
+  secretStoreRef:
+    kind: SecretStore
+    name: {{ .Release.Name }}-kv
+  target:
+    name: {{ .Release.Name }}-secrets
+  data:
+  - secretKey: PASSWORD
+    remoteRef:
+      key: password
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      serviceAccountName: {{ .Release.Name }}
+      containers:
+      - name: web
+        image: {{ .Values.image }}
+        env:
+        - name: PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ .Release.Name }}-secrets
+              key: PASSWORD
+EOF
+if RENDERS="web.yaml=helm:chart,values-prod.yaml" bash "$SCRIPTS/render-all.sh" . "$WORK/helm" "$WORK/helmlist" validate > "$WORK/log" 2>&1; then
+  pass "helm render"
+else
+  bad "helm render"; cat "$WORK/log"
+fi
+expect_grep "helm values file applied" "replicas: 2" "$WORK/helm/web.yaml"
+expect_grep "helm release name from the chart dir" "name: chart-secrets" "$WORK/helm/web.yaml"
+expect_grep "helm render validated" "validated: .*image: ghcr.io/example/web:1.0.0" "$WORK/log"
+if RENDERS="web.yaml=helm:chart,missing.yaml" bash "$SCRIPTS/render-all.sh" . "$WORK/helm-x" "$WORK/helmlist-x" validate > "$WORK/log" 2>&1; then
+  bad "helm render rejects a missing values file"
+else
+  pass "helm render rejects a missing values file"
+fi
+if RENDERS="web.yaml=helm:deploy" bash "$SCRIPTS/render-all.sh" . "$WORK/helm-x" "$WORK/helmlist-x" validate > "$WORK/log" 2>&1; then
+  bad "helm render rejects a dir without Chart.yaml"
+else
+  pass "helm render rejects a dir without Chart.yaml"
+fi
+
+# 10. Report on the chart: a version bump alone (helm.sh/chart) is no change; ESO wiring is drawn.
+sed -i 's/^version: 1.0.0/version: 1.1.0/' chart/Chart.yaml
+RENDERS="web.yaml=helm:chart,values-prod.yaml" bash "$SCRIPTS/render-all.sh" . "$WORK/helm2" "$WORK/helmlist2" validate > /dev/null 2>&1
+yq -o=json -I=0 '.' "$WORK/helm/web.yaml" > "$WORK/helm-base.jsonl"
+yq -o=json -I=0 '.' "$WORK/helm2/web.yaml" > "$WORK/helm-head.jsonl"
+python3 "$SCRIPTS/manifest-report.py" web.yaml "$WORK/helm-base.jsonl" "$WORK/helm-head.jsonl" > "$WORK/report-helm.md"
+expect_grep "chart version bump alone is no change" "No change (4 unchanged)." "$WORK/report-helm.md"
+expect_grep "ExternalSecret -> SecretStore" '|"store"|' "$WORK/report-helm.md"
+expect_grep "SecretStore -> ServiceAccount" '|"logs in as"|' "$WORK/report-helm.md"
+if grep -q '(\["Secret/chart-secrets"\])' "$WORK/report-helm.md"; then
+  bad "the Secret an ExternalSecret creates is not external"
+else
+  pass "the Secret an ExternalSecret creates is not external"
+fi
 
 exit "$fail"
