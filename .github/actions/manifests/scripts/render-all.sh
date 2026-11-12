@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Renders every entry of $RENDERS (one `<out-path>=<deploy-dir>[,<component>]` per line) from
-# <src-root> into <out-dir>, and lists the rendered out-paths in <list-file>.
+# <src-root> into <out-dir>, and lists the rendered out-paths in <list-file>. An entry
+# `<out-path>=helm:<chart-dir>[,<values-file>...]` renders a Helm chart instead
+# (render-helm.sh; values files relative to the chart dir).
 #
 #   render-all.sh <src-root> <out-dir> <list-file> [validate|best-effort]
 #
@@ -39,7 +41,7 @@ while IFS= read -r line; do
   line="$(printf '%s' "$line" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   [ -n "$line" ] || continue
   if [[ "$line" != *=* ]]; then
-    echo "::error::renders entry '$line' must be <out-path>=<deploy-dir>[,<component>]"
+    echo "::error::renders entry '$line' must be <out-path>=<deploy-dir>[,<component>] or <out-path>=helm:<chart-dir>[,<values-file>...]"
     exit 1
   fi
   out="${line%%=*}"
@@ -48,6 +50,17 @@ while IFS= read -r line; do
   component=""
   if [[ "$rest" == *,* ]]; then
     component="${rest#*,}"
+  fi
+  # helm:<chart-dir>[,<values-file>...]: the part after the first comma is the values files.
+  helm=false
+  values=()
+  if [[ "$dir" == helm:* ]]; then
+    helm=true
+    dir="${dir#helm:}"
+    if [ -n "$component" ]; then
+      IFS=, read -ra values <<< "$component"
+    fi
+    component=""
   fi
   case "$out" in
     /* | *..* | "")
@@ -66,8 +79,14 @@ while IFS= read -r line; do
     exit 1
   fi
 
-  echo "::group::Render $out from $dir${component:+ + $component}"
-  if "$here/render-manifests.sh" "$root/$dir" "$outdir/$out" "$component"; then
+  if [ "$helm" = true ]; then
+    echo "::group::Render $out from the Helm chart $dir${values[*]:+ with ${values[*]}}"
+    render=("$here/render-helm.sh" "$root/$dir" "$outdir/$out" ${values[@]+"${values[@]}"})
+  else
+    echo "::group::Render $out from $dir${component:+ + $component}"
+    render=("$here/render-manifests.sh" "$root/$dir" "$outdir/$out" "$component")
+  fi
+  if "${render[@]}"; then
     if [ "$mode" = validate ] && [ "${VALIDATE:-true}" != false ]; then
       # Outside $outdir (everything in there is pushed as the artifact), and under the render's own
       # file name: kubeconform silently skips files without a .yaml/.yml/.json extension.

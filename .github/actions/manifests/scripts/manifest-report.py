@@ -7,7 +7,8 @@
 One section per render, headed by NAME when there is more than one. Inputs are rendered
 manifests as one JSON document per line (`yq -o=json -I=0 '.'`). Each section has a change
 summary and a Mermaid map of how the resources wire together (Ingress -> Service -> workload ->
-Secret/ConfigMap/PVC, Flux Kustomization/HelmRelease -> source) coloured by change; then a
+Secret/ConfigMap/PVC, ExternalSecret -> SecretStore -> ServiceAccount, Flux
+Kustomization/HelmRelease -> source) coloured by change; then a
 collapsible dyff per changed resource follows. References to objects outside the rendered set
 (the Secrets the cluster repo provides) show as dashed external nodes, so the deploy contract is
 visible too. dyff must be on PATH.
@@ -42,6 +43,9 @@ def load(path):
         if not line or line == "null":
             continue
         obj = helm_render.drop_nulls(json.loads(line))
+        # A Helm chart render (helm:<chart>) labels every object with the chart version, so a
+        # chart bump would show every object as changed. Kustomize renders don't have it.
+        helm_render.drop_chart_labels(obj, None)
         objs[key(obj)] = obj
     return objs
 
@@ -78,6 +82,33 @@ def refs(obj):
         for rule in spec.get("rules", []):
             for b in rule.get("backendRefs", []):
                 yield b.get("kind", "Service"), b["name"], ""
+    elif kind == "ExternalSecret":
+        store = spec.get("secretStoreRef", {})
+        if store.get("name"):
+            yield store.get("kind", "SecretStore"), store["name"], "store"
+    elif kind in ("SecretStore", "ClusterSecretStore"):
+        # Workload identity providers log in as a service account: azurekv (serviceAccountRef),
+        # gcpsm (auth.workloadIdentity), aws (auth.jwt), vault/OpenBao (auth.kubernetes, or
+        # auth.jwt.kubernetesServiceAccountToken).
+        for provider in spec.get("provider", {}).values():
+            if not isinstance(provider, dict):
+                continue
+            auth = provider.get("auth", {}) if isinstance(provider.get("auth"), dict) else {}
+            jwt = auth.get("jwt", {})
+            sa = (
+                provider.get("serviceAccountRef")
+                or auth.get("workloadIdentity", {}).get("serviceAccountRef")
+                or jwt.get("serviceAccountRef")
+                or auth.get("kubernetes", {}).get("serviceAccountRef")
+                or jwt.get("kubernetesServiceAccountToken", {}).get("serviceAccountRef")
+            )
+            if isinstance(sa, dict) and sa.get("name"):
+                yield "ServiceAccount", sa["name"], "logs in as"
+    elif kind == "FederatedIdentityCredential":
+        # Azure Service Operator: the subject names the service account it trusts.
+        subject = spec.get("subject", "")
+        if subject.startswith("system:serviceaccount:"):
+            yield "ServiceAccount", subject.rsplit(":", 1)[-1], "trusts"
     elif kind == "HorizontalPodAutoscaler":
         target = spec.get("scaleTargetRef", {})
         yield target.get("kind"), target.get("name"), "scales"
@@ -142,6 +173,12 @@ def edges(objs):
     by_name = {
         (o["kind"], namespace(o), o["metadata"].get("name")): k for k, o in objs.items()
     }
+    # A Secret that an ExternalSecret in the render creates is the ExternalSecret's, not an
+    # external dependency.
+    for k, o in objs.items():
+        if o["kind"] == "ExternalSecret":
+            target = o.get("spec", {}).get("target", {}).get("name") or o["metadata"].get("name")
+            by_name.setdefault(("Secret", namespace(o), target), k)
     out = set()
     for k, obj in objs.items():
         ns = namespace(obj)
