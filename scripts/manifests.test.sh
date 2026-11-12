@@ -332,4 +332,14 @@ else
   pass "the Secret an ExternalSecret creates is not external"
 fi
 
+# 11. A vault (OpenBao) SecretStore with Kubernetes auth logs in as its auth.kubernetes service account.
+: > "$WORK/vault-base.jsonl"
+cat > "$WORK/vault-head.jsonl" <<'EOF'
+{"apiVersion":"v1","kind":"ServiceAccount","metadata":{"name":"openbao-reader","namespace":"app"}}
+{"apiVersion":"external-secrets.io/v1","kind":"SecretStore","metadata":{"name":"openbao","namespace":"app"},"spec":{"provider":{"vault":{"server":"https://openbao.example","path":"kv","auth":{"kubernetes":{"mountPath":"kubernetes","role":"app","serviceAccountRef":{"name":"openbao-reader"}}}}}}}
+EOF
+python3 "$SCRIPTS/manifest-report.py" app.yaml "$WORK/vault-base.jsonl" "$WORK/vault-head.jsonl" > "$WORK/report-vault.md"
+expect_grep "vault auth.kubernetes -> ServiceAccount" 'n0 -->|"logs in as"| n1' "$WORK/report-vault.md"
+expect_grep "vault service account node" 'n1\["ServiceAccount/app/openbao-reader"\]' "$WORK/report-vault.md"
+
 exit "$fail"

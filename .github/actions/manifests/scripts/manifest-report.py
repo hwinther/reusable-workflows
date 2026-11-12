@@ -87,14 +87,21 @@ def refs(obj):
         if store.get("name"):
             yield store.get("kind", "SecretStore"), store["name"], "store"
     elif kind in ("SecretStore", "ClusterSecretStore"):
-        # Workload identity providers log in as a service account (azurekv, gcpsm, aws, vault).
+        # Workload identity providers log in as a service account: azurekv (serviceAccountRef),
+        # gcpsm (auth.workloadIdentity), aws (auth.jwt), vault/OpenBao (auth.kubernetes, or
+        # auth.jwt.kubernetesServiceAccountToken).
         for provider in spec.get("provider", {}).values():
             if not isinstance(provider, dict):
                 continue
             auth = provider.get("auth", {}) if isinstance(provider.get("auth"), dict) else {}
-            sa = provider.get("serviceAccountRef") or auth.get("workloadIdentity", {}).get(
-                "serviceAccountRef"
-            ) or auth.get("jwt", {}).get("serviceAccountRef")
+            jwt = auth.get("jwt", {})
+            sa = (
+                provider.get("serviceAccountRef")
+                or auth.get("workloadIdentity", {}).get("serviceAccountRef")
+                or jwt.get("serviceAccountRef")
+                or auth.get("kubernetes", {}).get("serviceAccountRef")
+                or jwt.get("kubernetesServiceAccountToken", {}).get("serviceAccountRef")
+            )
             if isinstance(sa, dict) and sa.get("name"):
                 yield "ServiceAccount", sa["name"], "logs in as"
     elif kind == "FederatedIdentityCredential":
