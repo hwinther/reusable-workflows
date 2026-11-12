@@ -1,0 +1,263 @@
+name: "Unit + e2e coverage summary"
+
+# Merges the unit tests' line coverage with the Playwright run's browser coverage and reports unit,
+# e2e and combined coverage, plus the files where e2e adds the most, as a job summary and a sticky PR
+# comment. Informational: nothing gates on it.
+#
+# The merge is @wshno/playwright-config's `wshno-coverage-summary` (0.5.0 or later), at the version
+# in the e2e suite's package-lock.json, so it matches the suite's monocartReporter() paths. Either
+# report may be lcov or Cobertura.
+#
+#   e2e   the `e2e-coverage` artifact playwright-e2e.yml uploads from coverage_paths_json (the
+#         suite's monocart-coverage/: monocartReporter({ coverage }) plus coverageTest).
+#   unit  the `quality-node` artifact node-build uploads when pr-build runs in the same run (on
+#         builds of main, the `unit` job in most callers), Cobertura. When the run has none (pull
+#         requests, whose unit tests run in another workflow), unit_coverage_command runs the unit
+#         tests with coverage here instead; without it the unit row says n/a.
+#
+# Call it after both, with needs on the e2e job and the unit job if there is one:
+#
+#   coverage-summary:
+#     needs: [unit, e2e]
+#     if: ${{ !cancelled() && needs.e2e.result != 'skipped' }}
+#     permissions: { contents: read, pull-requests: write }
+#     uses: hwinther/reusable-workflows/.github/workflows/e2e-coverage-summary.yml@v2
+#     with:
+#       source_root: frontend
+#       source_dirs: app
+#       unit_coverage_command: npm run coverage:ci
+#       unit_working_directory: frontend
+#       unit_coverage_report: coverage/cobertura-coverage.xml
+
+on:
+  workflow_call:
+    inputs:
+      source_root:
+        description: "The app's directory in the repo (e.g. `frontend`, `app`). Both reports' paths are normalised to `<source_root>/<source dir>/...`, and files outside it are left out."
+        required: true
+        type: string
+      source_dirs:
+        description: "The app's source directories under source_root, comma-separated (e.g. `app`, or `src,app`)."
+        required: false
+        type: string
+        default: "src,app"
+      exclude:
+        description: "Regex of normalised paths to leave out (e.g. `^app/src/mock/`). Empty = none."
+        required: false
+        type: string
+        default: ""
+      top:
+        description: "How many files the 'where e2e adds the most' table lists."
+        required: false
+        type: number
+        default: 10
+      unit_label:
+        description: "The unit row's label (e.g. `Unit (jest)`)."
+        required: false
+        type: string
+        default: "Unit"
+      e2e_artifact:
+        description: "Artifact with the e2e coverage reports (playwright-e2e.yml's coverage artifact)."
+        required: false
+        type: string
+        default: "e2e-coverage"
+      e2e_coverage_report:
+        description: "The report inside e2e_artifact (lcov or Cobertura)."
+        required: false
+        type: string
+        default: "lcov.info"
+      unit_artifact:
+        description: "Artifact with the unit coverage report (node-build's quality-node). Empty = always use unit_coverage_command."
+        required: false
+        type: string
+        default: "quality-node"
+      unit_artifact_report:
+        description: "The report inside unit_artifact (lcov or Cobertura)."
+        required: false
+        type: string
+        default: "cobertura-coverage.xml"
+      unit_coverage_command:
+        description: "Runs the unit tests with coverage when the run has no unit_artifact, after `npm ci` in unit_working_directory (e.g. `npm run coverage:ci`). A failing test only warns: the unit tests' own workflow reports it. Empty = no fallback (unit row n/a)."
+        required: false
+        type: string
+        default: ""
+      unit_working_directory:
+        description: "Where unit_coverage_command runs (the unit tests' npm package)."
+        required: false
+        type: string
+        default: "."
+      unit_coverage_report:
+        description: "The report unit_coverage_command writes, relative to unit_working_directory (lcov or Cobertura)."
+        required: false
+        type: string
+        default: "coverage/lcov.info"
+      playwright_working_directory:
+        description: "The e2e suite's npm package; its package-lock.json pins the @wshno/playwright-config version that runs the merge."
+        required: false
+        type: string
+        default: "e2e"
+      node_version:
+        description: "Node version for the merge and unit_coverage_command."
+        required: false
+        type: string
+        default: "24.x"
+      comment_identifier:
+        description: "Sticky PR comment identifier (see the _sticky-pr-comment action)."
+        required: false
+        type: string
+        default: "e2e-coverage-summary"
+      pr_comment_enabled:
+        description: "Post the summary as a sticky PR comment on same-repo pull requests (not Dependabot's: its token is read-only)."
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      combined_pct:
+        description: "Combined line coverage in percent (one decimal), empty when the summary didn't run."
+        value: ${{ jobs.summary.outputs.combined_pct }}
+
+permissions: {}
+
+jobs:
+  summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      combined_pct: ${{ steps.merge.outputs.combined_pct }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Download unit coverage
+        if: ${{ inputs.unit_artifact != '' }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.unit_artifact }}
+          path: ${{ runner.temp }}/unit-artifact
+
+      - name: Download e2e coverage
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.e2e_artifact }}
+          path: ${{ runner.temp }}/e2e-artifact
+
+      - name: Resolve the reports
+        id: reports
+        env:
+          UNIT_ARTIFACT_REPORT: ${{ runner.temp }}/unit-artifact/${{ inputs.unit_artifact_report }}
+          E2E_REPORT: ${{ runner.temp }}/e2e-artifact/${{ inputs.e2e_coverage_report }}
+          UNIT_COMMAND: ${{ inputs.unit_coverage_command }}
+          UNIT_ARTIFACT: ${{ inputs.unit_artifact }}
+        run: |
+          set -euo pipefail
+          unit=""
+          if [ -n "$UNIT_ARTIFACT" ] && [ -f "$UNIT_ARTIFACT_REPORT" ]; then
+            unit="$UNIT_ARTIFACT_REPORT"
+            echo "Unit coverage from the run's artifact: $unit"
+          elif [ -n "$UNIT_COMMAND" ]; then
+            echo "No unit coverage artifact in this run; unit_coverage_command runs the unit tests."
+            echo "run_unit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No unit coverage in this run and no unit_coverage_command; the unit row says n/a."
+          fi
+          e2e=""
+          if [ -f "$E2E_REPORT" ]; then
+            e2e="$E2E_REPORT"
+          else
+            echo "::notice::No e2e coverage report ($E2E_REPORT); the e2e row says n/a."
+          fi
+          {
+            echo "unit=$unit"
+            echo "e2e=$e2e"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Unit coverage
+        id: unit
+        if: ${{ steps.reports.outputs.run_unit == 'true' }}
+        working-directory: ${{ inputs.unit_working_directory }}
+        env:
+          UNIT_COMMAND: ${{ inputs.unit_coverage_command }}
+          UNIT_REPORT: ${{ inputs.unit_coverage_report }}
+          UNIT_DIR: ${{ inputs.unit_working_directory }}
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          # A failing unit test is the unit tests' own workflow to report; the summary still uses
+          # whatever coverage the run wrote.
+          bash -c "$UNIT_COMMAND" || echo "::warning::unit_coverage_command exited non-zero; the unit tests' own workflow reports the failures."
+          if [ -f "$UNIT_REPORT" ]; then
+            echo "report=$PWD/$UNIT_REPORT" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::unit_coverage_command wrote no $UNIT_REPORT in $UNIT_DIR."
+          fi
+
+      - name: Merge and summarise
+        id: merge
+        env:
+          LOCK: ${{ inputs.playwright_working_directory }}/package-lock.json
+          UNIT: ${{ steps.unit.outputs.report || steps.reports.outputs.unit }}
+          E2E: ${{ steps.reports.outputs.e2e }}
+          SOURCE_ROOT: ${{ inputs.source_root }}
+          SOURCE_DIRS: ${{ inputs.source_dirs }}
+          EXCLUDE: ${{ inputs.exclude }}
+          TOP: ${{ inputs.top }}
+          UNIT_LABEL: ${{ inputs.unit_label }}
+          E2E_ARTIFACT: ${{ inputs.e2e_artifact }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The merge needs only the package's own code, not browsers.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+        run: |
+          set -euo pipefail
+          if [ -z "$UNIT" ] && [ -z "$E2E" ]; then
+            echo "::notice::Neither a unit nor an e2e coverage report; no summary."
+            exit 0
+          fi
+          version=$(jq -r '.packages["node_modules/@wshno/playwright-config"].version // empty' "$LOCK" 2>/dev/null || true)
+          if [ -z "$version" ]; then
+            echo "::error::No @wshno/playwright-config in $LOCK; set playwright_working_directory to the e2e suite."
+            exit 1
+          fi
+          if [ "$(printf '%s\n0.5.0\n' "$version" | sort -V | head -1)" != "0.5.0" ]; then
+            echo "::error::@wshno/playwright-config $version has no wshno-coverage-summary; it needs 0.5.0 or later."
+            exit 1
+          fi
+          args=(--root "$SOURCE_ROOT" --source-dirs "$SOURCE_DIRS" --top "$TOP" --unit-label "$UNIT_LABEL")
+          [ -n "$UNIT" ] && args+=(--unit "$UNIT")
+          [ -n "$E2E" ] && args+=(--e2e "$E2E")
+          [ -n "$EXCLUDE" ] && args+=(--exclude "$EXCLUDE")
+          out="${RUNNER_TEMP}/coverage-summary.md"
+          npx --yes --package "@wshno/playwright-config@${version}" wshno-coverage-summary "${args[@]}" > "$out"
+          {
+            echo
+            echo "E2E coverage report (V8 html, lcov, Cobertura): [the \`${E2E_ARTIFACT}\` artifact](${RUN_URL}#artifacts)."
+          } >> "$out"
+          cat "$out" >> "$GITHUB_STEP_SUMMARY"
+          combined=$(grep -oE '^\| \*\*Combined\*\* \| [0-9]+ / [0-9]+ \| [0-9.]+%' "$out" | grep -oE '[0-9.]+%$' | tr -d '%' || true)
+          {
+            echo "combined_pct=$combined"
+            echo "markdown<<__COVERAGE_SUMMARY__"
+            cat "$out"
+            echo "__COVERAGE_SUMMARY__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Post or update the PR comment
+        if: >-
+          ${{ steps.merge.outputs.markdown != '' && inputs.pr_comment_enabled && github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: ${{ inputs.comment_identifier }}
+          comment_content: ${{ steps.merge.outputs.markdown }}
