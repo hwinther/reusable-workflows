@@ -1,0 +1,330 @@
+name: "Nightly preview E2E"
+
+# Deploys main (the manifests:main artifact pr-e2e.yml pushes and signs on every merge) to an
+# ephemeral preview env, runs the whole e2e suite against it, then tears it down. Unlike the compose
+# run in a pr-e2e.yml this goes through the real chain: the edge, the ingress and TLS, the IdP,
+# Flux's signature check, the cluster's policies and a fresh database. A scheduled run that fails
+# opens (or comments on) one issue labelled `issue_label`; the next green scheduled run closes it.
+#
+#   resolve    the digest manifests:main points at (so the env and the issue name the exact build),
+#              and the runner image ghcr.io/wshno/playwright-config:<version> for the suite's lock file
+#   clear      removes anything a failed night left behind, then waits until the host stops answering
+#              (a leftover env would otherwise pass the readiness wait with the old build)
+#   deploy     gitops-preview-upsert.yml, pr_number `nightly`
+#   e2e        playwright-e2e.yml against https://<host>, in the runner image
+#   teardown   gitops-preview-teardown.yml, even when e2e failed
+#   report     the issue
+#
+# The caller sets the schedule and passes the GitOps App and the e2e user:
+#
+#   on:
+#     workflow_dispatch:
+#     schedule:
+#       - cron: "0 1 * * *"
+#   permissions: {}
+#   concurrency: { group: nightly-preview, cancel-in-progress: false }
+#   jobs:
+#     nightly:
+#       permissions: { contents: read, packages: read, actions: read, pull-requests: write, issues: write }
+#       uses: hwinther/reusable-workflows/.github/workflows/nightly-preview-e2e.yml@v2
+#       with:
+#         app_name: clutterstock
+#         health_path: /healthz/ready
+#         client_id: ${{ vars.PROXMOX_GITOPS_CLIENT_ID }}
+#       secrets:
+#         app_private_key: ${{ secrets.PROXMOX_GITOPS_APP_PRIVATE_KEY }}
+#         e2e_username: ${{ secrets.E2E_USERNAME }}
+#         e2e_password: ${{ secrets.E2E_PASSWORD }}
+#         e2e_otp_secret: ${{ secrets.E2E_OTP_SECRET }}
+
+on:
+  workflow_call:
+    inputs:
+      app_name:
+        description: "The app's preview name (the GitOps preview template's directory and app_name), e.g. `clutterstock`."
+        required: true
+        type: string
+      health_path:
+        description: "Readiness path on the preview host that answers 200 without signing in, e.g. `/healthz/ready` or `/api/health`."
+        required: true
+        type: string
+      client_id:
+        description: "The GitOps App's Client ID (e.g. vars.PROXMOX_GITOPS_CLIENT_ID)."
+        required: true
+        type: string
+      host:
+        description: "The preview host. Empty = `<app_name>-nightly.preview.wsh.no`."
+        required: false
+        type: string
+        default: ""
+      target_repo:
+        description: "The GitOps repo the preview overlay goes to."
+        required: false
+        type: string
+        default: "hwinther/proxmox"
+      preview_base_path:
+        description: "The app's preview directory in target_repo. Empty = `clusters/production/apps/previews/<app_name>`."
+        required: false
+        type: string
+        default: ""
+      db_name:
+        description: "Database name for the preview template, when it creates one (gitops-preview-upsert.yml's db_name). Empty = none."
+        required: false
+        type: string
+        default: ""
+      manifests_repository:
+        description: "The manifests OCI repository (without registry and tag). Empty = `<owner>/<repo>/manifests`, lowercased."
+        required: false
+        type: string
+        default: ""
+      playwright_working_directory:
+        description: "The e2e suite's npm package; its package-lock.json picks the runner image."
+        required: false
+        type: string
+        default: "e2e"
+      environment:
+        description: "Environment for the e2e job (where the e2e user's secrets live)."
+        required: false
+        type: string
+        default: "build"
+      wait_timeout_seconds:
+        description: "How long the e2e job waits for the new env to answer health_path (a fresh namespace waits for the database, secret clones and image pulls)."
+        required: false
+        type: number
+        default: 900
+      report_paths_json:
+        description: "playwright-e2e.yml's report_paths_json (relative to playwright_working_directory)."
+        required: false
+        type: string
+        default: '["playwright-report","test-results"]'
+      coverage_paths_json:
+        description: "playwright-e2e.yml's coverage_paths_json, e.g. `[\"monocart-coverage\"]`. Empty array = no e2e-coverage artifact."
+        required: false
+        type: string
+        default: "[]"
+      issue_label:
+        description: "Label of the issue a failing scheduled run opens; the next green scheduled run closes it."
+        required: false
+        type: string
+        default: "nightly-preview"
+    secrets:
+      app_private_key:
+        description: "The GitOps App's private key."
+        required: true
+      e2e_username:
+        description: "The e2e user, for the suite's auth setup project."
+        required: false
+      e2e_password:
+        description: "The e2e user's password."
+        required: false
+      e2e_otp_secret:
+        description: "The e2e user's TOTP secret."
+        required: false
+    outputs:
+      e2e_result:
+        description: "The e2e job's result."
+        value: ${{ jobs.report.outputs.e2e_result }}
+
+permissions: {}
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.main.outputs.digest }}
+      revision: ${{ steps.main.outputs.revision }}
+      e2e_image: ${{ steps.e2e-image.outputs.ref }}
+      host: ${{ steps.names.outputs.host }}
+      preview_base_path: ${{ steps.names.outputs.preview_base_path }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Names
+        id: names
+        env:
+          APP: ${{ inputs.app_name }}
+          HOST: ${{ inputs.host }}
+          BASE: ${{ inputs.preview_base_path }}
+        run: |
+          set -euo pipefail
+          echo "host=${HOST:-${APP}-nightly.preview.wsh.no}" >> "$GITHUB_OUTPUT"
+          echo "preview_base_path=${BASE:-clusters/production/apps/previews/${APP}}" >> "$GITHUB_OUTPUT"
+
+      # The image shares its version with the npm package, so a bump of @wshno/playwright-config
+      # moves both together.
+      - name: Runner image from the lock file
+        id: e2e-image
+        env:
+          LOCK: ${{ inputs.playwright_working_directory }}/package-lock.json
+        run: |
+          set -euo pipefail
+          v=$(jq -r '.packages["node_modules/@wshno/playwright-config"].version // empty' "$LOCK")
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::No @wshno/playwright-config version in $LOCK"; exit 1; }
+          echo "ref=ghcr.io/wshno/playwright-config:$v" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve manifests:main
+        id: main
+        env:
+          REPO_INPUT: ${{ inputs.manifests_repository }}
+          DEFAULT_REPO: ${{ github.repository }}/manifests
+        run: |
+          set -euo pipefail
+          repo=$(echo "${REPO_INPUT:-$DEFAULT_REPO}" | tr '[:upper:]' '[:lower:]')
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:${repo}:pull" | jq -r .token)"
+          accept="application/vnd.oci.image.manifest.v1+json"
+          digest="$(curl -fsSI -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/main" | tr -d '\r' \
+            | awk 'tolower($1)=="docker-content-digest:" {print $2}')"
+          [ -n "$digest" ] || { echo "::error::${repo}:main not found (has pr-e2e.yml run on main yet?)"; exit 1; }
+          revision="$(curl -fsS -H "Authorization: Bearer $token" -H "Accept: $accept" \
+            "https://ghcr.io/v2/${repo}/manifests/${digest}" \
+            | jq -r '.annotations["org.opencontainers.image.revision"] // "unknown"')"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+          echo "${repo}:main → \`$digest\` ($revision)" >> "$GITHUB_STEP_SUMMARY"
+
+  # Removes anything a failed night left behind (no commit when there is nothing), so the env is
+  # created from scratch every time.
+  clear:
+    needs: [resolve]
+    permissions:
+      contents: read
+    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-teardown.yml@v2
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      preview_base_path: ${{ needs.resolve.outputs.preview_base_path }}
+      pr_number: nightly
+      app_name: ${{ inputs.app_name }}
+      client_id: ${{ inputs.client_id }}
+    secrets:
+      app_private_key: ${{ secrets.app_private_key }}
+
+  wait-gone:
+    needs: [resolve, clear]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions: {}
+    steps:
+      - name: Wait until the old env is gone
+        env:
+          URL: https://${{ needs.resolve.outputs.host }}${{ inputs.health_path }}
+        run: |
+          deadline=$(( $(date +%s) + 900 ))
+          while :; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$URL" || true)
+            [ "$code" != "200" ] && { echo "$URL: $code, gone."; break; }
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::$URL still answers 200 after 15 minutes."
+              exit 1
+            fi
+            echo "$URL still answers 200, retrying in 15s"
+            sleep 15
+          done
+
+  deploy:
+    needs: [resolve, wait-gone]
+    permissions:
+      contents: read
+    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-upsert.yml@v2
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      preview_base_path: ${{ needs.resolve.outputs.preview_base_path }}
+      pr_number: nightly
+      host: ${{ needs.resolve.outputs.host }}
+      db_name: ${{ inputs.db_name }}
+      app_name: ${{ inputs.app_name }}
+      # The preview template pins the manifest artifact (which pins the images), not the images.
+      image_tag: main
+      image_digest: ${{ needs.resolve.outputs.digest }}
+      client_id: ${{ inputs.client_id }}
+    secrets:
+      app_private_key: ${{ secrets.app_private_key }}
+
+  e2e:
+    needs: [resolve, deploy]
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+      pull-requests: write
+    uses: hwinther/reusable-workflows/.github/workflows/playwright-e2e.yml@v2
+    with:
+      base_url: https://${{ needs.resolve.outputs.host }}
+      # Browsers baked in (chromium-headless-shell), so the job installs none.
+      container_image: ${{ needs.resolve.outputs.e2e_image }}
+      wait_url: https://${{ needs.resolve.outputs.host }}${{ inputs.health_path }}
+      wait_timeout_seconds: ${{ inputs.wait_timeout_seconds }}
+      playwright_working_directory: ${{ inputs.playwright_working_directory }}
+      environment: ${{ inputs.environment }}
+      playwright_cache_enabled: true
+      node_modules_cache_enabled: true
+      pr_comment_enabled: false
+      report_paths_json: ${{ inputs.report_paths_json }}
+      coverage_paths_json: ${{ inputs.coverage_paths_json }}
+    secrets:
+      e2e_username: ${{ secrets.e2e_username }}
+      e2e_password: ${{ secrets.e2e_password }}
+      e2e_otp_secret: ${{ secrets.e2e_otp_secret }}
+
+  teardown:
+    needs: [resolve, deploy, e2e]
+    if: ${{ always() && needs.deploy.result != 'skipped' }}
+    permissions:
+      contents: read
+    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-teardown.yml@v2
+    with:
+      target_repo: ${{ inputs.target_repo }}
+      preview_base_path: ${{ needs.resolve.outputs.preview_base_path }}
+      pr_number: nightly
+      app_name: ${{ inputs.app_name }}
+      client_id: ${{ inputs.client_id }}
+    secrets:
+      app_private_key: ${{ secrets.app_private_key }}
+
+  # One open issue while the scheduled nightly is red: opened on the first failure, commented on
+  # after that, closed by the next green scheduled run. Manual runs leave it alone.
+  report:
+    needs: [resolve, clear, wait-gone, deploy, e2e, teardown]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    outputs:
+      e2e_result: ${{ needs.e2e.result }}
+    steps:
+      - name: Open, update or close the issue
+        if: ${{ github.event_name == 'schedule' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LABEL: ${{ inputs.issue_label }}
+          RESULTS: ${{ needs.resolve.result }} ${{ needs.clear.result }} ${{ needs.wait-gone.result }} ${{ needs.deploy.result }} ${{ needs.e2e.result }} ${{ needs.teardown.result }}
+          E2E: ${{ needs.e2e.result }}
+          REVISION: ${{ needs.resolve.outputs.revision }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create "$LABEL" --color D93F0B \
+            --description "The nightly preview e2e run is failing" 2>/dev/null || true
+          open="$(gh issue list --label "$LABEL" --state open --json number --jq '.[0].number // empty')"
+          if [ "$E2E" = success ] && [[ "$RESULTS" != *failure* ]]; then
+            if [ -n "$open" ]; then
+              gh issue close "$open" --comment "Green again on $REVISION: $RUN_URL"
+            fi
+            exit 0
+          fi
+          body="Nightly preview e2e failed on \`$REVISION\` (job results: $RESULTS).
+
+          Run: $RUN_URL"
+          if [ -n "$open" ]; then
+            gh issue comment "$open" --body "$body"
+          else
+            gh issue create --title "Nightly preview e2e is failing" --label "$LABEL" --body "$body"
+          fi
