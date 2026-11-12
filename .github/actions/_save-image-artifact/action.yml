@@ -14,7 +14,10 @@ inputs:
     description: "Local image reference to save (must be present in the local Docker daemon)."
   artifact_name:
     required: true
-    description: "Name of the workflow artifact to upload."
+    description: |
+      Name of the workflow artifact to upload. A `/` (from a nested image postfix such as
+      `proxmox/pbs/backup-client`) becomes `-`: it would otherwise be a directory in the tarball path,
+      and upload-artifact rejects it in a name. Read the name back from the `artifact_name` output.
   retention_days:
     required: false
     description: "Artifact retention in days."
@@ -22,8 +25,8 @@ inputs:
 
 outputs:
   artifact_name:
-    description: "Echoes the uploaded artifact name."
-    value: ${{ inputs.artifact_name }}
+    description: "The uploaded artifact name (the input with `/` replaced by `-`)."
+    value: ${{ steps.save.outputs.artifact_name }}
   image_digest:
     description: "Local image digest (sha256:...) captured before save."
     value: ${{ steps.inspect.outputs.image_digest }}
@@ -58,15 +61,17 @@ runs:
         ARTIFACT_NAME: ${{ inputs.artifact_name }}
       run: |
         set -euo pipefail
-        ARCHIVE="${RUNNER_TEMP_DIR}/${ARTIFACT_NAME}.tar.gz"
+        NAME="${ARTIFACT_NAME//\//-}"
+        ARCHIVE="${RUNNER_TEMP_DIR}/${NAME}.tar.gz"
         docker save "$IMAGE_REF" | gzip > "$ARCHIVE"
         ls -lh "$ARCHIVE"
         echo "archive_path=$ARCHIVE" >> "$GITHUB_OUTPUT"
+        echo "artifact_name=$NAME" >> "$GITHUB_OUTPUT"
 
     - name: Upload image artifact
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
-        name: ${{ inputs.artifact_name }}
+        name: ${{ steps.save.outputs.artifact_name }}
         path: ${{ steps.save.outputs.archive_path }}
         retention-days: ${{ inputs.retention_days }}
         if-no-files-found: error
