@@ -26,7 +26,7 @@ name: "Nightly preview E2E"
 #   jobs:
 #     nightly:
 #       permissions: { contents: read, packages: read, actions: read, pull-requests: write, issues: write }
-#       uses: hwinther/reusable-workflows/.github/workflows/nightly-preview-e2e.yml@v2
+#       uses: hwinther/reusable-workflows/.github/workflows/nightly-preview-e2e.yml@v2.35.0
 #       with:
 #         app_name: clutterstock
 #         health_path: /healthz/ready
@@ -195,7 +195,7 @@ jobs:
     needs: [resolve]
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-teardown.yml@v2
+    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-teardown.yml@v2.35.0
     with:
       target_repo: ${{ inputs.target_repo }}
       preview_base_path: ${{ needs.resolve.outputs.preview_base_path }}
@@ -231,7 +231,7 @@ jobs:
     needs: [resolve, wait-gone]
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-upsert.yml@v2
+    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-upsert.yml@v2.35.0
     with:
       target_repo: ${{ inputs.target_repo }}
       preview_base_path: ${{ needs.resolve.outputs.preview_base_path }}
@@ -253,7 +253,7 @@ jobs:
       packages: read
       actions: read
       pull-requests: write
-    uses: hwinther/reusable-workflows/.github/workflows/playwright-e2e.yml@v2
+    uses: hwinther/reusable-workflows/.github/workflows/playwright-e2e.yml@v2.35.0
     with:
       base_url: https://${{ needs.resolve.outputs.host }}
       # Browsers baked in (chromium-headless-shell), so the job installs none.
@@ -277,7 +277,7 @@ jobs:
     if: ${{ always() && needs.deploy.result != 'skipped' }}
     permissions:
       contents: read
-    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-teardown.yml@v2
+    uses: hwinther/reusable-workflows/.github/workflows/gitops-preview-teardown.yml@v2.35.0
     with:
       target_repo: ${{ inputs.target_repo }}
       preview_base_path: ${{ needs.resolve.outputs.preview_base_path }}
