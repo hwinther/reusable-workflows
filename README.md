@@ -9,6 +9,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 ### Build & PR checks
 - **`pr-build.yml`** — single PR-build entry point. Detects which stacks changed against the PR base and conditionally runs `node-build` and/or `dotnet-build` (on `push` and `schedule` every enabled stack runs; `runs_on` picks the runner, e.g. `self-hosted` for a private repo), plus optional ReSharper InspectCode and TODO commenter. Posts one combined PR comment.
 - **`playwright-e2e.yml`** — downloads images produced by `build-and-scan-*.yml`, runs Playwright via `docker compose up --wait`, posts a sticky PR summary, uploads the HTML report + traces + compose logs.
+- **`e2e-coverage-summary.yml`** — merges the unit tests' coverage (the run's `quality-node` artifact, or `unit_coverage_command` when the run has none) with the Playwright run's browser coverage (`e2e-coverage`, from `@wshno/playwright-config`'s `monocartReporter`/`coverageTest`) and posts unit, e2e and combined line coverage as a job summary and a sticky PR comment. Informational. Callers grant `contents: read` and `pull-requests: write`.
 
 ### Container build, scan, push
 - **`docker-container.yml`** — gitversion → `docker buildx` → SBOM (Anchore) → Grype scan → push to GHCR → Cosign keyless sign → Cosign CycloneDX + vuln attestations → GitHub build provenance attestation. Single-job, push-always. Supports multi-arch (`platforms`), per-arch scanning, and `build_args` for base-image chaining.
