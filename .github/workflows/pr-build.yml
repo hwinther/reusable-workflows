@@ -440,7 +440,7 @@ jobs:
 
       - name: Build node
         id: node-build
-        uses: hwinther/reusable-workflows/.github/actions/node-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/node-build@v2.34.0
         with:
           node_version: ${{ inputs.node_version }}
           working_directory: ${{ inputs.node_working_directory }}
@@ -452,7 +452,7 @@ jobs:
           test: ${{ inputs.node_test_enabled }}
 
       - name: "Create or update PR comment for node"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.34.0
         if: always() && github.event_name == 'pull_request'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -478,7 +478,7 @@ jobs:
 
       - name: Build dotnet
         id: dotnet-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2.34.0
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}
@@ -493,7 +493,7 @@ jobs:
           test: ${{ inputs.dotnet_test_enabled }}
 
       - name: "Create or update PR comment for dotnet"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.34.0
         if: always() && github.event_name == 'pull_request'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -518,7 +518,7 @@ jobs:
 
       - name: Build python
         id: python-build
-        uses: hwinther/reusable-workflows/.github/actions/python-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/python-build@v2.34.0
         with:
           python_version: ${{ inputs.python_version }}
           working_directory: ${{ inputs.python_working_directory }}
@@ -529,7 +529,7 @@ jobs:
           coverage_source: ${{ inputs.python_coverage_source }}
 
       - name: "Create or update PR comment for python"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.34.0
         if: always() && github.event_name == 'pull_request'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -554,7 +554,7 @@ jobs:
 
       - name: Build go
         id: go-build
-        uses: hwinther/reusable-workflows/.github/actions/go-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/go-build@v2.34.0
         with:
           go_version: ${{ inputs.go_version }}
           working_directory: ${{ inputs.go_working_directory }}
@@ -563,7 +563,7 @@ jobs:
           race: ${{ inputs.go_race_enabled }}
 
       - name: "Create or update PR comment for go"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.34.0
         if: always() && github.event_name == 'pull_request'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -677,7 +677,7 @@ jobs:
           exit 0
 
       - name: "Create or update PR comment (no relevant changes)"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.34.0
         if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped' && needs.go-build.result == 'skipped'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -702,7 +702,7 @@ jobs:
 
       - name: Restore and build
         id: dotnet-restore-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2.34.0
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}
