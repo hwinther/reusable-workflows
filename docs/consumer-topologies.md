@@ -4,10 +4,10 @@ How thin-caller workflows in *consumer* repos wire up the reusable workflows and
 composite actions in this repo. Every diagram below is drawn from a real consumer
 so you can copy the shape that matches your repo.
 
-These examples track the current major (`@v2`). The reference consumers shown here
-(`clutterstock`, `wsh-rtl-sdr`, `proxmox`) currently pin a commit SHA of the previous
-major and bump to `@v2` as part of their migration; the `test-*` repos are the
-minimal canonical examples for each scenario.
+The `test-*` repos (under `wshno/`) are the minimal examples, one scenario each. The
+advanced consumers (`clutterstock`, `wsh-rtl-sdr`, `proxmox`) pin a v2 release by commit
+SHA, as every caller should. For how an app's workflows link up across PR, main, the
+nightly run and release, see [workflow-map.md](workflow-map.md).
 
 ## How to read these
 
@@ -50,20 +50,32 @@ they call a reusable workflow or a public composite, which fans out to the inter
 flowchart TD
   caller["your thin caller workflow"]:::cj
   subgraph lib["hwinther/reusable-workflows"]
-    rw["reusable workflows<br/>docker-container.yml · build-and-scan-*.yml<br/>image-push.yml · pr-build.yml · package-deploy.yml"]:::rw
-    pub["public composites<br/>node/dotnet/python-build · gitversion<br/>sign-image · verify-image"]:::ca
-    int["internal composites (_-prefixed)<br/>_build-image-* · _scan-image · _push-image-with-signatures<br/>_compose-image-tags · _save/_load-image-artifact · _format-output"]:::int
+    rw1["one job per image<br/>docker-container.yml · dotnet-container.yml<br/>build-and-scan-*.yml · image-push.yml"]:::rw
+    rw2["split image pipeline<br/>gitversion.yml · build-image-docker/dotnet.yml<br/>scan-image.yml · playwright-e2e.yml · image-push.yml"]:::rw
+    rw3["build, results, deploy, release<br/>pr-build.yml · package-deploy.yml · quality-artifact.yml<br/>e2e-coverage-summary.yml · gitops-preview-upsert/teardown.yml<br/>nightly-preview-e2e.yml · tag-and-release.yml"]:::rw
+    pub["public composites<br/>node/dotnet/python/go-build · gitversion · manifests<br/>quality-artifact · sign-image · verify-image<br/>sticky-pr-comment · otel-slow-spans"]:::ca
+    int["internal composites (_-prefixed)<br/>_build-image-* · _scan-image · _grype-summary<br/>_push-image-with-signatures · _push-staging-image<br/>_choose/_resolve-image-handoff · _save/_load-image-artifact<br/>_compose-image-tags · _format-output · _sticky-pr-comment"]:::int
   end
-  caller --> rw
-  caller -. consumer-side signing .-> pub
-  rw --> pub
-  rw --> int
+  caller --> rw1
+  caller --> rw2
+  caller --> rw3
+  caller -. "consumer-side signing,<br/>manifests, PR comments" .-> pub
+  rw1 --> pub
+  rw2 --> pub
+  rw3 --> pub
+  rw1 --> int
+  rw2 --> int
   pub --> int
   classDef cj fill:#f3f4f6,stroke:#9ca3af,color:#111827
   classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
   classDef ca fill:#dcfce7,stroke:#22c55e,color:#14532d
   classDef int fill:#fef9c3,stroke:#ca8a04,color:#713f12
 ```
+
+The two image shapes: **one job per image** builds, scans and pushes in a single reusable
+job (release builds, utility images). The **split pipeline** builds each image once and
+hands it on by reference, so scan and e2e run in parallel on the same bytes before the
+push (app PRs and main; see [workflow-map.md](workflow-map.md)).
 
 ---
 
@@ -110,8 +122,9 @@ flowchart LR
 
 The PR flow never pushes until e2e passes **and** the PR carries `deploy-feature`.
 Images move between jobs as a `docker save | gzip` artifact so the **byte-identical**
-content is what gets tested and later pushed. `clutterstock/pr-e2e.yml` is this same
-pattern scaled to three images plus a preview deploy.
+content is what gets tested and later pushed. This is the one-job-per-image shape
+(`build-and-scan-*`); the app repos have moved to the split pipeline, where each image is
+built once and scan and e2e run in parallel on it.
 
 ```mermaid
 flowchart TD
@@ -131,8 +144,9 @@ flowchart TD
   classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
 ```
 
-> In `test-ghcr` the e2e step is omitted (no app to drive); `clutterstock` inserts a
-> `playwright-e2e.yml` job between build and push — see below.
+> In `test-ghcr` the e2e step is omitted (no app to drive). The apps' `pr-e2e.yml`
+> (`build-image-*` → `scan-image` ‖ `playwright-e2e` → `image-push`) is drawn in
+> [workflow-map.md](workflow-map.md).
 
 ## Consumer-side signing — `test-ghcr/web-container-consumer-signs.yml`
 
@@ -255,198 +269,153 @@ flowchart LR
 
 # Advanced — `clutterstock` (full-stack app)
 
-A .NET API + migrator + React frontend. It composes nearly every reusable workflow:
-PR build, PR container e2e with label-gated push, GitOps preview deploy, release
-fan-out, and maintenance. Three deployable images (`api`, `migrator`, `frontend`)
-flow through each pipeline in parallel.
+A .NET API + migrator + React frontend, deployed by Flux from a signed manifests
+artifact. The pull request and main pipeline (`pr-e2e.yml`), the nightly preview run and
+the quality flow are drawn in [workflow-map.md](workflow-map.md). This section covers
+the release and the rest of the repo's workflows. skylens, romslig, pbs-browser,
+ddnsadmin and `test` follow the same shape with fewer images.
 
-## `pr-e2e.yml` — the centerpiece
+## Release — `tag-and-release.yml` → `container.yml` → `promote.yml`
 
-> This diagram shows the earlier build-and-scan pipeline. The current split pipeline
-> (`build-image-*` → `scan-image` ‖ `playwright-e2e` → `image-push` → manifests), the
-> nightly preview and the quality flow are in [workflow-map.md](workflow-map.md).
-
-Build+scan all three images (no push) → Playwright e2e against the loaded images →
-**label-gated** push of the byte-identical images → render a GitOps preview overlay
-into the `hwinther/proxmox` repo → comment the preview URL. Everything after e2e is
-gated on the `deploy-feature` label.
-
-```mermaid
-flowchart TD
-  subgraph bs["build + scan (parallel, no push)"]
-    api["api<br/>build-and-scan-dotnet.yml@v2"]:::rw
-    mig["migrator<br/>build-and-scan-dotnet.yml@v2"]:::rw
-    fe["frontend<br/>build-and-scan-docker.yml@v2"]:::rw
-  end
-  e2e["e2e — playwright-e2e.yml@v2<br/>image_artifacts_json = {API,MIGRATOR,FRONTEND}<br/>secrets: e2e_username/password/otp"]:::rw
-  subgraph push["label-gated push (if: PR + 'deploy-feature')"]
-    pa["push-api<br/>image-push.yml@v2"]:::rw
-    pm["push-migrator<br/>image-push.yml@v2"]:::rw
-    pf["push-frontend<br/>image-push.yml@v2"]:::rw
-  end
-  dp["deploy-preview<br/>gitops-preview-upsert.yml@v2<br/>target_repo: hwinther/proxmox"]:::rw
-  cm["comment-preview-url<br/>(sticky PR comment)"]:::cj
-  prox["hwinther/proxmox<br/>clusters/.../previews/clutterstock<br/>(Flux reconciles ~1 min)"]:::ext
-
-  api -.->|"image_artifact"| e2e
-  mig -.->|"image_artifact"| e2e
-  fe -.->|"image_artifact"| e2e
-  api --> pa
-  mig --> pm
-  fe --> pf
-  e2e --> pa
-  e2e --> pm
-  e2e --> pf
-  pa -->|"pushed_digest"| dp
-  pm -->|"pushed_digest"| dp
-  pf -->|"pushed_digest"| dp
-  bs -.->|"version (per image)"| dp
-  dp --> cm
-  dp -->|"commit overlay (GitHub App token)"| prox
-  classDef cj fill:#f3f4f6,stroke:#9ca3af,color:#111827
-  classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
-  classDef ext fill:#fee2e2,stroke:#ef4444,color:#7f1d1d,stroke-dasharray:4 3
-```
-
-`pr-preview-cleanup.yml` is the mirror: on PR `closed`, a `teardown` job calls
-`gitops-preview-teardown.yml` (removing the overlay so Flux prunes the namespace and
-per-PR database), then a consumer job updates the sticky comment.
-
-## `ci.yml` and the rest of the surface
-
-```mermaid
-flowchart LR
-  ci["ci.yml (PR)"]:::cj --> prb["pr-build.yml@v2<br/>node (frontend + openapi-typescript)<br/>+ dotnet (backend)"]:::rw
-  dl["dependabot-update-dotnet-lockfiles.yml"]:::cj --> dlr["dependabot-update-dotnet-lockfiles.yml@v2<br/>(WORKFLOW_TOKEN)"]:::rw
-  rs["resharper-cleanupcode.yml"]:::cj --> rsr["format-and-create-pr.yml@v2<br/>(cleanupcode / blame-ignore-revs)"]:::rw
-  st["stryker.yml"]:::cj --> str["stryker.yml@v2 (node)"]:::rw
-  pg["prune-ghcr.yml"]:::cj --> pgr["prune-ghcr.yml@v2"]:::rw
-  classDef cj fill:#f3f4f6,stroke:#9ca3af,color:#111827
-  classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
-```
-
-## `tag-and-release.yml` — release fan-out
-
-Tagging with `GITHUB_TOKEN` does **not** fire other workflows' `on: push: tags`
-triggers, so the release does it manually: tag via the reusable workflow, then a
-consumer job resolves the new tag and `gh workflow run`s each container build at that
-ref. (This same workaround appears in `wsh-rtl-sdr` and `proxmox`.)
+`tag-and-release.yml` pushes the `v*` tag with the devops-bot GitHub App's token (job in
+the `devops-bot` environment). Unlike a tag pushed with `GITHUB_TOKEN`, that push fires
+`on: push: tags`, so `container.yml` starts by itself at the tag: it rebuilds the three
+images, then renders `deploy/` with them pinned to tag@digest and pushes it as
+`manifests:<version>`, signed with the `container.yml@refs/tags/v*` identity. The test
+environment follows new releases through its OCIRepository's `ref.semver`. Production
+moves only through `promote.yml`.
 
 ```mermaid
 flowchart TD
   disp["workflow_dispatch (tag_name: auto)"]:::cj
-  tag["tag<br/>tag-and-release.yml@v2<br/>(creates vX.Y.Z + floating tags)"]:::rw
-  trig["trigger-container-builds (your job)<br/>resolve latest v* → gh workflow run"]:::cj
-  apic["api-container.yml<br/>→ dotnet-container.yml@v2"]:::rw
-  migc["migrator-container.yml<br/>→ dotnet-container.yml@v2"]:::rw
-  fec["frontend-container.yml<br/>→ docker-container.yml@v2"]:::rw
-  disp --> tag --> trig
-  trig -->|"--ref vX.Y.Z"| apic
-  trig -->|"--ref vX.Y.Z"| migc
-  trig -->|"--ref vX.Y.Z"| fec
+  tag["tag<br/>tag-and-release.yml<br/>app_client_id: DEVOPS_BOT_CLIENT_ID<br/>environment: devops-bot"]:::rw
+  subgraph cont["container.yml (on: push: tags v*)"]
+    api["api · migrator<br/>dotnet-container.yml"]:::rw
+    fe["frontend<br/>docker-container.yml"]:::rw
+    man["manifests (your job)<br/>manifests action<br/>render · push · sign"]:::ca
+  end
+  ghcr[("ghcr.io/.../manifests:&lt;version&gt;<br/>sig: container.yml@refs/tags/v*")]:::ext
+  test[("test env<br/>OCIRepository ref.semver")]:::ext
+  prom["promote.yml (dispatch from main)<br/>check signature · production approval<br/>co-sign · tag-bump PR in hwinther/proxmox"]:::cj
+  prod[("production<br/>accepts only promote.yml's signature")]:::ext
+
+  disp --> tag -->|"tag push (App token)"| cont
+  api -->|"tag@digest"| man
+  fe -->|"tag@digest"| man
+  man --> ghcr
+  ghcr -.-> test
+  ghcr -.->|"version"| prom
+  prom -->|"PR merged"| prod
   classDef cj fill:#f3f4f6,stroke:#9ca3af,color:#111827
   classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+  classDef ca fill:#dcfce7,stroke:#22c55e,color:#14532d
+  classDef ext fill:#fee2e2,stroke:#ef4444,color:#7f1d1d,stroke-dasharray:4 3
 ```
 
----
+If the Grype gate stops a release on findings that can't be fixed yet, run
+`container.yml` by hand at the tag with "Fail the build" off.
 
-# Edge case — `wsh-rtl-sdr` (arm64 base image + SDR feeders)
-
-Builds its **own** base image and a build-toolchain image, then a fleet of feeder
-images derived from them — all `linux/amd64,linux/arm64`. Two things make it the
-stress test for this library: **base-image chaining across a distro matrix**, and
-**consumer-side signing per matrix leg**.
-
-## `build-sdr-images.yml` — matrix chaining + consumer matrix signing
-
-`precheck` skips the rebuild unless the upstream Debian digest moved. `sdr-build`
-`needs: sdr-base` so the base is published before the toolchain `FROM`s it. Because
-matrix-job outputs are last-writer-wins, the chain is wired through the
-`sdr-base:<distro>` **floating tag** (passed via `build_args`), not a job output.
-Signing is decoupled (`cosign_sign_enabled: false`) and done in per-distro consumer
-jobs so the cert binds to `wsh-rtl-sdr`'s identity.
+## The rest of the surface
 
 ```mermaid
-flowchart TD
-  pc["precheck (your job)<br/>compare upstream debian:&lt;distro&gt;-slim digest"]:::cj
-  ver["version<br/>gitversion.yml@v2"]:::rw
-  sb["sdr-base  (matrix: buster/bullseye/bookworm/trixie)<br/>docker-container.yml@v2<br/>platforms: amd64,arm64 · cosign_sign_enabled: false<br/>tag_suffix/additional_tags/artifact_name_suffix = distro"]:::rw
-  sbd["sdr-build  (matrix: 4 distros)<br/>docker-container.yml@v2<br/>build_args: SDR_BASE=ghcr.io/.../sdr-base:&lt;distro&gt;"]:::rw
-  sbs["sdr-base-sign (matrix)<br/>sign-image@v2 (composite)"]:::ca
-  sbds["sdr-build-sign (matrix)<br/>sign-image@v2 (composite)"]:::ca
-
-  pc -->|"changed == true"| ver
-  ver --> sb
-  ver --> sbd
-  sb -->|"FROM sdr-base:&lt;distro&gt; (floating tag)"| sbd
-  sb -.->|"sbom/grype artifacts (per distro)"| sbs
-  sbd -.->|"sbom/grype artifacts (per distro)"| sbds
-  sb --> sbs
-  sbd --> sbds
+flowchart LR
+  ci["ci.yml (PR)"]:::cj --> prb["pr-build.yml<br/>node (frontend + openapi-typescript)<br/>+ dotnet (backend)"]:::rw
+  md["manifest-diff.yml (PR)"]:::cj --> mda["manifests action<br/>render head + base, diff comment"]:::ca
+  cl["pr-preview-cleanup.yml (PR closed)"]:::cj --> clr["gitops-preview-teardown.yml"]:::rw
+  np["nightly-preview.yml (cron)"]:::cj --> npr["nightly-preview-e2e.yml"]:::rw
+  dl["dependabot-update-dotnet-lockfiles.yml"]:::cj --> dlr["dependabot-update-dotnet-lockfiles.yml<br/>(WORKFLOW_TOKEN)"]:::rw
+  rs["resharper-cleanupcode.yml"]:::cj --> rsr["format-and-create-pr.yml<br/>(cleanupcode / blame-ignore-revs)"]:::rw
+  st["stryker.yml"]:::cj --> str["stryker.yml (node)"]:::rw
+  pg["prune-ghcr.yml"]:::cj --> pgr["prune-ghcr.yml"]:::rw
   classDef cj fill:#f3f4f6,stroke:#9ca3af,color:#111827
   classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
   classDef ca fill:#dcfce7,stroke:#22c55e,color:#14532d
 ```
 
-> Today each sign job installs crane, runs `crane digest`, and downloads the two
-> predicate artifacts before calling `sign-image`. With `sign-image@v2` those steps
-> collapse into the composite (`sbom_artifact_name`/`grype_artifact_name` + auto
-> digest) — the ~100-line sign jobs become ~15 lines each.
+Repo-local, no reuse yet: `zap-scan.yml` (ZAP API scan against a mock-OIDC stack),
+`api-docs-pages.yml` (GitHub Pages: API docs plus test and coverage reports),
+`load-test.yml`, `nightly-e2e.yml` (being replaced by the nightly preview run) and
+`contracts-nuget-publish.yml`. `manifest-diff`, `tag-and-release`, `dependabot-auto-merge`,
+`label`, `type-label`, `stale`, `poutine` and `zizmor` are synced from `wshno/devops`
+(header `# Synced from wshno/devops …`), so change them there.
 
-## Feeder builds + Dockerfile digest-pinned `FROM`
+---
 
-Each feeder is a single `docker-container.yml` job with **reusable-side** signing.
-Unlike `clutterstock`, the base→derived link is **not** a workflow output — the
-feeder Dockerfile pins `FROM ghcr.io/.../sdr-base:<distro>@sha256:…` and Dependabot
-bumps the digest. (Contrast with the workflow-output `image_digest` chaining shown in
-the README's base-image-chaining example, which is what you'd use when base and
-derived build in the **same** workflow run.)
+# Edge case — `wsh-rtl-sdr` (multi-arch SDR feeders)
+
+A fleet of independent `linux/amd64,linux/arm64` images (readsb, piaware, tar1090,
+ais-catcher, …), each a static binary on distroless, plus a signed manifests artifact for
+the edge-sdr cluster. There is no shared base image any more, so each image builds on
+its own.
 
 ```mermaid
-flowchart LR
-  base["ghcr.io/.../sdr-base:trixie@sha256:…<br/>ghcr.io/.../sdr-build:trixie@sha256:…"]:::ext
-  feeder["build-&lt;feeder&gt;.yml  (×8: adsbexchange, piaware,<br/>dump1090-fa, tar1090, fr24, opensky, ais-catcher, gsm-tools)<br/>docker-container.yml@v2 · amd64,arm64 · reusable-side signing"]:::rw
-  ghcr["ghcr.io/.../&lt;feeder&gt;"]:::ext
-  base -->|"FROM (digest pin; Dependabot bumps)"| feeder --> ghcr
+flowchart TD
+  pr["pull_request (images/**)"]:::cj
+  smoke["smoke-test.yml (your job)<br/>matrix: one image each, amd64<br/>docker-compose.test.yml, no SDR hardware"]:::cj
+  main["push: main (images/&lt;image&gt;/**)"]:::cj
+  bi["build-&lt;image&gt;.yml<br/>docker-container.yml<br/>amd64,arm64 · reusable-side signing"]:::rw
+  disp["tag-and-release.yml<br/>v* tag via devops-bot"]:::rw
+  subgraph rel["release.yml (on: push: tags v*)"]
+    guard["guard: refs/tags/v* only"]:::cj
+    mx["build (matrix: 9 images)<br/>docker-container.yml<br/>release_asset_upload_enabled: false"]:::rw
+    man["manifests (your job)<br/>manifests action, signed as<br/>release.yml@refs/tags/v*"]:::ca
+  end
+  ghcr[("ghcr.io/hwinther/wsh-rtl-sdr/&lt;image&gt;<br/>+ manifests:&lt;version&gt;")]:::ext
+  edge[("edge-sdr cluster<br/>Flux OCIRepository")]:::ext
+
+  pr --> smoke
+  main --> bi --> ghcr
+  disp -->|"tag push"| guard --> mx --> man --> ghcr
+  ghcr -.-> edge
+  classDef cj fill:#f3f4f6,stroke:#9ca3af,color:#111827
   classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+  classDef ca fill:#dcfce7,stroke:#22c55e,color:#14532d
   classDef ext fill:#fee2e2,stroke:#ef4444,color:#7f1d1d,stroke-dasharray:4 3
 ```
 
-`tag-and-release.yml` dispatches the 8 feeder builds (not the base images, which
-rebuild on their own path/cron cadence) — same tag→`gh workflow run` fan-out as
-`clutterstock`.
+What makes it different from `clutterstock`:
+
+- **Two publish paths.** A merge that touches `images/<image>/` publishes that one image
+  (`build-<image>.yml`). A release rebuilds all of them in one matrix and ships the
+  manifests that pin them.
+- **PRs don't build through the library.** `smoke-test.yml` builds each image amd64-only
+  and runs it in a no-hardware mode (readsb as a `--net-only` hub, ais-catcher reading
+  `/dev/zero`). The multi-arch build and Grype scan happen on main.
+- **Upstream bumps** come from `bump-sources.yml` and `bump-fr24feed.yml` (weekly PRs for
+  pinned sources Dependabot can't track), which dispatch the smoke test for the image.
 
 ---
 
 # Edge case — `proxmox` (infrastructure / GitOps repo)
 
 Not an app: a homelab IaC + GitOps repo (Kubernetes/Flux manifests for two clusters,
-a Python provisioning library, and a couple of utility container images). It consumes
-the library for the parts that *are* normal CI, and hand-rolls the
-infrastructure-specific validation. It is also the **target** of `clutterstock`'s
-preview deploys.
+a Python provisioning library, and two utility container images). It consumes the
+library for the parts that *are* normal CI and hand-rolls the infrastructure-specific
+validation. It is also the **target** of every app's preview deploys and production
+promotions.
 
 ```mermaid
 flowchart TD
-  subgraph reused["consumes hwinther/reusable-workflows@v2"]
-    prb["pr-build.yml (PR)<br/>→ pr-build.yml@v2 (python only, regex-gated)"]:::rw
-    esp["build-esp-poller.yml<br/>setup (short_sha) → docker-container.yml@v2"]:::rw
-    pbs["build-proxmox-pbs-backup-client.yml<br/>setup → docker-container.yml@v2"]:::rw
-    fmt["format-and-create-pr.yml<br/>→ format-and-create-pr.yml@v2 (ruff-format)"]:::rw
-    tag["tag-and-release.yml<br/>→ tag-and-release.yml@v2 → dispatch pbs build"]:::rw
-    prune["prune-ghcr.yml@v2"]:::rw
+  subgraph reused["consumes hwinther/reusable-workflows"]
+    prb["pr-build.yml<br/>→ pr-build.yml (python only, regex-gated)<br/>+ quality-artifact.yml"]:::rw
+    esp["build-esp-poller.yml<br/>PR: build-and-scan-docker.yml<br/>tag esp-poller-v*: docker-container.yml"]:::rw
+    pbs["build-proxmox-pbs-backup-client.yml<br/>PR: build-and-scan-docker.yml<br/>tag pbs-backup-client-v*: docker-container.yml"]:::rw
+    md["manifest-diff.yml<br/>→ manifests action (Flux paths + HelmRelease charts)"]:::ca
+    fmt["format-and-create-pr.yml<br/>→ format-and-create-pr.yml (ruff-format)"]:::rw
+    tag["tag-and-release.yml<br/>→ tag-and-release.yml (repo-wide v*, builds nothing)"]:::rw
+    prune["prune-ghcr.yml"]:::rw
   end
   subgraph handrolled["hand-rolled (no reuse)"]
-    val["verify-k8s-job-name-bump · bump-k8s-job-name-on-label<br/>verify-dependabot-clusters (custom Python validators)<br/>update-flux (nightly Flux CLI PRs) · label · stale · poutine · zizmor"]:::cj
+    val["verify-k8s-job-name-bump · bump-k8s-job-name-on-label<br/>verify-dependabot-clusters (custom Python validators)<br/>update-flux (nightly Flux CLI PRs) · bump-pbs-client (weekly pin PR)<br/>label · stale · poutine · zizmor"]:::cj
   end
   cluster["Flux on k0s clusters<br/>(production + edge-sdr / arm)"]:::ext
-  fromcs["clutterstock deploy-preview<br/>commits preview overlays here"]:::ext
+  apps["app repos: preview overlays,<br/>promote.yml tag-bump PRs"]:::ext
 
-  tag -->|"--ref vX.Y.Z"| pbs
-  esp --> cluster
-  pbs --> cluster
-  fromcs -.->|"GitOps overlay"| cluster
+  esp -->|"release tag only"| cluster
+  pbs -->|"release tag only"| cluster
+  apps -.->|"GitOps commits / PRs"| cluster
   classDef rw fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+  classDef ca fill:#dcfce7,stroke:#22c55e,color:#14532d
   classDef cj fill:#f3f4f6,stroke:#9ca3af,color:#111827
   classDef ext fill:#fee2e2,stroke:#ef4444,color:#7f1d1d,stroke-dasharray:4 3
 ```
@@ -454,30 +423,37 @@ flowchart TD
 What makes it different from `clutterstock`:
 
 - **PR build is Python-only**, gated by `python_changes_regex` to `src/`, `scripts/`,
-  `pyproject.toml` — most PRs change YAML manifests, not Python.
-- **Image tags carry a short SHA suffix** (`tag_suffix: <short_sha>`) so utility
-  images don't collide on semver.
-- **No deploy job** — "deploy" is a Flux reconcile of committed manifests, so the
-  heavy machinery is the hand-rolled validators (Job-name bump enforcement, Dependabot
+  `pyproject.toml`: most PRs change YAML manifests, not Python.
+- **Each image releases on its own tag prefix** (`esp-poller-v*`, `pbs-backup-client-v*`;
+  GitVersion reads only that prefix). PRs build and scan without pushing, and merges to
+  main publish nothing, so GHCR holds only release versions and Dependabot moves the
+  CronJobs to them.
+- **No deploy job.** "Deploy" is a Flux reconcile of committed manifests, so the heavy
+  machinery is the hand-rolled validators (Job-name bump enforcement, Dependabot
   cluster-dir sync, nightly Flux updates), none of which this library provides.
 
 ---
 
 # Cross-cutting patterns
 
-- **Release fan-out workaround.** A tag pushed by `GITHUB_TOKEN` won't trigger
-  `on: push: tags` workflows. All three advanced consumers tag via
-  `tag-and-release.yml`, then a consumer job resolves the tag and `gh workflow run`s
-  the container builds at that ref.
+- **Tag pushes that start the release.** A tag pushed with `GITHUB_TOKEN` doesn't fire
+  `on: push: tags`. `tag-and-release.yml` therefore pushes with a GitHub App token
+  (`app_client_id` + `app_private_key`, the devops-bot App), and the tag workflow
+  (`container.yml`, `release.yml`) starts by itself. A hand-pushed tag works the same.
+- **Release identity in the signature.** The manifests artifact is signed in the
+  consumer's own job, so the cosign identity is `<workflow>.yml@refs/tags/v*`, which
+  the cluster's OCIRepository verify pins. `promote.yml` adds a second signature that
+  production requires.
 - **Consumer-side signing for per-tenant identity.** Build with
   `cosign_sign_enabled: false` + `attest_build_provenance_enabled: false` (keep
   `cosign_supply_chain_attest_enabled: true` to still emit predicates), then call the
   `sign-image` **composite** in your own job. Because composites run inline, the
-  Fulcio cert SAN is your repo — what per-consumer Kyverno/cosign policies need.
-- **Two kinds of base-image chaining.** Same-run base→derived uses the base job's
-  `image_digest` **output** as a `build_args` value (README base-image example).
-  Cross-run / cross-matrix chaining (wsh-rtl-sdr) pins `FROM …@sha256:…` in the
-  derived Dockerfile and lets Dependabot bump it.
+  Fulcio cert SAN is your repo — what per-consumer Kyverno/cosign policies need
+  (`test-ghcr/web-container-consumer-signs.yml`).
+- **Base-image chaining in one run.** A derived image built in the same run uses the
+  base job's `image_digest` **output** as a `build_args` value (README base-image
+  example). Across runs, pin `FROM …@sha256:…` in the derived Dockerfile and let
+  Dependabot bump it.
 - **Package fan-out + trusted publishing.** Consumers call `package-deploy.yml` (one
   shared version → per-ecosystem deploy). PyPI is special: the reusable side only
   builds the dist; the consumer runs `pypa/gh-action-pypi-publish` in its own job so
