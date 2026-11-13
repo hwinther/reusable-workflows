@@ -262,6 +262,10 @@ flow through each pipeline in parallel.
 
 ## `pr-e2e.yml` — the centerpiece
 
+> This diagram shows the earlier build-and-scan pipeline. The current split pipeline
+> (`build-image-*` → `scan-image` ‖ `playwright-e2e` → `image-push` → manifests), the
+> nightly preview and the quality flow are in [workflow-map.md](workflow-map.md).
+
 Build+scan all three images (no push) → Playwright e2e against the loaded images →
 **label-gated** push of the byte-identical images → render a GitOps preview overlay
 into the `hwinther/proxmox` repo → comment the preview URL. Everything after e2e is

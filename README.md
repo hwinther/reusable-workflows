@@ -67,6 +67,9 @@ The diagrams below are the abstract building-block patterns. For **rendered
 (full-stack app), `wsh-rtl-sdr` (arm64 base + feeder images), `proxmox`
 (infrastructure/GitOps), and the minimal `test-*` examples — see
 [docs/consumer-topologies.md](docs/consumer-topologies.md).
+For the whole lifecycle on one page, with pull request, main, nightly preview, release and
+production plus the test results flowing to the quality artifact and the coverage summary, see
+[docs/workflow-map.md](docs/workflow-map.md).
 
 ### PR build (Node / .NET / Python)
 
