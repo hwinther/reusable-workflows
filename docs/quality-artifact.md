@@ -20,7 +20,7 @@ already do this:
 | `python-build` (via `pr-build.yml`) | `quality-python` | pytest JUnit XML, Cobertura (`coverage.xml`), `warnings.json` (pytest warnings) |
 | `go-build` (via `pr-build.yml`) | `quality-go` | JUnit XML (gotestsum), Cobertura (`coverage.xml`, from the cover profile), `warnings.json` (go vet findings) |
 | `dotnet-build` (via `pr-build.yml`) | `quality-dotnet` | TRX and Cobertura XML from `**/TestResults`; `warnings.json` (restore, build, test) |
-| `playwright-e2e.yml` | `quality-e2e` | Playwright JSON report (`results_json_path`) |
+| `playwright-e2e.yml` | `quality-e2e` | Playwright JSON report (`results_json_path`); with `coverage_paths_json`, also the browser coverage's Cobertura report(s) (`*cobertura*.xml`, e.g. monocart's `cobertura-coverage.xml`) |
 | `scan-image.yml` and the other image scans | `quality-scan-<postfix>` | Grype JSON |
 
 `quality-artifact.yml` runs last in the same workflow run. It downloads every `quality-*`
@@ -124,7 +124,10 @@ oras manifest fetch ghcr.io/hwinther/clutterstock/quality:main \
   "totals": {
     "tests": { "unit": { "total": 119, "passed": 119, "failed": 0, "skipped": 0 }, "e2e": { "total": 20, "passed": 20, "failed": 0, "skipped": 0 } },
     "warnings": 4,
-    "vulnerabilities": { "bySeverity": { "critical": 0, "high": 14, "medium": 33, "low": 4, "negligible": 8, "unknown": 0 }, "total": 59, "fixable": 2 }
+    "vulnerabilities": { "bySeverity": { "critical": 0, "high": 14, "medium": 33, "low": 4, "negligible": 8, "unknown": 0 }, "total": 59, "fixable": 2 },
+    "coverage": {
+      "combined": { "components": ["node", "e2e"], "lines": { "covered": 4244, "total": 5171, "percent": 82.07 } }
+    }
   }
 }
 ```
@@ -133,6 +136,16 @@ oras manifest fetch ghcr.io/hwinther/clutterstock/quality:main \
 - `warnings` counts unique warning lines per source, as the PR comment lists them.
 - `tests`, `coverage`, `warnings` and `vulnerabilities` appear only when the component had reports of that kind.
 - `percent` is `null` when there is nothing to cover (`total` 0).
+- `totals.coverage.combined` appears when the e2e component has line coverage (the suite's
+  browser coverage, see the producers above) and a unit component covers some of the same files.
+  It merges them per file and line, so a line counts as covered when either covers it, and lists
+  the components it merged. Approximate: unit reporters count statement lines and V8 counts every
+  executable line, so a file both cover has the union of both line sets. Every file of those
+  reports counts; the PR comment from `e2e-coverage-summary.yml` can narrow to `source_dirs` and
+  leave out `exclude`, so its figures can be a little different.
+- Cobertura file names are joined to the report's `<source>` when that is relative or inside the
+  runner's checkout. A `<source>` outside it (a container path, such as the e2e suite's `/e2e`) is
+  ignored, since such reporters write repo-relative names.
 - Adding fields is a compatible change. Renaming or removing one bumps `schemaVersion`.
 
 ## details.json (schemaVersion 1)

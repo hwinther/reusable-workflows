@@ -20,6 +20,10 @@ project that writes both is not counted twice. Test results of the same format a
 .NET test project). Cobertura files are merged per source file and line (a line counts as covered
 if any report covers it), so two test projects covering the same assembly don't count it twice.
 
+When an e2e component carries Cobertura too (playwright-e2e.yml adds the suite's browser coverage to
+quality-e2e) and a unit component covers some of the same files, totals.coverage.combined is their
+per-line merge: the share of lines either the unit tests or the e2e run cover.
+
 details.json holds what a report needs to drill down: coverage per source file (paths relative to
 the repo), warnings grouped by source and code with examples, and every vulnerability match.
 """
@@ -126,6 +130,23 @@ def parse_json(data):
     return None, None
 
 
+CHECKOUT = re.compile(r"^/home/runner/work/[^/]+/[^/]+(/|$)")
+
+
+def in_checkout(path):
+    """True when path is inside the runner's checkout (GITHUB_WORKSPACE)."""
+    workspace = os.environ.get("GITHUB_WORKSPACE", "").replace("\\", "/").rstrip("/")
+    path = path.replace("\\", "/").rstrip("/")
+    return bool(workspace and (path == workspace or path.startswith(workspace + "/"))) or bool(CHECKOUT.match(path + "/"))
+
+
+def joinable(source):
+    """A Cobertura <source> to join relative file names to: relative, or absolute in the checkout."""
+    source = source.replace("\\", "/")
+    absolute = source.startswith("/") or re.match(r"^[A-Za-z]:", source)
+    return not absolute or in_checkout(source)
+
+
 def repo_relative(path):
     """Strip the runner's checkout path, so file names read as repo paths."""
     workspace = os.environ.get("GITHUB_WORKSPACE", "").rstrip("/")
@@ -139,14 +160,19 @@ CONDITION = re.compile(r"\((\d+)/(\d+)\)")
 
 
 def cobertura_lines(root):
-    """{file: {line: (hits, branches_covered, branches_total)}} from one Cobertura report."""
+    """{file: {line: (hits, branches_covered, branches_total)}} from one Cobertura report.
+
+    Relative file names are joined to the report's first <source> when that source is in the
+    runner's checkout (unit tests run there). A source outside it is a container path, such as the
+    e2e suite's /e2e, whose reporter already writes repo-relative names, so those stay as they are.
+    """
     sources = [s.text.strip() for s in root.iter() if local(s.tag) == "source" and s.text and s.text.strip()]
     files = {}
     for cls in (el for el in root.iter() if local(el.tag) == "class"):
         name = (cls.get("filename") or "").replace("\\", "/")
         if not name:
             continue
-        if not name.startswith("/") and not re.match(r"^[A-Za-z]:", name) and sources:
+        if not name.startswith("/") and not re.match(r"^[A-Za-z]:", name) and sources and joinable(sources[0]):
             name = sources[0].replace("\\", "/").rstrip("/") + "/" + name
         lines = files.setdefault(repo_relative(name), {})
         holder = next((el for el in cls if local(el.tag) == "lines"), None)
@@ -242,7 +268,8 @@ def vulnerability_list(component, data):
     return out
 
 
-def build_details(reports):
+def build_details(reports, line_maps=None):
+    """details.json; line_maps, when given, receives each component's per-line coverage."""
     details = {"schemaVersion": 1, "coverage": {}, "warnings": {}, "vulnerabilities": []}
     directories = sorted(p for p in reports.iterdir() if p.is_dir()) if reports.is_dir() else []
     for directory in directories:
@@ -265,6 +292,8 @@ def build_details(reports):
                     details["vulnerabilities"] += vulnerability_list(name, data)
         if files:
             details["coverage"][name] = {"files": file_coverage(files)}
+            if line_maps is not None:
+                line_maps[name] = files
         groups = warning_groups(directory)
         if groups:
             details["warnings"][name] = groups
@@ -342,7 +371,29 @@ def read_component(directory):
     return component
 
 
-def build(reports, details=None):
+def combined_coverage(components, line_maps):
+    """Line coverage of the e2e components merged with the unit components that cover the same files.
+
+    A line counts as covered when either side covers it. Only when an e2e component has per-line
+    coverage and a unit component shares at least one file with it (the frontend's unit tests, not
+    the backend's), else None. Approximate: unit reporters count statement lines, V8 counts every
+    executable line, so a file both cover has the union of both line sets.
+    """
+    e2e = [n for n, c in components.items() if c.get("kind") == "e2e" and n in line_maps]
+    e2e_files = {f for n in e2e for f in line_maps[n]}
+    unit = [n for n, c in components.items() if c.get("kind") == "unit" and set(line_maps.get(n, {})) & e2e_files]
+    if not e2e or not unit:
+        return None
+    merged = {}
+    for name in unit + e2e:
+        merge_lines(merged, line_maps[name])
+    files = file_coverage(merged)
+    lines = {"covered": sum(f["lines"]["covered"] for f in files), "total": sum(f["lines"]["total"] for f in files)}
+    lines["percent"] = percent(lines)
+    return {"components": unit + e2e, "lines": lines}
+
+
+def build(reports, details=None, line_maps=None):
     components = {}
     directories = sorted(p for p in reports.iterdir() if p.is_dir()) if reports.is_dir() else []
     for directory in directories:
@@ -369,6 +420,9 @@ def build(reports, details=None):
             add(totals["vulnerabilities"]["bySeverity"], component["vulnerabilities"]["bySeverity"])
             totals["vulnerabilities"]["total"] += component["vulnerabilities"]["total"]
             totals["vulnerabilities"]["fixable"] += component["vulnerabilities"]["fixable"]
+    combined = combined_coverage(components, line_maps or {})
+    if combined:
+        totals["coverage"] = {"combined": combined}
 
     env = os.environ.get
     server, repo, run_id = env("GITHUB_SERVER_URL", "https://github.com"), env("GITHUB_REPOSITORY", ""), env("GITHUB_RUN_ID", "")
@@ -409,6 +463,11 @@ def markdown(summary):
         )
     if not summary["components"]:
         rows.append("| _no `quality-*` reports found_ | | | | | |")
+    combined = summary["totals"].get("coverage", {}).get("combined")
+    if combined and combined["lines"]["percent"] is not None:
+        names = " + ".join(f"`{n}`" for n in combined["components"])
+        rows.append(f"\nCombined line coverage ({names}, covered by either): {combined['lines']['percent']:.1f} % "
+                    f"({combined['lines']['covered']}/{combined['lines']['total']})")
     return "### Quality summary\n\n" + "\n".join(rows) + "\n"
 
 
@@ -417,8 +476,9 @@ def main():
         sys.exit(__doc__)
     sys.stdout.reconfigure(encoding="utf-8")
     reports, out_json, out_md = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
-    details = build_details(reports)
-    summary = build(reports, details)
+    line_maps = {}
+    details = build_details(reports, line_maps)
+    summary = build(reports, details, line_maps)
     if len(sys.argv) == 5:
         Path(sys.argv[4]).write_text(json.dumps(details, separators=(",", ":")) + "\n", encoding="utf-8")
     out_json.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
