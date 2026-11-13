@@ -21,7 +21,7 @@ name: "Unit + e2e coverage summary"
 #     needs: [unit, e2e]
 #     if: ${{ !cancelled() && needs.e2e.result != 'skipped' }}
 #     permissions: { contents: read, pull-requests: write }
-#     uses: hwinther/reusable-workflows/.github/workflows/e2e-coverage-summary.yml@v2
+#     uses: hwinther/reusable-workflows/.github/workflows/e2e-coverage-summary.yml@v2.36.0
 #     with:
 #       source_root: frontend
 #       source_dirs: app
@@ -267,7 +267,7 @@ jobs:
         if: >-
           ${{ steps.merge.outputs.markdown != '' && inputs.pr_comment_enabled && github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.36.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: ${{ inputs.comment_identifier }}
