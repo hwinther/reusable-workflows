@@ -28,12 +28,15 @@ name: "Unit + e2e coverage summary"
 #       unit_coverage_command: npm run coverage:ci
 #       unit_working_directory: frontend
 #       unit_coverage_report: coverage/cobertura-coverage.xml
+#
+# A bundle that also holds workspace packages (romslig: apps/web plus packages/*) takes several roots,
+# `source_root: apps/web,packages/*` with `source_dirs: src` (0.6.0 or later).
 
 on:
   workflow_call:
     inputs:
       source_root:
-        description: "The app's directory in the repo (e.g. `frontend`, `app`). Both reports' paths are normalised to `<source_root>/<source dir>/...`, and files outside it are left out."
+        description: "The app's directory in the repo (e.g. `frontend`, `app`). Both reports' paths are normalised to `<source_root>/<source dir>/...`, and files outside it are left out. Several, comma-separated, when the bundle also holds workspace packages: `apps/web,packages/*` (`*` = one directory; needs @wshno/playwright-config 0.6.0)."
         required: true
         type: string
       source_dirs:
@@ -42,7 +45,7 @@ on:
         type: string
         default: "src,app"
       exclude:
-        description: "Regex of normalised paths to leave out (e.g. `^app/src/mock/`). Empty = none."
+        description: "Regex of normalised paths to leave out (e.g. `^app/src/mock/`), one per line for several. Empty = none. Prefer the same exclusions in the reports themselves (the unit coverage config, monocartReporter's layout.exclude), so the quality artifact counts the same files."
         required: false
         type: string
         default: ""
@@ -229,14 +232,22 @@ jobs:
             echo "::error::No @wshno/playwright-config in $LOCK; set playwright_working_directory to the e2e suite."
             exit 1
           fi
-          if [ "$(printf '%s\n0.5.0\n' "$version" | sort -V | head -1)" != "0.5.0" ]; then
+          # Whether the suite's version is at least $1.
+          at_least() { [ "$(printf '%s\n%s\n' "$version" "$1" | sort -V | head -1)" = "$1" ]; }
+          if ! at_least 0.5.0; then
             echo "::error::@wshno/playwright-config $version has no wshno-coverage-summary; it needs 0.5.0 or later."
+            exit 1
+          fi
+          if [[ "$SOURCE_ROOT" == *,* || "$SOURCE_ROOT" == *'*'* ]] && ! at_least 0.6.0; then
+            echo "::error::Several source roots ($SOURCE_ROOT) need @wshno/playwright-config 0.6.0 or later; the e2e suite has $version."
             exit 1
           fi
           args=(--root "$SOURCE_ROOT" --source-dirs "$SOURCE_DIRS" --top "$TOP" --unit-label "$UNIT_LABEL")
           [ -n "$UNIT" ] && args+=(--unit "$UNIT")
           [ -n "$E2E" ] && args+=(--e2e "$E2E")
-          [ -n "$EXCLUDE" ] && args+=(--exclude "$EXCLUDE")
+          while IFS= read -r pattern; do
+            [ -n "$pattern" ] && args+=(--exclude "$pattern")
+          done <<< "$EXCLUDE"
           out="${RUNNER_TEMP}/coverage-summary.md"
           npx --yes --package "@wshno/playwright-config@${version}" wshno-coverage-summary "${args[@]}" > "$out"
           {
