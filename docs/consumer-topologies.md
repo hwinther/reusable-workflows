@@ -53,7 +53,7 @@ flowchart TD
     rw1["one job per image<br/>docker-container.yml · dotnet-container.yml<br/>build-and-scan-*.yml · image-push.yml"]:::rw
     rw2["split image pipeline<br/>gitversion.yml · build-image-docker/dotnet.yml<br/>scan-image.yml · playwright-e2e.yml · image-push.yml"]:::rw
     rw3["build, results, deploy, release<br/>pr-build.yml · package-deploy.yml · quality-artifact.yml<br/>e2e-coverage-summary.yml · gitops-preview-upsert/teardown.yml<br/>nightly-preview-e2e.yml · tag-and-release.yml"]:::rw
-    pub["public composites<br/>node/dotnet/python/go-build · gitversion · manifests<br/>quality-artifact · sign-image · verify-image<br/>sticky-pr-comment · otel-slow-spans"]:::ca
+    pub["public composites<br/>node/dotnet/python/go-build · gitversion · manifests<br/>quality-artifact · sign-image · verify-image<br/>sticky-pr-comment · otel-slow-spans · changed-files"]:::ca
     int["internal composites (_-prefixed)<br/>_build-image-* · _scan-image · _grype-summary<br/>_push-image-with-signatures · _push-staging-image<br/>_choose/_resolve-image-handoff · _save/_load-image-artifact<br/>_compose-image-tags · _format-output · _sticky-pr-comment"]:::int
   end
   caller --> rw1

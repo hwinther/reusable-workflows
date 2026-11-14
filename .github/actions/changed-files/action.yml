@@ -1,0 +1,95 @@
+name: "Did this pull request change matching files?"
+description: |
+  Answers whether a pull request touches any file matching `patterns`, without a checkout: the
+  file list comes from the pull request's files API. For workflows that must always run (and report
+  a required status check) but only need their expensive jobs when certain paths changed, in place
+  of an `on.pull_request.paths` filter: a workflow skipped by a paths filter never reports, so a
+  required check from it would block every pull request that doesn't touch those paths.
+
+  Outside a pull_request event (push, schedule, workflow_dispatch) `changed` is always `true`, so
+  those runs keep the behaviour of an unfiltered workflow; filter pushes with `on.push.paths`.
+  A pull request with 3000 or more files (the API's limit) also counts as changed.
+
+  Needs `pull-requests: read` on the job's token.
+
+inputs:
+  patterns:
+    required: true
+    description: |
+      Extended regular expressions (grep -E), one per line, matched against each changed path
+      relative to the repository root; any match means changed. Anchor them, e.g. `^frontend/`
+      or `^Dockerfile$`. Blank lines and lines starting with `#` are ignored. For a renamed file
+      both the old and the new path are checked.
+  github_token:
+    required: false
+    description: "Token with pull-requests: read. Defaults to the job's GITHUB_TOKEN."
+    default: ${{ github.token }}
+
+outputs:
+  changed:
+    description: "`true` when a changed path matches (or outside a pull request), else `false`."
+    value: ${{ steps.check.outputs.changed }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check changed files
+      id: check
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        PATTERNS: ${{ inputs.patterns }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        if [ "$EVENT_NAME" != "pull_request" ] && [ "$EVENT_NAME" != "pull_request_target" ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "Not a pull request ($EVENT_NAME): treating as changed."
+          exit 0
+        fi
+
+        pattern_file="$RUNNER_TEMP/changed-files-patterns.txt"
+        printf '%s\n' "$PATTERNS" | sed -e 's/[[:space:]]*$//' -e 's/^[[:space:]]*//' \
+          | grep -v -e '^$' -e '^#' > "$pattern_file" || true
+        if [ ! -s "$pattern_file" ]; then
+          echo "::error::changed-files: 'patterns' has no patterns."
+          exit 1
+        fi
+
+        files_file="$RUNNER_TEMP/changed-files-files.txt"
+        gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files?per_page=100" \
+          --jq '.[] | .filename, (.previous_filename // empty)' > "$files_file"
+        count=$(wc -l < "$files_file")
+
+        {
+          echo "## 🔍 Changed files check"
+          echo ""
+        } >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "$count" -ge 3000 ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "$count paths (at the API's 3000-file limit): treating as changed."
+          echo "✅ $count paths, at the API's limit: treated as changed." >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+        fi
+
+        matches=$(grep -E -f "$pattern_file" "$files_file" || true)
+        if [ -n "$matches" ]; then
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "Matching paths:"
+          echo "$matches"
+          {
+            echo "✅ $(echo "$matches" | wc -l) of $count changed paths match:"
+            echo ""
+            echo '```'
+            echo "$matches" | head -50
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "changed=false" >> "$GITHUB_OUTPUT"
+          echo "None of the $count changed paths match."
+          echo "⏭️ None of the $count changed paths match." >> "$GITHUB_STEP_SUMMARY"
+        fi
