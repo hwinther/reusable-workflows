@@ -44,3 +44,5 @@ jobs:
         run: bash ./scripts/grype-summary.test.sh
       - name: Run manifests tests
         run: bash ./scripts/manifests.test.sh
+      - name: Run _format-detect tests
+        run: bash ./scripts/format-detect.test.sh

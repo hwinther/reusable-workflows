@@ -1,6 +1,17 @@
 name: "Format-and-PR helper (reusable)"
 
 # Multi-formatter helper. Each mode is its own job, gated by `inputs.mode`:
+#   mode=format            → find what the repository has and run every formatter
+#                            that applies, then open ONE PR: jb cleanupcode per
+#                            *.slnx, prettier per npm project that depends on it,
+#                            ruff format when Ruff is configured, gofmt when there
+#                            is a go.mod. Needs no inputs; an optional
+#                            .github/format.yml excludes paths, lists solutions or
+#                            turns a formatter off (see
+#                            .github/actions/_format-detect/scripts/detect.sh).
+#   mode=eslint-fix        → `eslint --fix` per npm project with eslint and a flat
+#                            config, in a PR of its own: unlike the formatters it
+#                            can change code, so it gets its own review.
 #   mode=cleanupcode       → run `jb cleanupcode` against a .NET solution and
 #                            open a PR with the diff.
 #   mode=ruff-format       → run `ruff format` against a Python tree and
@@ -19,7 +30,7 @@ on:
       mode:
         required: true
         type: string
-        description: "Which job to run: 'cleanupcode', 'ruff-format' or 'blame-ignore-revs'."
+        description: "Which job to run: 'format' (every formatter that applies, detected), 'eslint-fix', 'cleanupcode', 'ruff-format' or 'blame-ignore-revs'."
       solution_path:
         required: false
         type: string
@@ -33,7 +44,7 @@ on:
       dotnet_version:
         required: false
         type: string
-        description: ".NET version, e.g. 10.0.x (mode=cleanupcode only)."
+        description: ".NET version, e.g. 10.0.x (mode=cleanupcode / format)."
         default: "10.0.x"
       python_version:
         required: false
@@ -43,7 +54,7 @@ on:
       ruff_version:
         required: false
         type: string
-        description: "Ruff version to install with pip (e.g. '0.9.0'). Empty = the latest available."
+        description: "Ruff version (mode=ruff-format / format), e.g. '0.9.0'. Empty = the latest available."
         default: ''
       target_path:
         required: false
@@ -55,6 +66,21 @@ on:
         type: string
         description: "Commit subject for the formatter PR (cleanupcode / ruff-format), and the search string for the blame-ignore-revs sync. Ruff callers typically override it, e.g. 'chore: ruff format'."
         default: "chore: ReSharper CleanupCode"
+      format_commit_subject:
+        required: false
+        type: string
+        description: "Commit subject and PR title for mode=format. mode=blame-ignore-revs also lists the commits matching it."
+        default: "chore: format code"
+      eslint_commit_subject:
+        required: false
+        type: string
+        description: "Commit subject and PR title for mode=eslint-fix (not added to .git-blame-ignore-revs: eslint --fix changes code)."
+        default: "chore: eslint --fix"
+      node_version:
+        required: false
+        type: string
+        description: "Node.js version for prettier and eslint (mode=format / eslint-fix), passed to actions/setup-node."
+        default: "lts/*"
       primary_nuget_source:
         required: false
         type: string
@@ -225,6 +251,266 @@ jobs:
             --title "$COMMIT_SUBJECT" \
             --body "Automated changes from [Ruff](https://docs.astral.sh/ruff/) (\`ruff format\`)."
 
+  format:
+    if: ${{ inputs.mode == 'format' || inputs.mode == 'eslint-fix' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true # zizmor: ignore[artipacked] -- a later step pushes a branch
+
+      - name: Detect formatters
+        id: detect
+        uses: hwinther/reusable-workflows/.github/actions/_format-detect@v2
+        with:
+          mode: ${{ inputs.mode }}
+
+      - name: Set up .NET
+        if: steps.detect.outputs.solutions != ''
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: ${{ inputs.dotnet_version }}
+          source-url: ${{ inputs.primary_nuget_source }}
+        env:
+          NUGET_AUTH_TOKEN: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
+
+      - name: Add extra NuGet source
+        if: steps.detect.outputs.solutions != '' && inputs.extra_nuget_source != ''
+        uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v2
+        with:
+          extra_nuget_source: ${{ inputs.extra_nuget_source }}
+          extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
+          extra_nuget_source_username: ${{ inputs.extra_nuget_source_username }}
+          nuget_auth_token: ${{ secrets.nuget_auth_token != '' && secrets.nuget_auth_token || secrets.GITHUB_TOKEN }}
+
+      - name: Run CleanupCode
+        if: steps.detect.outputs.solutions != ''
+        env:
+          SOLUTIONS: ${{ steps.detect.outputs.solutions }}
+        run: |
+          set -euo pipefail
+          dotnet tool install JetBrains.ReSharper.GlobalTools --global
+          while IFS= read -r solution; do
+            [ -n "$solution" ] || continue
+            echo "::group::jb cleanupcode $solution"
+            # --locked-mode where the solution keeps lock files, so restore matches CI.
+            locked=()
+            if [ -n "$(git ls-files -- "$(dirname "$solution")/**/packages.lock.json")" ]; then
+              locked=(--locked-mode)
+            fi
+            dotnet restore "${locked[@]}" "$solution"
+            jb cleanupcode "$solution"
+            echo "::endgroup::"
+          done <<< "$SOLUTIONS"
+          # Restore may write a nuget.config next to a solution (extra source); don't commit it.
+          git checkout -- '*nuget.config' 2> /dev/null || true
+          git clean -fq -- '*nuget.config' 2> /dev/null || true
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.install_dirs != ''
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Install npm packages
+        if: steps.detect.outputs.install_dirs != ''
+        env:
+          INSTALL_DIRS: ${{ steps.detect.outputs.install_dirs }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            echo "::group::npm ci in $dir"
+            (cd "$dir" && npm ci --ignore-scripts --no-audit --no-fund)
+            echo "::endgroup::"
+          done <<< "$INSTALL_DIRS"
+
+      - name: Run prettier
+        if: steps.detect.outputs.prettier_dirs != ''
+        env:
+          PRETTIER_DIRS: ${{ steps.detect.outputs.prettier_dirs }}
+          EXCLUDES: ${{ steps.detect.outputs.excludes }}
+        run: |
+          set -euo pipefail
+          is_excluded() {
+            local e
+            while IFS= read -r e; do
+              [ -n "$e" ] || continue
+              if [ "$1" = "$e" ] || [[ "$1" == "$e/"* ]]; then return 0; fi
+            done <<< "$EXCLUDES"
+            return 1
+          }
+          bin_for() { # nearest node_modules/.bin/<tool> at or above a directory
+            local d="$1"
+            while :; do
+              if [ -x "$d/node_modules/.bin/$2" ]; then echo "$(cd "$d" && pwd)/node_modules/.bin/$2"; return 0; fi
+              [ "$d" = "." ] && return 1
+              d="$(dirname "$d")"
+            done
+          }
+          while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            prettier="$(bin_for "$dir" prettier)" || { echo "::error::prettier is not installed for $dir"; exit 1; }
+            # Tracked files only, run from the project directory so its .prettierignore and config
+            # apply. .github/ and .poutine.yml (largely synced from wshno/devops, which owns their
+            # layout) and lock files are left alone, as are the exclude paths from .github/format.yml.
+            list="$(mktemp)"
+            while IFS= read -r -d '' f; do
+              full="$f"
+              [ "$dir" = "." ] || full="$dir/$f"
+              case "$full" in
+                .github/*|*/.github/*|.poutine.yml|*package-lock.json|*pnpm-lock.yaml|*yarn.lock) continue ;;
+              esac
+              is_excluded "$full" && continue
+              printf '%s\0' "$f" >> "$list"
+            done < <(cd "$dir" && git ls-files -z -- .)
+            echo "::group::prettier in $dir ($(tr -cd '\0' < "$list" | wc -c) files)"
+            if [ -s "$list" ]; then
+              (cd "$dir" && xargs -0 "$prettier" --write --ignore-unknown --log-level warn < "$list")
+            fi
+            echo "::endgroup::"
+            rm -f "$list"
+          done <<< "$PRETTIER_DIRS"
+
+      - name: Run eslint --fix
+        if: steps.detect.outputs.eslint_dirs != ''
+        env:
+          ESLINT_DIRS: ${{ steps.detect.outputs.eslint_dirs }}
+        run: |
+          set -euo pipefail
+          bin_for() {
+            local d="$1"
+            while :; do
+              if [ -x "$d/node_modules/.bin/$2" ]; then echo "$(cd "$d" && pwd)/node_modules/.bin/$2"; return 0; fi
+              [ "$d" = "." ] && return 1
+              d="$(dirname "$d")"
+            done
+          }
+          report="${RUNNER_TEMP}/eslint-remaining.md"
+          : > "$report"
+          i=0
+          while IFS= read -r dir; do
+            [ -n "$dir" ] || continue
+            i=$((i + 1))
+            eslint="$(bin_for "$dir" eslint)" || { echo "::error::eslint is not installed for $dir"; exit 1; }
+            out="${RUNNER_TEMP}/eslint-${i}.json"
+            echo "::group::eslint --fix in $dir"
+            # Exits non-zero while problems remain that --fix can't fix; those are reported, not fatal.
+            (cd "$dir" && "$eslint" . --fix --format json --output-file "$out") || true
+            echo "::endgroup::"
+            if [ -s "$out" ]; then
+              jq -r --arg dir "$dir" \
+                '([.[].errorCount] | add // 0) as $e | "- `\($dir)`: \($e) error(s) left that --fix could not fix"' \
+                "$out" >> "$report"
+            fi
+          done <<< "$ESLINT_DIRS"
+          cat "$report"
+
+      - name: Run ruff format
+        if: steps.detect.outputs.ruff == 'true'
+        env:
+          RUFF_VERSION: ${{ inputs.ruff_version }}
+          EXCLUDES: ${{ steps.detect.outputs.excludes }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r e; do
+            if [ -n "$e" ]; then args+=(--extend-exclude "$e"); fi
+          done <<< "$EXCLUDES"
+          pipx run "ruff${RUFF_VERSION:+==$RUFF_VERSION}" format "${args[@]}" .
+
+      - name: Run gofmt
+        if: steps.detect.outputs.gofmt == 'true'
+        env:
+          EXCLUDES: ${{ steps.detect.outputs.excludes }}
+        run: |
+          set -euo pipefail
+          is_excluded() {
+            local e
+            while IFS= read -r e; do
+              [ -n "$e" ] || continue
+              if [ "$1" = "$e" ] || [[ "$1" == "$e/"* ]]; then return 0; fi
+            done <<< "$EXCLUDES"
+            return 1
+          }
+          git ls-files -z -- '*.go' | while IFS= read -r -d '' f; do
+            is_excluded "$f" || printf '%s\0' "$f"
+          done | xargs -0 --no-run-if-empty gofmt -w
+
+      - name: Branch, commit, and open pull request
+        if: steps.detect.outputs.any == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MODE: ${{ inputs.mode }}
+          COMMIT_SUBJECT: ${{ inputs.mode == 'eslint-fix' && inputs.eslint_commit_subject || inputs.format_commit_subject }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SOLUTIONS: ${{ steps.detect.outputs.solutions }}
+          PRETTIER_DIRS: ${{ steps.detect.outputs.prettier_dirs }}
+          ESLINT_DIRS: ${{ steps.detect.outputs.eslint_dirs }}
+          RUFF: ${{ steps.detect.outputs.ruff }}
+          GOFMT: ${{ steps.detect.outputs.gofmt }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -z "$(git status --porcelain)" ]; then
+            echo "No changes after $MODE; skipping PR."
+            exit 0
+          fi
+          bullets() { sed '/^$/d; s/^/  - `/; s/$/`/' <<< "$1"; }
+          body="${RUNNER_TEMP}/pr-body.md"
+          {
+            if [ "$MODE" = "eslint-fix" ]; then
+              echo "Automated \`eslint --fix\` in:"
+              bullets "$ESLINT_DIRS"
+              if [ -s "${RUNNER_TEMP}/eslint-remaining.md" ]; then
+                echo
+                cat "${RUNNER_TEMP}/eslint-remaining.md"
+              fi
+              echo
+              echo "eslint --fix can change code, not only layout, so review it as a code change."
+            else
+              echo "Automated formatting:"
+              if [ -n "$SOLUTIONS" ]; then
+                echo "- [CleanupCode](https://www.jetbrains.com/help/resharper/CleanupCode.html) (\`jb cleanupcode\`):"
+                bullets "$SOLUTIONS"
+              fi
+              if [ -n "$PRETTIER_DIRS" ]; then
+                echo "- [Prettier](https://prettier.io/) (\`prettier --write\`, tracked files outside \`.github/\` and \`.poutine.yml\`):"
+                bullets "$PRETTIER_DIRS"
+              fi
+              if [ "$RUFF" = "true" ]; then echo "- [Ruff](https://docs.astral.sh/ruff/formatter/) (\`ruff format\`)"; fi
+              if [ "$GOFMT" = "true" ]; then echo "- \`gofmt -w\`"; fi
+              echo
+              echo "Layout only. Once merged, run this workflow with mode \`blame-ignore-revs\` to add the commit to \`.git-blame-ignore-revs\`."
+            fi
+            echo
+            echo "Paths, solutions or formatters can be adjusted in \`.github/format.yml\` (see [_format-detect](https://github.com/hwinther/reusable-workflows/blob/main/.github/actions/_format-detect/scripts/detect.sh))."
+          } > "$body"
+          branch="format/${MODE}-${GITHUB_RUN_ID}"
+          git checkout -b "$branch"
+          git add -A
+          git commit -q -m "$COMMIT_SUBJECT"
+          git push origin "$branch"
+          base_branch="$GITHUB_REF_NAME"
+          if [ -z "$(git ls-remote origin "refs/heads/${base_branch}")" ]; then
+            base_branch="$DEFAULT_BRANCH"
+            echo "::warning::Trigger branch ${GITHUB_REF_NAME} is not on origin; opening PR against ${base_branch}."
+          fi
+          gh pr create --base "$base_branch" --head "$branch" --title "$COMMIT_SUBJECT" --body-file "$body"
+
+      - name: Nothing to format
+        if: steps.detect.outputs.any != 'true'
+        env:
+          MODE: ${{ inputs.mode }}
+        run: echo "No formatter applies to this repository in mode $MODE; nothing to do."
+
   sync-git-blame-ignore-revs:
     if: ${{ inputs.mode == 'blame-ignore-revs' }}
     runs-on: ubuntu-latest
@@ -243,6 +529,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMIT_SUBJECT: ${{ inputs.commit_subject }}
+          FORMAT_COMMIT_SUBJECT: ${{ inputs.format_commit_subject }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
@@ -255,7 +542,9 @@ jobs:
           git reset --hard "origin/${default_branch}"
 
           subject="$COMMIT_SUBJECT"
-          mapfile -t cleanup_shas < <(git log "$default_branch" --reverse --fixed-strings --grep="$subject" --pretty=format:%H || true)
+          # Commits from the single-formatter modes (commit_subject) and from mode=format; git log ORs
+          # several --grep patterns.
+          mapfile -t cleanup_shas < <(git log "$default_branch" --reverse --fixed-strings --grep="$subject" --grep="$FORMAT_COMMIT_SUBJECT" --pretty=format:%H || true)
           if [ "${#cleanup_shas[@]}" -eq 0 ] || [ -z "${cleanup_shas[0]:-}" ]; then
             echo "No commits on ${default_branch} match the formatter subject (merge the formatter PR first, or ensure the squash/rebase title still contains: ${subject})."
             exit 0
