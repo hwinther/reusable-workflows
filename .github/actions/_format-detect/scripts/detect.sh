@@ -39,8 +39,14 @@ config_get() { # config_get <yq expression>; empty when there is no config
     echo "::error file=$CONFIG::$CONFIG exists but yq is not installed to read it" >&2
     exit 1
   fi
-  yq -r "$1 // \"\"" "$CONFIG"
+  # Not `// ""`: yq's alternative operator also replaces false, which is what turns a formatter off.
+  yq -r "$1" "$CONFIG" | grep -vx 'null' || true
 }
+
+if [ -f "$CONFIG" ] && command -v yq > /dev/null 2>&1 && ! yq '.' "$CONFIG" > /dev/null; then
+  echo "::error file=$CONFIG::$CONFIG is not valid YAML" >&2
+  exit 1
+fi
 
 enabled() { # enabled <formatter>: false only when the config says false
   [ "$(config_get ".$1")" != "false" ]
