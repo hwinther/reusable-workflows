@@ -138,7 +138,7 @@ on:
         type: string
         default: '["playwright-report","test-results"]'
       coverage_paths_json:
-        description: "JSON array of paths (relative to playwright_working_directory) to upload as the e2e-coverage artifact. Empty array = skip."
+        description: "JSON array of paths (relative to playwright_working_directory) to upload as the e2e-coverage artifact. Their Cobertura totals are also shown under the test results in the job summary and PR comment. Empty array = skip."
         required: false
         type: string
         default: '[]'
@@ -544,6 +544,8 @@ jobs:
         env:
           REPORT_JSON: ${{ inputs.playwright_working_directory }}/${{ inputs.results_json_path }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          WD: ${{ inputs.playwright_working_directory }}
+          COVERAGE_PATHS_JSON: ${{ inputs.coverage_paths_json }}
         run: |
           set -euo pipefail
           out=/tmp/comment.md
@@ -579,6 +581,35 @@ jobs:
               echo
               echo "Duration: ${duration}"
               echo
+              # Browser coverage (coverage_paths_json): the Cobertura totals of the reports found there,
+              # the same files quality-e2e takes. Several reports are summed.
+              coverage_line=$(
+                echo "$COVERAGE_PATHS_JSON" | jq -r --arg wd "$WD" '.[] | "\($wd)/\(.)"' \
+                  | while IFS= read -r path; do
+                      [ -n "$path" ] && [ -e "$path" ] || continue
+                      find "$path" -type f -iname '*cobertura*.xml' -print0
+                    done \
+                  | python3 -c '
+          import sys, xml.etree.ElementTree as ET
+          lc = lv = bc = bv = 0
+          for path in filter(None, sys.stdin.read().split("\0")):
+              try:
+                  root = ET.parse(path).getroot()
+              except (ET.ParseError, OSError):
+                  continue
+              lc += int(root.get("lines-covered") or 0); lv += int(root.get("lines-valid") or 0)
+              bc += int(root.get("branches-covered") or 0); bv += int(root.get("branches-valid") or 0)
+          if lv:
+              out = f"Browser coverage: **{100 * lc / lv:.1f} %** lines ({lc}/{lv})"
+              if bv:
+                  out += f", {100 * bc / bv:.1f} % branches ({bc}/{bv})"
+              print(out)
+          '
+              ) || coverage_line=""
+              if [ -n "$coverage_line" ]; then
+                echo "$coverage_line"
+                echo
+              fi
               if [ "$failed" -gt 0 ] || [ "$flaky" -gt 0 ]; then
                 echo "<details open><summary><strong>Failed and flaky tests</strong></summary>"
                 echo
