@@ -102,6 +102,11 @@ on:
         required: false
         type: string
         default: "[]"
+      playwright_run_command:
+        description: "playwright-e2e.yml's playwright_run_command, e.g. `npx playwright test --project=chromium` for a suite that also lists browsers the runner image doesn't have (it carries chromium-headless-shell only)."
+        required: false
+        type: string
+        default: "npx playwright test"
       issue_label:
         description: "Label of the issue a failing scheduled run opens; the next green scheduled run closes it."
         required: false
@@ -267,6 +272,7 @@ jobs:
       pr_comment_enabled: false
       report_paths_json: ${{ inputs.report_paths_json }}
       coverage_paths_json: ${{ inputs.coverage_paths_json }}
+      playwright_run_command: ${{ inputs.playwright_run_command }}
     secrets:
       e2e_username: ${{ secrets.e2e_username }}
       e2e_password: ${{ secrets.e2e_password }}
