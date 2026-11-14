@@ -130,7 +130,7 @@ jobs:
       - name: Determine package version (GitVersion — consumer auto mode)
         id: gitversion
         if: (github.event_name == 'workflow_dispatch' && github.event.inputs.tag_name == 'auto') || (github.event_name == 'workflow_call' && inputs.tag_name == 'auto')
-        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2
+        uses: hwinther/reusable-workflows/.github/actions/gitversion@v2.39.0
 
       # Optional App token for the tag push (see `app_client_id`). Scoped to this repo and
       # Contents: write only.
