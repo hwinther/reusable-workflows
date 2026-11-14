@@ -542,9 +542,13 @@ jobs:
           git reset --hard "origin/${default_branch}"
 
           subject="$COMMIT_SUBJECT"
-          # Commits from the single-formatter modes (commit_subject) and from mode=format; git log ORs
-          # several --grep patterns.
-          mapfile -t cleanup_shas < <(git log "$default_branch" --reverse --fixed-strings --grep="$subject" --grep="$FORMAT_COMMIT_SUBJECT" --pretty=format:%H || true)
+          # Commits from the single-formatter modes (commit_subject) and from mode=format whose SUBJECT
+          # starts with one of them (a squash merge appends " (#123)"). Not `git log --grep`: that
+          # searches the whole message, and a squash body quoting the subject (a PR description
+          # mentioning "style: format code") would list an unrelated commit.
+          mapfile -t cleanup_shas < <(git log "$default_branch" --reverse --pretty=format:'%H%x09%s' \
+            | awk -F'\t' -v a="$subject" -v b="$FORMAT_COMMIT_SUBJECT" \
+                '(a != "" && index($2, a) == 1) || (b != "" && index($2, b) == 1) { print $1 }' || true)
           if [ "${#cleanup_shas[@]}" -eq 0 ] || [ -z "${cleanup_shas[0]:-}" ]; then
             echo "No commits on ${default_branch} match the formatter subject (merge the formatter PR first, or ensure the squash/rebase title still contains: ${subject})."
             exit 0
