@@ -69,13 +69,13 @@ on:
       format_commit_subject:
         required: false
         type: string
-        description: "Commit subject and PR title for mode=format. mode=blame-ignore-revs also lists the commits matching it."
-        default: "chore: format code"
+        description: "Commit subject and PR title for mode=format. Conventional Commits 'style' (layout only): labelled chore, a patch release. mode=blame-ignore-revs also lists the commits matching it."
+        default: "style: format code"
       eslint_commit_subject:
         required: false
         type: string
-        description: "Commit subject and PR title for mode=eslint-fix (not added to .git-blame-ignore-revs: eslint --fix changes code)."
-        default: "chore: eslint --fix"
+        description: "Commit subject and PR title for mode=eslint-fix. 'style' too, as eslint's fixes keep what the code does; not added to .git-blame-ignore-revs, as they still change code worth blaming."
+        default: "style: apply eslint --fix"
       node_version:
         required: false
         type: string
