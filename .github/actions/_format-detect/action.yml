@@ -1,0 +1,52 @@
+name: "Detect formatters"
+description: |
+  Internal helper for format-and-create-pr.yml (mode: format / eslint-fix). Looks at the checked-out
+  repository and reports which formatters apply and where: .NET solutions for jb cleanupcode, npm
+  projects with prettier or eslint, Ruff config, go.mod. An optional .github/format.yml in the
+  repository excludes paths, lists solutions or turns a formatter off; see scripts/detect.sh.
+
+inputs:
+  mode:
+    required: true
+    description: "format (cleanupcode, prettier, ruff, gofmt) or eslint-fix."
+  working_directory:
+    required: false
+    description: "Repository root."
+    default: "."
+
+outputs:
+  solutions:
+    description: "Solution files for jb cleanupcode, one per line."
+    value: ${{ steps.detect.outputs.solutions }}
+  prettier_dirs:
+    description: "Directories to run prettier in, one per line."
+    value: ${{ steps.detect.outputs.prettier_dirs }}
+  eslint_dirs:
+    description: "Directories to run eslint --fix in, one per line."
+    value: ${{ steps.detect.outputs.eslint_dirs }}
+  install_dirs:
+    description: "Directories to run npm ci in, one per line."
+    value: ${{ steps.detect.outputs.install_dirs }}
+  excludes:
+    description: "Paths from .github/format.yml's exclude list, one per line."
+    value: ${{ steps.detect.outputs.excludes }}
+  ruff:
+    description: "true when the repository configures Ruff."
+    value: ${{ steps.detect.outputs.ruff }}
+  gofmt:
+    description: "true when the repository has a go.mod."
+    value: ${{ steps.detect.outputs.gofmt }}
+  any:
+    description: "true when any formatter applies."
+    value: ${{ steps.detect.outputs.any }}
+
+runs:
+  using: composite
+  steps:
+    - name: Detect formatters
+      id: detect
+      shell: bash
+      working-directory: ${{ inputs.working_directory }}
+      env:
+        MODE: ${{ inputs.mode }}
+      run: bash "${GITHUB_ACTION_PATH}/scripts/detect.sh"
