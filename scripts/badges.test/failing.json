@@ -1,0 +1,157 @@
+{
+  "schemaVersion": 1,
+  "repository": "owner/app",
+  "commit": "0000000000000000000000000000000000000000",
+  "ref": "refs/heads/main",
+  "version": "0.34.1",
+  "createdAt": "2026-11-14T23:03:56Z",
+  "run": {
+    "id": "1",
+    "url": "https://github.com/owner/app/actions/runs/1"
+  },
+  "components": {
+    "dotnet": {
+      "kind": "unit",
+      "tests": {
+        "total": 51,
+        "passed": 51,
+        "failed": 0,
+        "skipped": 0
+      },
+      "coverage": {
+        "lines": {
+          "covered": 1145,
+          "total": 1324,
+          "percent": 86.48
+        },
+        "branches": {
+          "covered": 138,
+          "total": 220,
+          "percent": 62.73
+        }
+      },
+      "warnings": {
+        "restore": 0,
+        "build": 0,
+        "test": 0,
+        "total": 0
+      }
+    },
+    "e2e": {
+      "kind": "e2e",
+      "tests": {
+        "total": 25,
+        "passed": 25,
+        "failed": 0,
+        "skipped": 0
+      },
+      "coverage": {
+        "lines": {
+          "covered": 442,
+          "total": 517,
+          "percent": 85.49
+        },
+        "branches": {
+          "covered": 213,
+          "total": 340,
+          "percent": 62.65
+        }
+      }
+    },
+    "node": {
+      "kind": "unit",
+      "tests": {
+        "total": 233,
+        "passed": 233,
+        "failed": 0,
+        "skipped": 0
+      },
+      "coverage": {
+        "lines": {
+          "covered": 921,
+          "total": 939,
+          "percent": 98.08
+        },
+        "branches": {
+          "covered": 575,
+          "total": 615,
+          "percent": 93.5
+        }
+      },
+      "warnings": {
+        "typecheck": 0,
+        "build": 0,
+        "lint": 0,
+        "total": 0
+      }
+    },
+    "scan-api": {
+      "kind": "scan",
+      "vulnerabilities": {
+        "bySeverity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 18,
+          "low": 1,
+          "negligible": 1,
+          "unknown": 0
+        },
+        "total": 20,
+        "fixable": 6
+      }
+    },
+    "scan-frontend": {
+      "kind": "scan",
+      "vulnerabilities": {
+        "bySeverity": {
+          "critical": 0,
+          "high": 13,
+          "medium": 22,
+          "low": 9,
+          "negligible": 12,
+          "unknown": 5
+        },
+        "total": 61,
+        "fixable": 2
+      }
+    },
+    "scan-migrator": {
+      "kind": "scan",
+      "vulnerabilities": {
+        "bySeverity": {
+          "critical": 0,
+          "high": 0,
+          "medium": 18,
+          "low": 0,
+          "negligible": 1,
+          "unknown": 0
+        },
+        "total": 19,
+        "fixable": 6
+      }
+    }
+  },
+  "totals": {
+    "tests": {
+      "unit": {
+        "total": 284,
+        "passed": 281,
+        "failed": 3,
+        "skipped": 0
+      }
+    },
+    "warnings": 12,
+    "vulnerabilities": {
+      "bySeverity": {
+        "critical": 1,
+        "high": 13,
+        "medium": 58,
+        "low": 10,
+        "negligible": 14,
+        "unknown": 5
+      },
+      "total": 100,
+      "fixable": 14
+    }
+  }
+}

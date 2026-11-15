@@ -1,0 +1,14 @@
+{
+  "name": "badges",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SVG status badges for the badges action",
+  "scripts": {
+    "generate": "node generate-badges.mjs"
+  },
+  "dependencies": {
+    "badge-maker": "6.0.0",
+    "fast-xml-parser": "5.12.0"
+  }
+}

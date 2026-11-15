@@ -1,0 +1,179 @@
+name: "Publish status badges to GitHub Pages"
+
+# Renders the badges action's SVGs from the `quality-summary` artifact of quality-artifact.yml
+# and deploys them as the repo's GitHub Pages site: <pages-url>/badges/<name>.svg plus an index
+# page with README snippets. For repos without a Pages site of their own; a repo that already
+# builds one (e.g. ClutterStock) calls the badges action inside its own site build instead.
+#
+# Pages replaces the whole site on every deploy, so the badges already published are carried
+# forward: the job reads <pages-url>/badges/index.json, downloads every SVG it lists, and lays
+# this run's badges on top. A badge from another source (a nightly run, a ZAP scan) therefore
+# survives a deploy that only has the quality summary. Such sources upload their SVGs as an
+# artifact and pass it as `extra_badges_artifact`.
+#
+# Typical caller, after every E2E push run on main (success or failure, so failed tests show):
+#
+#   on:
+#     workflow_run:
+#       workflows: ["E2E"]
+#       types: [completed]
+#       branches: [main]
+#   jobs:
+#     badges:
+#       if: github.event.workflow_run.event == 'push' && contains(fromJSON('["success","failure"]'), github.event.workflow_run.conclusion)
+#       permissions:
+#         actions: read
+#         pages: write
+#         id-token: write
+#       uses: hwinther/reusable-workflows/.github/workflows/pages-badges.yml@v2
+#       with:
+#         quality_run_id: ${{ github.event.workflow_run.id }}
+#
+# Requires Settings > Pages > Source "GitHub Actions" and the github-pages environment allowing
+# the default branch (GitHub's default). A workflow_run run is on the default branch.
+
+on:
+  workflow_call:
+    inputs:
+      quality_run_id:
+        description: "Run whose `quality-summary` artifact to render. Empty = the calling run (call this after quality-artifact.yml). Without a summary only carried-forward and extra badges are published."
+        required: false
+        default: ""
+        type: string
+      extra_badges_artifact:
+        description: "Artifact of the calling run with more SVGs to publish (lowercase `<name>.svg`). They win over rendered and carried-forward badges."
+        required: false
+        default: ""
+        type: string
+      carry_forward:
+        description: "Keep the badges already published that this run does not render."
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      page_url:
+        description: "URL of the deployed Pages site."
+        value: ${{ jobs.deploy.outputs.page_url }}
+
+permissions: {}
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      pages: read
+    steps:
+      # Tolerated: a caller that only publishes extra badges has no summary, and carry-forward
+      # keeps the published summary badges.
+      - name: Download quality summary
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: quality-summary
+          path: ${{ runner.temp }}/quality-summary
+          run-id: ${{ inputs.quality_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Render badges
+        uses: hwinther/reusable-workflows/.github/actions/badges@v2
+        with:
+          quality_summary: ${{ runner.temp }}/quality-summary/summary.json
+          out: ${{ runner.temp }}/rendered
+
+      - name: Download extra badges
+        if: inputs.extra_badges_artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.extra_badges_artifact }}
+          path: ${{ runner.temp }}/extra
+
+      - name: Assemble site
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CARRY_FORWARD: ${{ inputs.carry_forward }}
+          RENDERED: ${{ runner.temp }}/rendered
+          EXTRA: ${{ runner.temp }}/extra
+          SITE: ${{ runner.temp }}/site
+        run: |
+          set -euo pipefail
+          mkdir -p "$SITE/badges"
+          valid='^[a-z0-9][a-z0-9-]*\.svg$'
+
+          base=$(gh api "repos/$REPO/pages" --jq .html_url 2>/dev/null || true)
+          base="${base%/}"
+          if [ "$CARRY_FORWARD" = "true" ] && [ -n "$base" ]; then
+            if curl -fsSL --retry 2 "$base/badges/index.json" -o "$RUNNER_TEMP/published.json"; then
+              jq -r '.badges[]? // empty' "$RUNNER_TEMP/published.json" | while read -r name; do
+                if [[ "$name" =~ $valid ]]; then
+                  curl -fsSL --retry 2 "$base/badges/$name" -o "$SITE/badges/$name" \
+                    || echo "::warning::Could not carry forward $name."
+                fi
+              done
+            else
+              echo "No badges/index.json at $base yet; nothing to carry forward."
+            fi
+          fi
+
+          for dir in "$RENDERED" "$EXTRA"; do
+            [ -d "$dir" ] || continue
+            find "$dir" -maxdepth 1 -type f -name '*.svg' | while read -r f; do
+              name=$(basename "$f")
+              if [[ "$name" =~ $valid ]]; then
+                cp "$f" "$SITE/badges/$name"
+              else
+                echo "::warning::Skipping $name (badge names are lowercase <name>.svg)."
+              fi
+            done
+          done
+
+          cd "$SITE/badges"
+          find . -maxdepth 1 -name '*.svg' -printf '%f\n' | sort \
+            | jq -R . | jq -s --arg repo "$REPO" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                '{repository: $repo, updatedAt: $at, badges: .}' > index.json
+          count=$(jq '.badges | length' index.json)
+
+          url="${base:-https://<pages-url>}"
+          {
+            echo '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">'
+            echo "<title>${REPO} badges</title>"
+            echo '<style>body{font:14px system-ui,sans-serif;margin:2rem auto;max-width:60rem;padding:0 1rem}td{padding:.4rem .8rem;vertical-align:middle}code{font-size:12px;word-break:break-all}</style>'
+            echo "<h1>${REPO} badges</h1><table>"
+            jq -r '.badges[]' index.json | while read -r name; do
+              echo "<tr><td><img src=\"badges/${name}\" alt=\"${name%.svg}\"></td><td><code>![${name%.svg}](${url}/badges/${name})</code></td></tr>"
+            done
+            echo '</table>'
+          } > "$SITE/index.html"
+
+          {
+            echo "## Badges ($count)"
+            echo
+            jq -r --arg url "$url" '.badges[] | "- ![\(.)](\($url)/badges/\(.)) `\(.)`"' index.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+  deploy:
+    needs: render
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages-badges-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      pages: write
+      id-token: write
+    outputs:
+      page_url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

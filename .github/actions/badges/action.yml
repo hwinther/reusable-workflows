@@ -1,0 +1,123 @@
+name: "Render status badges"
+description: |
+  Public composite. Renders SVG status badges (shields.io look, drawn locally with badge-maker, no
+  network at render time) into a directory, for a GitHub Pages site or any other static host.
+
+  Every input is optional; a badge is rendered only when its input is set and the file exists, so
+  one call serves runs that have only some of the data. The main source is `quality_summary`, the
+  summary.json of quality-artifact.yml (the `quality-summary` workflow artifact):
+    tests-unit.svg, tests-e2e.svg       passed count, red with the failed count when any failed
+    warnings.svg                        restore/build/test/typecheck/lint warnings together
+    vulnerabilities.svg                 Grype matches across the scanned images, `<C>C <H>H <M>M <L>L`
+    coverage-<stack>-branches.svg       branch coverage per unit component (dotnet = backend,
+                                        node = frontend, others keep their component name)
+    coverage-combined.svg               unit + e2e line coverage merged per file
+  The other inputs give coverage-backend/-frontend/-e2e.svg, lighthouse-<category>.svg,
+  nightly-e2e.svg and security-zap.svg. Filenames are stable, so README links never change.
+  docs/badges.md lists colours and a README snippet. pages-badges.yml wraps this action into a
+  Pages deploy for repos without their own Pages site.
+
+  Needs Node.js >= 20 on PATH (preinstalled on GitHub-hosted runners).
+
+inputs:
+  out:
+    required: false
+    description: "Output directory for the SVGs."
+    default: badges
+  quality_summary:
+    required: false
+    description: "summary.json of the quality artifact."
+    default: ""
+  backend_summary_json:
+    required: false
+    description: "ReportGenerator JsonSummary (Summary.json) for coverage-backend.svg. Wins over backend_cobertura."
+    default: ""
+  backend_cobertura:
+    required: false
+    description: "Cobertura XML for coverage-backend.svg; `**/<name>` globs sum every shard."
+    default: ""
+  frontend_summary_json:
+    required: false
+    description: "ReportGenerator JsonSummary for coverage-frontend.svg. Wins over frontend_cobertura."
+    default: ""
+  frontend_cobertura:
+    required: false
+    description: "Cobertura XML (e.g. Vitest cobertura-coverage.xml) for coverage-frontend.svg."
+    default: ""
+  e2e_cobertura:
+    required: false
+    description: "Cobertura XML of e2e browser coverage (monocart V8) for coverage-e2e.svg."
+    default: ""
+  lighthouse_json:
+    required: false
+    description: "Lighthouse JSON report for lighthouse-{performance,accessibility,best-practices,seo}.svg."
+    default: ""
+  nightly_status:
+    required: false
+    description: "`success`, `failure` or `cancelled` for nightly-e2e.svg (anything else is grey)."
+    default: ""
+  zap_json:
+    required: false
+    description: "OWASP ZAP JSON report for security-zap.svg."
+    default: ""
+
+outputs:
+  out:
+    description: "Absolute path of the output directory."
+    value: ${{ steps.render.outputs.out }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install renderer
+      shell: bash
+      working-directory: ${{ github.action_path }}/scripts
+      run: npm ci --ignore-scripts --no-audit --no-fund
+
+    - name: Render badges
+      id: render
+      shell: bash
+      env:
+        SCRIPT: ${{ github.action_path }}/scripts/generate-badges.mjs
+        OUT: ${{ inputs.out }}
+        QUALITY_SUMMARY: ${{ inputs.quality_summary }}
+        BACKEND_SUMMARY_JSON: ${{ inputs.backend_summary_json }}
+        BACKEND_COBERTURA: ${{ inputs.backend_cobertura }}
+        FRONTEND_SUMMARY_JSON: ${{ inputs.frontend_summary_json }}
+        FRONTEND_COBERTURA: ${{ inputs.frontend_cobertura }}
+        E2E_COBERTURA: ${{ inputs.e2e_cobertura }}
+        LIGHTHOUSE_JSON: ${{ inputs.lighthouse_json }}
+        NIGHTLY_STATUS: ${{ inputs.nightly_status }}
+        ZAP_JSON: ${{ inputs.zap_json }}
+      run: |
+        set -euo pipefail
+        args=()
+        # A file input counts only when the file exists; a glob is passed on as is.
+        add_file() {
+          local flag="$1" value="$2"
+          [ -n "$value" ] || return 0
+          if [[ "$value" == *"*"* ]] || [ -f "$value" ]; then
+            args+=("--$flag" "$value")
+          else
+            echo "::notice::badges: $value not found, skipping --$flag."
+          fi
+        }
+        add_file quality-summary-json "$QUALITY_SUMMARY"
+        add_file backend-summary-json "$BACKEND_SUMMARY_JSON"
+        [ -n "$BACKEND_SUMMARY_JSON" ] && [ -f "$BACKEND_SUMMARY_JSON" ] || add_file backend-cobertura "$BACKEND_COBERTURA"
+        add_file frontend-summary-json "$FRONTEND_SUMMARY_JSON"
+        [ -n "$FRONTEND_SUMMARY_JSON" ] && [ -f "$FRONTEND_SUMMARY_JSON" ] || add_file frontend-cobertura "$FRONTEND_COBERTURA"
+        add_file e2e-cobertura "$E2E_COBERTURA"
+        add_file lighthouse-json "$LIGHTHOUSE_JSON"
+        add_file zap-json "$ZAP_JSON"
+        if [ -n "$NIGHTLY_STATUS" ]; then
+          args+=(--nightly-status "$NIGHTLY_STATUS")
+        fi
+        mkdir -p "$OUT"
+        out=$(cd "$OUT" && pwd)
+        echo "out=$out" >> "$GITHUB_OUTPUT"
+        if [ "${#args[@]}" -eq 0 ]; then
+          echo "::notice::badges: no inputs, nothing rendered."
+          exit 0
+        fi
+        node "$SCRIPT" "${args[@]}" --out "$out"
