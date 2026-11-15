@@ -80,7 +80,8 @@ fi
 provided="$WORK/provided"
 : > "$provided"
 if [ -n "$LAYERS_FILE" ] && [ -f "$LAYERS_FILE" ]; then
-  grep -v '^[[:space:]]*$' "$LAYERS_FILE" | awk -F= '{ print ($NF == "." ? 0 : 1) "\t" $0 }' \
+  # An empty file (only a badges layer) is fine: grep finds nothing and exits 1.
+  { grep -v '^[[:space:]]*$' "$LAYERS_FILE" || true; } | awk -F= '{ print ($NF == "." ? 0 : 1) "\t" $0 }' \
     | sort -s -k1,1n | cut -f2- > "$WORK/layers"
   while IFS= read -r line; do
     src="${line%=*}"

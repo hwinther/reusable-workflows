@@ -93,6 +93,15 @@ assert_jq "$WORK/site4/site-manifest.json" '.layers | keys == ["reports/coverage
 assert_file "$WORK/site4/index.html"
 if grep -q 'href="reports/coverage/"' "$WORK/site4/index.html"; then ok "generated index links the layer"; else bad "generated index"; fi
 
+echo "only badges: an empty layers file (what pages.yml writes for a lone badges line)"
+: > "$WORK/layers-empty"
+if assemble "$WORK/site7" "$WORK/layers-empty" "$WORK/src/badges-a" "$(file_url "$WORK/site2")" true; then ok "assemble"; else bad "assemble: $(cat "$WORK/last.log")"; fi
+assert_file "$WORK/site7/badges/tests-unit.svg" '<svg>tests</svg>'
+assert_file "$WORK/site7/badges/nightly-e2e.svg" '<svg>nightly</svg>'
+assert_file "$WORK/site7/index.html" home
+if assemble "$WORK/site8" "$WORK/layers-empty" "$WORK/src/badges-a" "" true; then ok "first deploy, nothing published yet"; else bad "first deploy: $(cat "$WORK/last.log")"; fi
+assert_jq "$WORK/site8/site-manifest.json" '.layers | keys == ["badges"]' "badges only"
+
 echo "unsafe paths"
 printf '%s\n' "$WORK/src/html=../escape" > "$WORK/layers5"
 if assemble "$WORK/site5" "$WORK/layers5" "" "" true; then bad "../ target accepted"; else ok "../ target rejected"; fi
