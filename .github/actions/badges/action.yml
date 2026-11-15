@@ -14,8 +14,8 @@ description: |
     coverage-combined.svg               unit + e2e line coverage merged per file
   The other inputs give coverage-backend/-frontend/-e2e.svg, lighthouse-<category>.svg,
   nightly-e2e.svg and security-zap.svg. Filenames are stable, so README links never change.
-  docs/badges.md lists colours and a README snippet. pages-badges.yml wraps this action into a
-  Pages deploy for repos without their own Pages site.
+  docs/badges.md lists colours and a README snippet. pages.yml uses this action for its
+  `badges` layer.
 
   Needs Node.js >= 20 on PATH (preinstalled on GitHub-hosted runners).
 

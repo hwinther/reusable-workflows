@@ -1,0 +1,41 @@
+name: "Assemble a Pages site (internal)"
+description: |
+  Internal composite behind pages.yml. Assembles a GitHub Pages site from layers (directories
+  mapped to site paths), merges SVGs into the badges layer, and carries forward the layers and
+  badges already published, using the site-manifest.json every deploy writes at the site root.
+  scripts/assemble.sh documents the rules; tests in scripts/pages-site.test.sh.
+
+inputs:
+  site:
+    required: true
+    description: "Output directory."
+  layers_file:
+    required: false
+    description: "File with one `<source-dir>=<site-path>` per line (`.` = site root, `badges` = merge SVGs into badges/)."
+    default: ""
+  badges_dirs:
+    required: false
+    description: "Directories of new badge SVGs, one per line; later wins."
+    default: ""
+  base_url:
+    required: false
+    description: "URL of the live site to carry forward from. Empty = no carry-forward."
+    default: ""
+  carry_forward:
+    required: false
+    description: "Carry forward the published layers this run does not provide, and the published badges."
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Assemble site
+      shell: bash
+      env:
+        SITE: ${{ inputs.site }}
+        LAYERS_FILE: ${{ inputs.layers_file }}
+        BADGES_DIRS: ${{ inputs.badges_dirs }}
+        BASE_URL: ${{ inputs.base_url }}
+        CARRY_FORWARD: ${{ inputs.carry_forward }}
+        REPO: ${{ github.repository }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/assemble.sh"

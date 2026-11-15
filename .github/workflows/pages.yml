@@ -1,0 +1,189 @@
+name: "Publish to GitHub Pages"
+
+# Builds the repo's GitHub Pages site from layers and deploys it. One `layers` input says what goes
+# where; there are no per-feature switches. Each line is `<kind>[:<source>][=<site-path>]`:
+#
+#   badges[:<run-id>]                 status badges (badges action) from the `quality-summary`
+#                                     artifact of that run (default: the calling run), into badges/
+#   dir:<repo-path>=<site-path>       a directory of the repo at the calling ref, e.g. plain HTML
+#   artifact:<name>=<site-path>       an artifact of the calling run, e.g. a coverage report
+#
+# `<site-path>` is relative; `.` is the site root. Site path `badges` merges a directory's SVGs into
+# the badges layer (lowercase `<name>.svg`), so another workflow can add its own badges. Lines
+# starting with `#` are ignored.
+#
+# Pages replaces the whole site on each deploy, so every deploy writes site-manifest.json (the
+# files of each layer). A layer this run provides replaces the published one; a layer it does not
+# mention is carried forward from the live site; badges merge per file. So several workflows can
+# each publish their own layers: E2E the badges, a nightly run its reports, a docs workflow the HTML.
+# `carry_forward: false` publishes exactly this run's layers and drops the rest.
+#
+# Examples:
+#
+#   # Badges after every E2E push run on main (success or failure, so failed tests show):
+#   on:
+#     workflow_run: { workflows: ["E2E"], types: [completed], branches: [main] }
+#   jobs:
+#     pages:
+#       if: github.event.workflow_run.event == 'push' && contains(fromJSON('["success","failure"]'), github.event.workflow_run.conclusion)
+#       permissions: { actions: read, contents: read, pages: write, id-token: write }
+#       uses: hwinther/reusable-workflows/.github/workflows/pages.yml@v2
+#       with:
+#         layers: badges:${{ github.event.workflow_run.id }}
+#
+#   # Plain HTML from the repo on every push to main:
+#   on: { push: { branches: [main], paths: ["docs/site/**"] } }
+#   jobs:
+#     pages:
+#       permissions: { actions: read, contents: read, pages: write, id-token: write }
+#       uses: hwinther/reusable-workflows/.github/workflows/pages.yml@v2
+#       with:
+#         layers: dir:docs/site=.
+#
+# Requires Settings > Pages > Source "GitHub Actions" and the github-pages environment allowing the
+# calling branch (GitHub allows the default branch; a workflow_run run is on the default branch).
+# docs/pages.md has the details and the badges.
+
+on:
+  workflow_call:
+    inputs:
+      layers:
+        description: "What goes into the site, one `<kind>[:<source>][=<site-path>]` per line (see the header)."
+        required: true
+        type: string
+      carry_forward:
+        description: "Keep the published layers this run does not mention, and the published badges."
+        required: false
+        default: true
+        type: boolean
+    outputs:
+      page_url:
+        description: "URL of the deployed Pages site."
+        value: ${{ jobs.deploy.outputs.page_url }}
+
+permissions: {}
+
+jobs:
+  # One job, so reading the published manifest and deploying sit inside one concurrency slot: two
+  # workflows publishing different layers cannot overwrite each other's update. GitHub keeps one
+  # pending run per group, so a third run arriving while one waits replaces the waiting one; its
+  # layers come with that workflow's next run.
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    outputs:
+      page_url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Checkout
+        if: contains(inputs.layers, 'dir:')
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: repo
+
+      - name: Resolve layers
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          LAYERS: ${{ inputs.layers }}
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/pages-layers"
+          mkdir -p "$work"
+          layers_file="$RUNNER_TEMP/pages-layers.txt"
+          : > "$layers_file"
+          quality=""
+          n=0
+          while IFS= read -r raw; do
+            line="${raw%%#*}"
+            line="${line#"${line%%[![:space:]]*}"}"
+            line="${line%"${line##*[![:space:]]}"}"
+            [ -n "$line" ] || continue
+            n=$((n + 1))
+            spec="${line%%=*}"
+            target=""
+            [[ "$line" == *=* ]] && target="${line#*=}"
+            kind="${spec%%:*}"
+            source=""
+            [[ "$spec" == *:* ]] && source="${spec#*:}"
+            case "$kind" in
+              badges)
+                run="${source:-$RUN_ID}"
+                if [[ ! "$run" =~ ^[0-9]+$ ]]; then
+                  echo "::error::badges: '$run' is not a run id."; exit 1
+                fi
+                if [ -n "$target" ] && [ "$target" != "badges" ]; then
+                  echo "::error::badges always go to badges/, drop '=$target'."; exit 1
+                fi
+                # Tolerated: without a summary the published summary badges are carried forward.
+                if gh run download "$run" -R "$REPO" -n quality-summary -D "$work/quality-summary"; then
+                  quality="$work/quality-summary/summary.json"
+                else
+                  echo "::warning::Run $run has no quality-summary artifact; keeping the published summary badges."
+                fi
+                ;;
+              dir)
+                [ -n "$source" ] && [ -n "$target" ] || { echo "::error::'$line': use dir:<repo-path>=<site-path>."; exit 1; }
+                src=$(realpath -m "repo/$source")
+                case "$src/" in
+                  "$(realpath repo)"/*) ;;
+                  *) echo "::error::'$source' is outside the repository."; exit 1 ;;
+                esac
+                [ -d "$src" ] || { echo "::error::'$source' is not a directory in the repository."; exit 1; }
+                echo "$src=$target" >> "$layers_file"
+                ;;
+              artifact)
+                [ -n "$source" ] && [ -n "$target" ] || { echo "::error::'$line': use artifact:<name>=<site-path>."; exit 1; }
+                dest="$work/artifact-$n"
+                gh run download "$RUN_ID" -R "$REPO" -n "$source" -D "$dest"
+                echo "$dest=$target" >> "$layers_file"
+                ;;
+              *)
+                echo "::error::Unknown layer kind '$kind' in '$line' (badges, dir, artifact)."; exit 1
+                ;;
+            esac
+          done <<< "$LAYERS"
+          base=$(gh api "repos/$REPO/pages" --jq .html_url 2>/dev/null || true)
+          {
+            echo "layers_file=$layers_file"
+            echo "quality_summary=$quality"
+            echo "base_url=${base%/}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Render badges
+        if: steps.resolve.outputs.quality_summary != ''
+        uses: hwinther/reusable-workflows/.github/actions/badges@v2
+        with:
+          quality_summary: ${{ steps.resolve.outputs.quality_summary }}
+          out: ${{ runner.temp }}/pages-badges
+
+      - name: Assemble site
+        uses: hwinther/reusable-workflows/.github/actions/_pages-site@v2
+        with:
+          site: ${{ runner.temp }}/site
+          layers_file: ${{ steps.resolve.outputs.layers_file }}
+          badges_dirs: ${{ steps.resolve.outputs.quality_summary != '' && format('{0}/pages-badges', runner.temp) || '' }}
+          base_url: ${{ steps.resolve.outputs.base_url }}
+          carry_forward: ${{ inputs.carry_forward }}
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

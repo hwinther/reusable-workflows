@@ -39,6 +39,7 @@ bash scripts/format.test.sh         # _format-output/scripts/format.sh — golde
 bash scripts/grype-summary.test.sh  # _grype-summary/scripts/parse.sh against sample SARIF in scripts/grype-summary.test/
 bash scripts/manifests.test.sh      # manifests/ scripts; stubs kubeconform + dyff, needs kubectl, helm, python3, yq
 bash scripts/badges.test.sh         # badges/ renderer against sample quality summaries; needs node + npm
+bash scripts/pages-site.test.sh     # _pages-site/scripts/assemble.sh: layers, badge merge, carry-forward via file://
 
 # Workflow lint (same as lint-workflows.yml)
 yamllint -c .yamllint.yml .github
@@ -77,7 +78,7 @@ Beyond these script tests, the workflows themselves are only exercised in consum
   - `image-push.yml` — downloads the image artifact from `build-and-scan-*.yml`, asserts byte-identity with the build-time digest, then runs `_push-image-with-signatures`. Caller is responsible for the `if:` gate (PR label, branch, etc.).
   - `build-image-docker.yml` / `build-image-dotnet.yml` + `scan-image.yml` — the **split** PR pipeline: build only, then scan in its own workflow so it runs in parallel with e2e (a caller's `needs:` waits for every job of a called workflow). Output `image` is either a staging `repo@digest` or an artifact name; `scan-image.yml`, `playwright-e2e.yml` and `image-push.yml` accept both.
   - `npm-deploy.yml` — publishes to GitHub Packages; uses `--tag alpha` when `is_alpha=true`.
-  - Also: `nuget-deploy.yml`, `pypi-deploy.yml` (builds only; caller publishes via OIDC), `package-deploy.yml` (layer-2 fan-out over the per-ecosystem deploys with one shared version), `prune-{ghcr,npm,nuget}.yml`, `gitops-preview-{upsert,teardown}.yml` (per-PR overlays in a GitOps repo), `quality-artifact.yml`, `pages-badges.yml` (badges action + GitHub Pages deploy with carry-forward). Each file's header comment explains its contract.
+  - Also: `nuget-deploy.yml`, `pypi-deploy.yml` (builds only; caller publishes via OIDC), `package-deploy.yml` (layer-2 fan-out over the per-ecosystem deploys with one shared version), `prune-{ghcr,npm,nuget}.yml`, `gitops-preview-{upsert,teardown}.yml` (per-PR overlays in a GitOps repo), `quality-artifact.yml`, `pages.yml` (Pages site from `badges`/`dir:`/`artifact:` layers; `_pages-site/` assembles it and carries forward unmentioned layers via `site-manifest.json` — see `docs/pages.md`). Each file's header comment explains its contract.
   - `nightly-preview-e2e.yml` — resolve (`manifests:main` digest + runner image from the e2e lock file) → clear the leftover `nightly` overlay and wait for the host to go → `gitops-preview-upsert.yml` → `playwright-e2e.yml` against `https://<host>` → teardown → one issue labelled `nightly-preview` while scheduled runs fail. Caller owns the cron and passes the GitOps App and e2e-user secrets.
   - `gitversion.yml` — thin reusable wrapper around the `gitversion` composite action.
   - `tag-and-release.yml` — manual or workflow_call; creates `vX.Y.Z` tag (+ floating `vX.Y` and `vX` when `floating_tags=true`) and a GitHub Release. Refuses to tag if there are no commits since the latest semver tag.
