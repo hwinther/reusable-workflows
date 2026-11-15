@@ -46,3 +46,7 @@ jobs:
         run: bash ./scripts/manifests.test.sh
       - name: Run _format-detect tests
         run: bash ./scripts/format-detect.test.sh
+      - name: Run badges tests
+        run: bash ./scripts/badges.test.sh
+      - name: Run _pages-site tests
+        run: bash ./scripts/pages-site.test.sh
