@@ -16,7 +16,7 @@ history with every run.
 | `coverage-backend.svg`, `coverage-frontend.svg` | `quality_summary` (line coverage of the `dotnet` and `node` components), or `backend_*`/`frontend_*` | percent | coverage scale |
 | `coverage-backend-branches.svg`, `coverage-frontend-branches.svg` | `quality_summary` (branch coverage) | percent | coverage scale |
 | `coverage-combined.svg` | `quality_summary` (`totals.coverage.combined`: unit and e2e lines merged per file) | percent | coverage scale |
-| `coverage-e2e.svg` | `e2e_cobertura` | percent | coverage scale |
+| `coverage-e2e.svg`, `coverage-e2e-branches.svg` | `quality_summary` (the `e2e` component's browser coverage), or `e2e_cobertura` | percent | coverage scale |
 | `lighthouse-{performance,accessibility,best-practices,seo}.svg` | `lighthouse_json` | score | coverage scale |
 | `nightly-e2e.svg` | `nightly_status` | `success`, `failure`, `cancelled` | brightgreen, red, grey |
 | `security-zap.svg` | `zap_json` | `0H 2M 5L`, or `clean` | red on a high, orange on a medium, yellow on a low |

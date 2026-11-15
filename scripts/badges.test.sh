@@ -72,7 +72,8 @@ assert_badge green coverage-backend-branches "backend branch coverage: 62.7%" "$
 assert_badge green coverage-frontend "frontend coverage: 98.1%" "$BRIGHTGREEN"
 assert_badge green coverage-frontend-branches "frontend branch coverage: 93.5%" "$BRIGHTGREEN"
 assert_badge green coverage-combined "unit+e2e coverage: 95.0%" "$BRIGHTGREEN"
-assert_absent green coverage-e2e
+assert_badge green coverage-e2e "e2e coverage: 85.5%" "$GREEN"
+assert_badge green coverage-e2e-branches "e2e branch coverage: 62.6%" "$YELLOW"
 
 echo "failing summary"
 render failing --quality-summary-json "$SAMPLES_DIR/failing.json"

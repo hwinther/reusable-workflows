@@ -296,7 +296,8 @@ async function emitQualitySummary(outDir, summary, generated) {
   }
 
   for (const [name, component] of Object.entries(summary?.components ?? {})) {
-    if (component?.kind !== "unit") continue;
+    // Unit stacks and the e2e browser coverage (coverage-e2e.svg; e2e_cobertura wins over it).
+    if (component?.kind !== "unit" && component?.kind !== "e2e") continue;
     const label = COMPONENT_NAMES[name] ?? name;
     const lines = component?.coverage?.lines?.percent;
     if (typeof lines === "number") {

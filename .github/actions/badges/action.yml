@@ -9,8 +9,9 @@ description: |
     tests-unit.svg, tests-e2e.svg       passed count, red with the failed count when any failed
     warnings.svg                        restore/build/test/typecheck/lint warnings together
     vulnerabilities.svg                 Grype matches across the scanned images, `<C>C <H>H <M>M <L>L`
-    coverage-<stack>-branches.svg       branch coverage per unit component (dotnet = backend,
-                                        node = frontend, others keep their component name)
+    coverage-<stack>.svg,               line and branch coverage per unit component (dotnet =
+    coverage-<stack>-branches.svg       backend, node = frontend, others keep their name) and of
+                                        the e2e component (coverage-e2e.svg)
     coverage-combined.svg               unit + e2e line coverage merged per file
   The other inputs give coverage-backend/-frontend/-e2e.svg, lighthouse-<category>.svg,
   nightly-e2e.svg and security-zap.svg. Filenames are stable, so README links never change.
