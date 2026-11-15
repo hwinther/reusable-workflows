@@ -60,6 +60,21 @@ jobs:
       artifact: ${{ steps.publish.outputs.artifact }}
       digest: ${{ steps.publish.outputs.digest }}
     steps:
+      # download-artifact extracts a lone matching artifact straight into `path`, without the
+      # directory per artifact the summary reads its components from: a repo whose only report is
+      # quality-go got an empty summary. The marker makes the pattern always match two or more.
+      # It holds no reports, so the summary skips it.
+      - name: Write download marker
+        run: echo "Makes quality-* match at least two artifacts; see quality-artifact.yml." > "$RUNNER_TEMP/quality-marker.txt"
+
+      - name: Upload download marker
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quality-marker
+          path: ${{ runner.temp }}/quality-marker.txt
+          retention-days: 1
+          overwrite: true
+
       - name: Download quality-* artifacts
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
