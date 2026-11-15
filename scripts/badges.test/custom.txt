@@ -1,0 +1,5 @@
+# package versions
+pkg-pve-manager|pve-manager|9.2.28-wsh2
+
+distro|debian|trixie|#a80030
+warnings|warnings|overridden|green

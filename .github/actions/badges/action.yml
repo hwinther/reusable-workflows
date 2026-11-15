@@ -57,6 +57,10 @@ inputs:
     required: false
     description: "`success`, `failure` or `cancelled` for nightly-e2e.svg (anything else is grey)."
     default: ""
+  custom:
+    required: false
+    description: "Badges of your own, one per line: `<name>|<label>|<message>[|<color>]` (colour: a badge-maker name or hex, default blue). Rendered last, so one can replace a built-in badge."
+    default: ""
   zap_json:
     required: false
     description: "OWASP ZAP JSON report for security-zap.svg."
@@ -90,6 +94,7 @@ runs:
         LIGHTHOUSE_JSON: ${{ inputs.lighthouse_json }}
         NIGHTLY_STATUS: ${{ inputs.nightly_status }}
         ZAP_JSON: ${{ inputs.zap_json }}
+        CUSTOM: ${{ inputs.custom }}
       run: |
         set -euo pipefail
         args=()
@@ -111,6 +116,11 @@ runs:
         add_file e2e-cobertura "$E2E_COBERTURA"
         add_file lighthouse-json "$LIGHTHOUSE_JSON"
         add_file zap-json "$ZAP_JSON"
+        if [ -n "$CUSTOM" ]; then
+          custom_file="$RUNNER_TEMP/badges-custom-$$.txt"
+          printf '%s\n' "$CUSTOM" > "$custom_file"
+          args+=(--custom-file "$custom_file")
+        fi
         if [ -n "$NIGHTLY_STATUS" ]; then
           args+=(--nightly-status "$NIGHTLY_STATUS")
         fi
