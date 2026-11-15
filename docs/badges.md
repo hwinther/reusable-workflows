@@ -19,6 +19,7 @@ history with every run.
 | `coverage-e2e.svg`, `coverage-e2e-branches.svg` | `quality_summary` (the `e2e` component's browser coverage), or `e2e_cobertura` | percent | coverage scale |
 | `lighthouse-{performance,accessibility,best-practices,seo}.svg` | `lighthouse_json` | score | coverage scale |
 | `nightly-e2e.svg` | `nightly_status` | `success`, `failure`, `cancelled` | brightgreen, red, grey |
+| `<name>.svg` | `custom` (`<name>\|<label>\|<message>[\|<color>]` per line) | your message | your colour, default blue |
 | `security-zap.svg` | `zap_json` | `0H 2M 5L`, or `clean` | red on a high, orange on a medium, yellow on a low |
 
 Unit components other than `dotnet` and `node` (`python`, `go`) keep their component name, e.g.

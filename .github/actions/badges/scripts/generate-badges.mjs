@@ -22,6 +22,7 @@ const FLAGS = [
   "nightly-status",
   "zap-json",
   "quality-summary-json",
+  "custom-file",
   "out",
 ];
 
@@ -323,6 +324,36 @@ async function emitQualitySummary(outDir, summary, generated) {
   }
 }
 
+// --- custom ------------------------------------------------------------------
+
+// One badge per line: `<name>|<label>|<message>[|<color>]`. Blank lines and `#` comments are
+// skipped. The name becomes <name>.svg; the colour is a badge-maker name or a hex code.
+const CUSTOM_NAME = /^[a-z0-9][a-z0-9-]*$/;
+const CUSTOM_COLOR =
+  /^(brightgreen|green|yellowgreen|yellow|orange|red|blue|lightgrey|grey|gray|success|important|critical|informational|inactive|#?[0-9a-fA-F]{3}|#?[0-9a-fA-F]{6})$/;
+
+async function readCustomBadges(file) {
+  const badges = [];
+  const lines = (await readFile(file, "utf8")).split(/\r?\n/);
+  lines.forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) return;
+    const [name, label, message, color = "blue", ...rest] = line.split("|").map((p) => p.trim());
+    const where = `${file}:${i + 1}`;
+    if (rest.length || message === undefined) {
+      throw new Error(`${where}: expected <name>|<label>|<message>[|<color>]`);
+    }
+    if (!CUSTOM_NAME.test(name)) {
+      throw new Error(`${where}: badge name '${name}' must be lowercase letters, digits and dashes`);
+    }
+    if (!CUSTOM_COLOR.test(color)) {
+      throw new Error(`${where}: unknown colour '${color}'`);
+    }
+    badges.push({ name, label, message, color });
+  });
+  return badges;
+}
+
 // --- emit -------------------------------------------------------------------
 
 function svgCoverage(label, pct) {
@@ -417,6 +448,18 @@ async function main() {
       }),
     );
     generated["security-zap"] = f;
+  }
+
+  // Last, so a custom badge can replace any of the above on purpose.
+  if (args["custom-file"]) {
+    for (const badge of await readCustomBadges(args["custom-file"])) {
+      await writeSvg(
+        outDir,
+        badge.name,
+        makeBadge({ label: badge.label, message: badge.message, color: badge.color, style: "flat" }),
+      );
+      generated[badge.name] = badge.message;
+    }
   }
 
   process.stdout.write(JSON.stringify({ outDir, generated }, null, 2) + "\n");

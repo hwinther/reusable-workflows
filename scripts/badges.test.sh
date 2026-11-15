@@ -89,6 +89,17 @@ render override --quality-summary-json "$SAMPLES_DIR/summary.json" --nightly-sta
 assert_badge override coverage-frontend "frontend coverage: 40.0%" "$RED"
 assert_badge override nightly-e2e "nightly e2e: failure" "$RED"
 
+echo "custom badges"
+render custom --quality-summary-json "$SAMPLES_DIR/summary.json" --custom-file "$SAMPLES_DIR/custom.txt"
+assert_badge custom pkg-pve-manager "pve-manager: 9.2.28-wsh2" "#007ec6"
+assert_badge custom distro "debian: trixie" "#a80030"
+assert_badge custom warnings "warnings: overridden" "$GREEN"
+if node "$ACTION_DIR/generate-badges.mjs" --custom-file "$SAMPLES_DIR/custom-bad.txt" --out "$WORK_ROOT/custom-bad" > /dev/null 2>&1; then
+  echo "  ❌ invalid custom badge name accepted"; FAIL=$((FAIL+1))
+else
+  echo "  ✅ invalid custom badge name rejected"; PASS=$((PASS+1))
+fi
+
 echo
 echo "badges tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
