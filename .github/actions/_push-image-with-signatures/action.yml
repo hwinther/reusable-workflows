@@ -211,6 +211,8 @@ runs:
         subject-name: ${{ inputs.container_registry }}/${{ inputs.repository }}/${{ inputs.container_image_name_postfix }}
         subject-digest: ${{ steps.resolve-digest.outputs.digest }}
         push-to-registry: true
+        # Storage records (org "linked artifacts") need artifact-metadata: write, which no caller grants; skip them.
+        create-storage-record: false
 
     # Kyverno 1.17 resolves Cosign attestations like Cosign v2 (sha256-….att manifest tags). Cosign v3+ often publishes via OCI referrers only → 404 on that path while local cosign v3 verify still works via /referrers/.
     - name: Install Cosign
