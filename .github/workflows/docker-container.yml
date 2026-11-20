@@ -29,6 +29,11 @@ on:
         required: false
         type: string
         default: "ubuntu-latest"
+      workflow_artifacts_enabled:
+        description: "Upload the SBOMs and Grype JSON as workflow artifacts. Set to false for a private repo whose Actions storage quota is used up; signing, attestations and the job summary still work from the local files."
+        required: false
+        type: boolean
+        default: true
       platforms:
         description: "Comma-separated buildx platforms (e.g. 'linux/amd64' or 'linux/amd64,linux/arm64'). Multi-value triggers QEMU setup and a manifest-list push."
         required: false
@@ -254,6 +259,7 @@ jobs:
           grype_fail_build: ${{ inputs.grype_fail_build == 'always' || (inputs.grype_fail_build == 'auto' && github.event_name != 'pull_request') }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
           release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
+          workflow_artifacts_enabled: ${{ inputs.workflow_artifacts_enabled }}
           # Decoupled from cosign_sign_enabled in v1.54.0 so consumer-signed callers can
           # generate + upload the SBOM/Grype predicates without publishing duplicate in-job
           # cosign attestations. The cosign attest steps inside _push-image-with-signatures
@@ -294,6 +300,7 @@ jobs:
           grype_fail_build: ${{ inputs.grype_fail_build == 'always' || (inputs.grype_fail_build == 'auto' && github.event_name != 'pull_request') }}
           code_scanning_upload_enabled: ${{ inputs.code_scanning_upload_enabled }}
           release_asset_upload_enabled: ${{ inputs.release_asset_upload_enabled }}
+          workflow_artifacts_enabled: ${{ inputs.workflow_artifacts_enabled }}
           cosign_supply_chain_attest_enabled: false  # cosign predicate uses native-arch SBOM only in this iteration
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
