@@ -68,6 +68,29 @@ runs:
         git checkout -q -B main
       fi
 
+  # GitVersion is a .NET tool. GitHub-hosted runners ship .NET; a self-hosted runner may not
+  # (runs_on: self-hosted). Install a user-local SDK only when dotnet is missing, under the
+  # runner's tool cache so a non-root runner can write it and later runs reuse it.
+  - name: Check for dotnet
+    id: dotnet
+    shell: bash
+    run: |
+      if command -v dotnet >/dev/null 2>&1; then
+        echo "present=true" >> "$GITHUB_OUTPUT"
+      else
+        echo "present=false" >> "$GITHUB_OUTPUT"
+      fi
+
+  - name: Install .NET for GitVersion
+    if: steps.dotnet.outputs.present != 'true'
+    uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+    # Step-level env instead of GITHUB_ENV; setup-dotnet itself puts dotnet on PATH and sets
+    # DOTNET_ROOT for the GitVersion steps below.
+    env:
+      DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet
+    with:
+      dotnet-version: '10.0.x'
+
   - name: Install GitVersion
     uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
     with:
