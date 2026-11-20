@@ -86,7 +86,7 @@ runs:
     if: steps.dotnet.outputs.present != 'true'
     uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
     with:
-      dotnet-version: '8.0.x'
+      dotnet-version: '10.0.x'
 
   - name: Install GitVersion
     uses: gittools/actions/gitversion/setup@7417b1089e2c7de93510f1901d656ddf60bb024f # v4.7.0
