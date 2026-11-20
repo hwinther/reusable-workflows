@@ -3,6 +3,11 @@ name: "Determine package version and container image tag"
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for the job (default ubuntu-latest); callers on self-hosted runners pass theirs through."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       container_registry:
         description: 'Container registry, e.g. ghcr.io'
         default: 'ghcr.io'
@@ -40,7 +45,7 @@ on:
 
 jobs:
   determine-version:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     permissions:
       contents: read
     outputs:

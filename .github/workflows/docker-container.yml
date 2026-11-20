@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         default: ""
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash, git, Docker with buildx and network access to GHCR and the action downloads (cosign, Syft, Grype)."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       platforms:
         description: "Comma-separated buildx platforms (e.g. 'linux/amd64' or 'linux/amd64,linux/arm64'). Multi-value triggers QEMU setup and a manifest-list push."
         required: false
@@ -142,7 +147,7 @@ on:
 
 jobs:
   prepare-repository-name:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     permissions: {}
     outputs:
       repository: ${{ steps.lower-repo.outputs.repository }}
@@ -160,11 +165,12 @@ jobs:
       container_registry: ${{ inputs.container_registry }}
       container_image_name: ${{ needs.prepare-repository-name.outputs.repository }}/${{ inputs.container_image_name_postfix }}
       override_config: ${{ inputs.override_config }}
+      runs_on: ${{ inputs.runs_on }}
 
   build-and-push:
     name: Build and push (${{ inputs.container_image_name_postfix }})
     needs: [prepare-repository-name, gitversion]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on }}
     permissions:
       contents: read
       packages: write
