@@ -27,6 +27,11 @@ name: "Format-and-PR helper (reusable)"
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash, git and the toolchains the chosen mode installs (setup-node, setup-python, setup-dotnet)."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       mode:
         required: true
         type: string
@@ -109,7 +114,7 @@ on:
 jobs:
   cleanupcode:
     if: ${{ inputs.mode == 'cleanupcode' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write
@@ -191,7 +196,7 @@ jobs:
 
   ruff-format:
     if: ${{ inputs.mode == 'ruff-format' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write
@@ -253,7 +258,7 @@ jobs:
 
   format:
     if: ${{ inputs.mode == 'format' || inputs.mode == 'eslint-fix' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     timeout-minutes: 60
     permissions:
       contents: write
@@ -513,7 +518,7 @@ jobs:
 
   sync-git-blame-ignore-revs:
     if: ${{ inputs.mode == 'blame-ignore-revs' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       contents: write
       pull-requests: write

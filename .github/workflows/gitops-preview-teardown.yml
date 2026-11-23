@@ -8,6 +8,11 @@ name: GitOps preview teardown
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash and git."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       target_repo:
         required: true
         type: string
@@ -38,7 +43,7 @@ permissions: {}
 
 jobs:
   teardown:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     concurrency:
       group: gitops-teardown-${{ inputs.target_repo }}-${{ inputs.target_ref }}
       cancel-in-progress: false

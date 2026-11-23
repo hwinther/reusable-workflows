@@ -9,6 +9,11 @@ name: "SBOM and Grype scan of a built image"
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash, Docker and network access to GHCR and the Syft/Grype downloads."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       image:
         description: "`image` output of build-image-*.yml: repo@sha256:... or a workflow artifact name."
         required: true
@@ -81,7 +86,7 @@ on:
 jobs:
   scan:
     name: Scan (${{ inputs.container_image_name_postfix }}${{ inputs.artifact_name_suffix != '' && format('-{0}', inputs.artifact_name_suffix) || '' }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: read

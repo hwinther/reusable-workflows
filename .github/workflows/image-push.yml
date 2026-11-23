@@ -14,6 +14,11 @@ name: "Push image artifact to registry with signatures and attestations"
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash, Docker and network access to GHCR and the cosign download."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       container_registry:
         description: "Container registry, e.g. ghcr.io"
         default: "ghcr.io"
@@ -83,7 +88,7 @@ on:
 
 jobs:
   prepare-repository-name:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions: {}
     outputs:
       repository: ${{ steps.lower-repo.outputs.repository }}
@@ -95,7 +100,7 @@ jobs:
   push:
     name: Push (${{ inputs.container_image_tags }})
     needs: prepare-repository-name
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write
