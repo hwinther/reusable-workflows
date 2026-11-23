@@ -30,6 +30,11 @@ name: "Prune GHCR images (reusable)"
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash and network access to the GitHub API."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       dry_run:
         description: "When false, actually delete versions. When true, only print what would be deleted."
         type: boolean
@@ -65,7 +70,7 @@ on:
 
 jobs:
   prune:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write

@@ -19,6 +19,11 @@ name: "Publish a quality artifact"
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash and network access to GHCR and the ORAS/cosign downloads."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       tags:
         description: "Artifact tags, one per line or space-separated (e.g. `main-abc1234 main`, or a release version)."
         required: true
@@ -50,7 +55,7 @@ permissions: {}
 
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       contents: read

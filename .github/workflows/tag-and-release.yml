@@ -37,6 +37,11 @@ on:
         default: true
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash, git and gh."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       tag_name:
         description: "Tag name (e.g. v1.2.3), or 'auto' to bump patch or minor from the latest tag by the commit types since it"
         type: string
@@ -106,7 +111,7 @@ on:
 
 jobs:
   tag:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     # An empty name runs the job without an environment.
     environment: ${{ inputs.environment }}
     permissions:

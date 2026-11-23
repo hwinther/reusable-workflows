@@ -23,6 +23,11 @@ name: GitOps preview upsert
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash and git."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       target_repo:
         required: true
         type: string
@@ -103,7 +108,7 @@ permissions: {}
 
 jobs:
   upsert:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     # Serialize concurrent upserts against the same target branch so the bot does not race itself.
     concurrency:
       group: gitops-upsert-${{ inputs.target_repo }}-${{ inputs.target_ref }}

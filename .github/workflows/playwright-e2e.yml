@@ -15,6 +15,11 @@ name: "Playwright E2E against locally-loaded container images or a deployed app"
 on:
   workflow_call:
     inputs:
+      runs_on:
+        description: "Runner label for every job, e.g. `self-hosted` to keep a private repo's runs off the GitHub-hosted minutes quota. The runner needs bash, Docker with the compose plugin (compose mode), or Node and Playwright's browser dependencies (runner mode)."
+        required: false
+        type: string
+        default: "ubuntu-latest"
       compose_file:
         description: "Path to docker-compose file in the consumer repo (e.g. docker-compose.e2e.yml). Empty = no compose stack; set base_url to test a deployed app."
         required: false
@@ -203,7 +208,7 @@ on:
 
 jobs:
   e2e:
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runs_on || 'ubuntu-latest' }}
     timeout-minutes: 30
     environment: ${{ inputs.environment }}
     permissions:

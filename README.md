@@ -6,6 +6,8 @@ Reusable workflows, build and deploy for Node, .NET, Python, and Docker — plus
 
 Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 
+**Runner choice:** `pr-build`, `docker-container`, `gitversion`, `build-image-docker`, `scan-image`, `playwright-e2e`, `image-push`, `quality-artifact`, `gitops-preview-upsert`, `gitops-preview-teardown`, `tag-and-release`, `prune-ghcr` and `format-and-create-pr` take a `runs_on` input (default `ubuntu-latest`). Set it to `self-hosted` (or another label) to keep a private repo's runs off the GitHub-hosted minutes quota. Each input's description lists what the runner needs.
+
 ### Build & PR checks
 - **`pr-build.yml`** — single PR-build entry point. Detects which stacks changed against the PR base and conditionally runs `node-build` and/or `dotnet-build` (on `push` and `schedule` every enabled stack runs; `runs_on` picks the runner, e.g. `self-hosted` for a private repo), plus optional ReSharper InspectCode and TODO commenter. Posts one combined PR comment.
 - **`playwright-e2e.yml`** — downloads images produced by `build-and-scan-*.yml`, runs Playwright via `docker compose up --wait`, posts a sticky PR summary, uploads the HTML report + traces + compose logs.
