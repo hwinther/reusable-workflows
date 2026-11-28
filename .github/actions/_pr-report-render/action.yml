@@ -1,0 +1,41 @@
+name: "Render the PR report"
+description: |
+  Internal helper for pr-report.yml. Renders one PR comment from the `pr-report-*` artifacts
+  (status.json + report.md, written by `pr-report-section`) of a commit's workflow runs: a status
+  table, then one collapsible section per report, open when it needs attention. A section uploaded
+  again by a later run wins.
+
+  Not part of the public surface — leading underscore signals internal-only.
+
+inputs:
+  reports_dir:
+    required: true
+    description: "Directory holding runs/<run_id>/<artifact>/{status.json,report.md}."
+  sha:
+    required: true
+    description: "The commit the report is for."
+  in_progress:
+    required: false
+    description: "Workflows still running for the commit, one name per line."
+    default: ""
+  out_md:
+    required: true
+    description: "Where to write the markdown."
+  max_section_chars:
+    required: false
+    description: "Cap per section body; a longer one is cut with a link to its run."
+    default: "12000"
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      env:
+        REPORTS_DIR: ${{ inputs.reports_dir }}
+        SHA: ${{ inputs.sha }}
+        IN_PROGRESS: ${{ inputs.in_progress }}
+        OUT_MD: ${{ inputs.out_md }}
+        MAX_SECTION_CHARS: ${{ inputs.max_section_chars }}
+        RUNS_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs
+        AGGREGATOR_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/render.sh"

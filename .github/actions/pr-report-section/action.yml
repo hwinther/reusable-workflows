@@ -1,0 +1,95 @@
+name: "Add a section to the PR report"
+description: |
+  Uploads one section of the combined PR comment that `pr-report.yml` renders: a status line for
+  its table and a markdown body for its collapsible section. The section is the artifact
+  `pr-report-<id>` (status.json + report.md); pr-report.yml collects every such artifact of the
+  commit's workflow runs, so a section can come from any job of any workflow.
+
+  Use one id per kind of report and repository (e.g. `build-node`, `image-scan-api`, `e2e`). A later
+  upload of the same id (a re-run, another workflow) replaces the earlier one in the comment.
+
+inputs:
+  id:
+    required: true
+    description: "Section id, unique per kind of report. Lowercased; anything but a-z, 0-9 and - becomes -."
+  title:
+    required: true
+    description: 'Shown in the table and as the section heading, e.g. "Build · Node".'
+  status:
+    required: true
+    description: |
+      success | failure | warning | cancelled | skipped | neutral. A step or job outcome works as is
+      (success, failure, cancelled, skipped).
+  summary:
+    required: false
+    description: 'One line for the table, e.g. "51/51 · coverage 82 %".'
+    default: ""
+  content:
+    required: false
+    description: "Markdown body of the section."
+    default: ""
+  content_file:
+    required: false
+    description: "A file holding the markdown body, instead of `content`."
+    default: ""
+  order:
+    required: false
+    description: "Position in the comment, lowest first. Conventions: 10 build, 20 tests, 30 image scan, 40 e2e, 50 preview."
+    default: "50"
+  retention_days:
+    required: false
+    description: "Artifact retention."
+    default: "7"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Write the section
+      id: write
+      shell: bash
+      env:
+        ID: ${{ inputs.id }}
+        TITLE: ${{ inputs.title }}
+        STATUS: ${{ inputs.status }}
+        SUMMARY: ${{ inputs.summary }}
+        CONTENT: ${{ inputs.content }}
+        CONTENT_FILE: ${{ inputs.content_file }}
+        ORDER: ${{ inputs.order }}
+        SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      run: |
+        set -euo pipefail
+        id="$(printf '%s' "$ID" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//')"
+        if [ -z "$id" ]; then
+          echo "::error::pr-report-section: the id is empty after sanitising (${ID})."
+          exit 1
+        fi
+        case "$STATUS" in
+          success|failure|warning|cancelled|skipped|neutral) status="$STATUS" ;;
+          *) status="neutral" ;;
+        esac
+        [[ "$ORDER" =~ ^[0-9]+$ ]] || ORDER=50
+        dir="${RUNNER_TEMP}/pr-report-section/${id}"
+        rm -rf "$dir"
+        mkdir -p "$dir"
+        jq -n --arg id "$id" --arg title "$TITLE" --arg status "$status" --arg summary "$SUMMARY" \
+          --argjson order "$ORDER" --arg sha "$SHA" \
+          '{id: $id, title: $title, status: $status, summary: $summary, order: $order, sha: $sha}' > "$dir/status.json"
+        if [ -n "$CONTENT_FILE" ]; then
+          if [ -f "$CONTENT_FILE" ]; then cp "$CONTENT_FILE" "$dir/report.md"; else echo "_No report was written._" > "$dir/report.md"; fi
+        else
+          printf '%s\n' "$CONTENT" > "$dir/report.md"
+        fi
+        {
+          echo "id=${id}"
+          echo "dir=${dir}"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Upload the section
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: pr-report-${{ steps.write.outputs.id }}
+        path: ${{ steps.write.outputs.dir }}
+        retention-days: ${{ inputs.retention_days }}
+        # A re-run attempt uploads the same name again.
+        overwrite: true
+        if-no-files-found: error
