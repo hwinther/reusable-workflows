@@ -38,9 +38,9 @@ table() { # table <unit label> <unit %> <e2e %> <combined %>
 
 | Suite | Lines covered | % |
 | --- | ---: | ---: |
-| $1 | 715 / 1000 | $2 |
-| E2E (Playwright) | 540 / 1000 | $3 |
-| **Combined** | 823 / 1000 | $4 |
+| $1 | ${5:-715 / 1000} | $2 |
+| E2E (Playwright) | ${6:-540 / 1000} | $3 |
+| **Combined** | ${7:-823 / 1000} | $4 |
 
 _Approximate: istanbul counts statement lines, …_
 
@@ -53,18 +53,22 @@ MD
 }
 
 expect full "$(table Unit 71.5% 54.0% 82.3%)" \
-  "unit 🟡 71.5 % · e2e 🟡 54.0 % · combined 🟢 82.3 % (+10.8 from e2e)"
-expect custom-label "$(table 'Unit (vitest)' 35.0% 20.0% 41.0%)" \
-  "unit 🔴 35.0 % · e2e 🔴 20.0 % · combined 🟡 41.0 % (+6.0 from e2e)"
-expect no-unit "$(table Unit n/a 54.0% 54.0%)" \
+  "unit 🟡 71.5 % · e2e 🟡 54.0 % · combined 🟢 82.3 % (+108 lines from e2e)"
+expect custom-label "$(table 'Unit (vitest)' 35.0% 20.0% 41.0% '350 / 1000' '200 / 1000' '410 / 1000')" \
+  "unit 🔴 35.0 % · e2e 🔴 20.0 % · combined 🟡 41.0 % (+60 lines from e2e)"
+expect no-unit "$(table Unit n/a 54.0% 54.0% n/a)" \
   "e2e 🟡 54.0 % · combined 🟡 54.0 %"
-expect no-e2e "$(table Unit 71.5% n/a 71.5%)" \
-  "unit 🟡 71.5 % · combined 🟡 71.5 % (+0.0 from e2e)"
+expect no-e2e "$(table Unit 71.5% n/a 71.5% '715 / 1000' n/a '715 / 1000')" \
+  "unit 🟡 71.5 % · combined 🟡 71.5 % (+0 lines from e2e)"
 expect thresholds "$(table Unit 71.5% 54.0% 82.3%)" \
-  "unit 🟢 71.5 % · e2e 🟡 54.0 % · combined 🟢 82.3 % (+10.8 from e2e)" COVERAGE_THRESHOLDS="50 70"
+  "unit 🟢 71.5 % · e2e 🟡 54.0 % · combined 🟢 82.3 % (+108 lines from e2e)" COVERAGE_THRESHOLDS="50 70"
+# The ClutterStock case: e2e loads files the unit tests never import, so combined has more lines in
+# total and a lower percentage than unit, while e2e still adds covered lines.
+expect bigger-total "$(table 'Unit (vitest)' 97.8% 85.5% 95.8% '1081 / 1105' '442 / 517' '1157 / 1208')" \
+  "unit 🟢 97.8 % · e2e 🟢 85.5 % · combined 🟢 95.8 % (+76 lines from e2e)"
 expect no-table "Nothing to see here" ""
 expect file-table-ignored "$(printf '| Suite | Lines covered | %% |\n| --- | ---: | ---: |\n| Unit | 1 / 2 | 50.0%% |\n| E2E (Playwright) | 1 / 2 | 50.0%% |\n| **Combined** | 2 / 2 | 100.0%% |\n\n| File | Lines added by e2e | Unit | Combined |\n| --- | ---: | ---: | ---: |\n| x | 1 | 1.0%% | 99.0%% |\n')" \
-  "unit 🟡 50.0 % · e2e 🟡 50.0 % · combined 🟢 100.0 % (+50.0 from e2e)"
+  "unit 🟡 50.0 % · e2e 🟡 50.0 % · combined 🟢 100.0 % (+1 line from e2e)"
 
 echo ""
 echo "=== Summary ==="
