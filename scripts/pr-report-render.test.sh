@@ -33,7 +33,7 @@ render() {
 }
 
 # --- main: several sections, a re-run, a broken file, a running workflow
-section main 100 pr-report-build-node '{"id":"build-node","title":"Build · Node","status":"success","order":10}' "## ✅ Build succeeded\n"
+section main 100 pr-report-build-node '{"id":"build-node","title":"Build · Node","status":"success","summary":"51/51 tests · 84.2 % lines","order":10}' "## ✅ Build succeeded\n"
 section main 100 pr-report-build-dotnet '{"id":"build-dotnet","title":"Build · .NET","status":"failure","summary":"2 errors","order":10}' "## ❌ errors\n- x\n"
 section main 101 pr-report-build-dotnet '{"id":"build-dotnet","title":"Build · .NET","status":"success","order":10}' "## ✅ Build succeeded (re-run)\n"
 section main 200 pr-report-scan '{"id":"scan","title":"Image scan | api","status":"warning","summary":"2 high","order":30}' "two highs\n"
@@ -45,7 +45,8 @@ ok "header has the short sha" '[ "$(head -n 1 "$out")" = "$header" ]'
 ok "the later run of a section wins" 'grep -q "Build succeeded (re-run)" "$out" && ! grep -q "2 errors" "$out"'
 ok "the later run is linked" 'grep -q "| ✅ Build · .NET | passed | \[run\](https://github.com/o/r/actions/runs/101) |" "$out"'
 ok "sorted by order, then title" '[ "$(grep -n "Build · .NET |" "$out" | cut -d: -f1)" -lt "$(grep -n "Build · Node |" "$out" | cut -d: -f1)" ] && [ "$(grep -n "Build · Node |" "$out" | cut -d: -f1)" -lt "$(grep -n "Image scan" "$out" | head -1 | cut -d: -f1)" ]'
-ok "a pipe in a title is escaped in the table" 'grep -qF "| ⚠️ Image scan \| api | warnings · 2 high |" "$out"'
+ok "a pipe in a title is escaped in the table" 'grep -qF "| ⚠️ Image scan \| api | 2 high |" "$out"'
+ok "a passing section shows its summary after the word" 'grep -qF "| ✅ Build · Node | passed · 51/51 tests · 84.2 % lines |" "$out"'
 ok "running workflows are listed" 'grep -qx "| ⏳ PR e2e | running | |" "$out"'
 ok "a broken status.json is skipped" '[ "$(grep -c "^| " "$out")" -eq 5 ]'
 ok "problem sections are open" 'grep -qx "<details open><summary>⚠️ Image scan | api</summary>" "$out"'

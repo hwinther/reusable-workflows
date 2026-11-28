@@ -464,7 +464,9 @@ jobs:
         with:
           id: build-node-${{ inputs.node_working_directory }}
           title: Build · Node${{ inputs.node_working_directory != '' && format(' ({0})', inputs.node_working_directory) || '' }}
-          status: ${{ steps.node-build.outcome }}
+          # The build's own view adds warning (warnings only) to the step outcome.
+          status: ${{ steps.node-build.outcome == 'success' && steps.node-build.outputs.status == 'warning' && 'warning' || steps.node-build.outcome }}
+          summary: ${{ steps.node-build.outputs.summary }}
           content: ${{ steps.node-build.outputs.pr-comment || 'The build job stopped before it could write a report (a setup step failed, or the job timed out or was cancelled); see its run.' }}
           order: "10"
 
@@ -523,7 +525,9 @@ jobs:
         with:
           id: build-dotnet-${{ inputs.dotnet_solution_file }}
           title: Build · .NET${{ inputs.dotnet_solution_file != '' && format(' ({0})', inputs.dotnet_solution_file) || '' }}
-          status: ${{ steps.dotnet-build.outcome }}
+          # The build's own view adds warning (warnings only) to the step outcome.
+          status: ${{ steps.dotnet-build.outcome == 'success' && steps.dotnet-build.outputs.status == 'warning' && 'warning' || steps.dotnet-build.outcome }}
+          summary: ${{ steps.dotnet-build.outputs.summary }}
           content: ${{ steps.dotnet-build.outputs.pr-comment || 'The build job stopped before it could write a report (a setup step failed, or the job timed out or was cancelled); see its run.' }}
           order: "10"
 

@@ -8,8 +8,8 @@ different workflows. `pr-report.yml` replaces them with one comment per PR:
 
 | Check | Result | Run |
 |---|---|---|
-| ✅ Build · .NET (Backend.slnx) | passed | run |
-| ✅ Build · Node (src/frontend) | passed | run |
+| ✅ Build · .NET (Backend.slnx) | passed · 51/51 tests · 84.2 % lines | run |
+| ⚠️ Build · Node (src/frontend) | 129/129 tests · 71.5 % lines · 3 warnings | run |
 | ⚠️ Image scan · api | warnings · 0 critical, 2 high | run |
 | ⏳ PR e2e | running | |
 
@@ -63,7 +63,9 @@ Then turn sections on where they come from. For `pr-build.yml`:
 ```
 
 Each build becomes a section (`build-node-<dir>`, `build-dotnet-<solution>`, …) instead of its own
-comment, and the gate adds a `build` section when no build ran (no relevant changes, a draft, or a
+comment. For .NET and Node its table line sums the build up: failures first (`2 build errors`,
+`build exit 137 (killed)`, `3/129 tests failed`), otherwise tests, line coverage (summed over the
+Cobertura files) and warnings; warnings alone make it ⚠️ while the build still passes. The gate adds a `build` section when no build ran (no relevant changes, a draft, or a
 failed change detection).
 
 A job of your own adds a section like this:

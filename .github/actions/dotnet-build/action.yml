@@ -51,6 +51,12 @@ outputs:
   pr-comment:
     description: "Combined PR comment with build status"
     value: ${{ steps.pr-comment-combiner.outputs.result }}
+  summary:
+    description: 'One line for the PR report table, failures first, e.g. "51/51 tests · 84.2 % lines · 3 warnings".'
+    value: ${{ steps.summary.outputs.summary }}
+  status:
+    description: "failure, warning (warnings only) or success, as the summary sees it."
+    value: ${{ steps.summary.outputs.status }}
 
 runs:
   using: "composite"
@@ -492,6 +498,22 @@ runs:
         echo "No changes in files after restore and build were found."
         echo "## ✅ No changes in files after restore and build were found" > $TEMP_DIR/git-status.md
       fi
+
+  - name: Summarise the build
+    id: summary
+    if: always()
+    uses: hwinther/reusable-workflows/.github/actions/_build-summary@v2
+    with:
+      steps: |
+        restore|${{ steps.format-restore.outputs.error_count }}|${{ steps.restore-exit.outputs.failed }}|${{ steps.dotnet-restore.outputs.exit_code }}
+        build|${{ steps.format-build.outputs.error_count }}|${{ steps.build-exit.outputs.failed }}|${{ steps.dotnet-build.outputs.exit_code }}
+      warnings: "${{ steps.format-restore.outputs.warning_count }} ${{ steps.format-build.outputs.warning_count }} ${{ steps.format-test-warn.outputs.warning_count }}"
+      tests_format: ${{ steps.run-tests.outcome != 'skipped' && inputs.test == 'true' && 'trx' || '' }}
+      tests_path: ${{ inputs.working_directory != '' && inputs.working_directory || '.' }}
+      tests_failed: ${{ steps.run-tests.outcome == 'failure' }}
+      coverage_dir: ${{ inputs.working_directory != '' && inputs.working_directory || '.' }}
+      coverage_name: "coverage.cobertura*.xml"
+      git_status_file: ${{ env.TEMP_DIR }}/git-status.md
 
   # Marks a stop at a step that writes no section of its own (setup-dotnet, a NuGet source, the
   # extra command, a crashed step), so the comment doesn't end in silence.

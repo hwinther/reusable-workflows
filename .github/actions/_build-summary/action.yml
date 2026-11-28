@@ -1,0 +1,71 @@
+name: "Summarise a build"
+description: |
+  Internal helper for node-build and dotnet-build. Sums a build up in one line for the PR report's
+  table (failures first, then tests, line coverage and warnings, e.g. "51/51 tests · 84.2 % lines ·
+  3 warnings") and a status: failure, warning (warnings only) or success. Reads the test results and
+  Cobertura files itself, so the counts are there even when the test step failed.
+
+  Not part of the public surface — leading underscore signals internal-only.
+
+inputs:
+  steps:
+    required: false
+    description: 'Lines "label|error_count|unrecognised_failed|exit_code", one per build step.'
+    default: ""
+  failures:
+    required: false
+    description: "Lines of free-text failures (e.g. npm ci failed). Empty lines are ignored."
+    default: ""
+  warnings:
+    required: false
+    description: "Warning counts separated by spaces."
+    default: ""
+  tests_format:
+    required: false
+    description: "trx (tests_path: a directory with */TestResults/*.trx) or jest-json (tests_path: the --json report). Empty: no tests."
+    default: ""
+  tests_path:
+    required: false
+    description: "See tests_format."
+    default: ""
+  tests_failed:
+    required: false
+    description: "true when the test step failed; reported when no counts could be read."
+    default: "false"
+  coverage_dir:
+    required: false
+    description: "Directory searched for Cobertura files."
+    default: ""
+  coverage_name:
+    required: false
+    description: "find -name pattern of the Cobertura files."
+    default: ""
+  git_status_file:
+    required: false
+    description: "The uncommitted-changes section; a ❌ heading counts as a failure."
+    default: ""
+
+outputs:
+  summary:
+    description: "The one-line summary (may be empty)."
+    value: ${{ steps.summary.outputs.summary }}
+  status:
+    description: "failure, warning or success."
+    value: ${{ steps.summary.outputs.status }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: summary
+      shell: bash
+      env:
+        STEPS: ${{ inputs.steps }}
+        FAILURES: ${{ inputs.failures }}
+        WARNINGS: ${{ inputs.warnings }}
+        TESTS_FORMAT: ${{ inputs.tests_format }}
+        TESTS_PATH: ${{ inputs.tests_path }}
+        TESTS_FAILED: ${{ inputs.tests_failed }}
+        COVERAGE_DIR: ${{ inputs.coverage_dir }}
+        COVERAGE_NAME: ${{ inputs.coverage_name }}
+        GIT_STATUS_FILE: ${{ inputs.git_status_file }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/summary.sh"

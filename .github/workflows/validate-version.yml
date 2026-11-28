@@ -50,6 +50,8 @@ jobs:
         run: bash ./scripts/sticky-pr-comment.test.sh
       - name: Run _pr-report-render tests
         run: bash ./scripts/pr-report-render.test.sh
+      - name: Run _build-summary tests
+        run: bash ./scripts/build-summary.test.sh
       - name: Run _format-detect tests
         run: bash ./scripts/format-detect.test.sh
       - name: Run badges tests

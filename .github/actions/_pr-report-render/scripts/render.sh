@@ -86,7 +86,12 @@ count="$(jq 'length' "$work/sections.json")"
       summary="$(jq -r '.summary' <<< "$s")"
       run="$(jq -r '.run' <<< "$s")"
       result="$(word "$status")"
-      [ -n "$summary" ] && result="${result:+$result · }${summary}"
+      # A warning's summary already says what the warnings are ("… · 3 warnings").
+      if [ -n "$summary" ] && [ "$status" = "warning" ]; then
+        result="$summary"
+      elif [ -n "$summary" ]; then
+        result="${result:+$result · }${summary}"
+      fi
       echo "| $(emoji "$status") $(cell "$title") | $(cell "${result:-–}") | [run](${RUNS_URL}/${run}) |"
     done
     while IFS= read -r wf; do
