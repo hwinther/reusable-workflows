@@ -206,6 +206,13 @@ on:
         type: boolean
         description: "Create TODO PR comment"
         default: true
+      pr_report_enabled:
+        required: false
+        type: boolean
+        description: >-
+          Add each build (and the gate's "no relevant changes") to the combined PR report rendered by
+          pr-report.yml, instead of posting a comment per build. Needs a pr-report.yml caller in the repo.
+        default: false
     secrets:
       npm_auth_token:
         description: "Auth token for the npm registry (passed to node-build as NODE_AUTH_TOKEN). When unset, falls back to GITHUB_TOKEN — the GitHub Packages flow."
@@ -451,9 +458,19 @@ jobs:
           extra_command: ${{ inputs.node_extra_command }}
           test: ${{ inputs.node_test_enabled }}
 
+      - name: "Add the node build to the PR report"
+        if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        with:
+          id: build-node-${{ inputs.node_working_directory }}
+          title: Build · Node${{ inputs.node_working_directory != '' && format(' ({0})', inputs.node_working_directory) || '' }}
+          status: ${{ steps.node-build.outcome }}
+          content: ${{ steps.node-build.outputs.pr-comment || 'The build job stopped before it could write a report (a setup step failed, or the job timed out or was cancelled); see its run.' }}
+          order: "10"
+
       - name: "Create or update PR comment for node"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
         continue-on-error: true
@@ -500,9 +517,19 @@ jobs:
           extra_command: ${{ inputs.dotnet_extra_command }}
           test: ${{ inputs.dotnet_test_enabled }}
 
+      - name: "Add the dotnet build to the PR report"
+        if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        with:
+          id: build-dotnet-${{ inputs.dotnet_solution_file }}
+          title: Build · .NET${{ inputs.dotnet_solution_file != '' && format(' ({0})', inputs.dotnet_solution_file) || '' }}
+          status: ${{ steps.dotnet-build.outcome }}
+          content: ${{ steps.dotnet-build.outputs.pr-comment || 'The build job stopped before it could write a report (a setup step failed, or the job timed out or was cancelled); see its run.' }}
+          order: "10"
+
       - name: "Create or update PR comment for dotnet"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
         continue-on-error: true
@@ -544,9 +571,19 @@ jobs:
           typecheck: ${{ inputs.python_typecheck_enabled }}
           coverage_source: ${{ inputs.python_coverage_source }}
 
+      - name: "Add the python build to the PR report"
+        if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        with:
+          id: build-python-${{ inputs.python_working_directory }}
+          title: Build · Python${{ inputs.python_working_directory != '' && format(' ({0})', inputs.python_working_directory) || '' }}
+          status: ${{ steps.python-build.outcome }}
+          content: ${{ steps.python-build.outputs.pr-comment || 'The build job stopped before it could write a report (a setup step failed, or the job timed out or was cancelled); see its run.' }}
+          order: "10"
+
       - name: "Create or update PR comment for python"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
         continue-on-error: true
@@ -586,9 +623,19 @@ jobs:
           test: ${{ inputs.go_test_enabled }}
           race: ${{ inputs.go_race_enabled }}
 
+      - name: "Add the go build to the PR report"
+        if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        with:
+          id: build-go-${{ inputs.go_working_directory }}
+          title: Build · Go${{ inputs.go_working_directory != '' && format(' ({0})', inputs.go_working_directory) || '' }}
+          status: ${{ steps.go-build.outcome }}
+          content: ${{ steps.go-build.outputs.pr-comment || 'The build job stopped before it could write a report (a setup step failed, or the job timed out or was cancelled); see its run.' }}
+          order: "10"
+
       - name: "Create or update PR comment for go"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: always() && github.event_name == 'pull_request'
+        if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
         continue-on-error: true
@@ -729,11 +776,13 @@ jobs:
           echo "✅ All relevant builds succeeded."
           exit 0
 
+      # These run after "Check build status", which exits 1 when a build or change detection failed,
+      # hence always().
       # One gate comment (build-results): "no relevant changes", or why nothing ran. Deleted when
       # builds ran, since their own comments say how they went.
       - name: "Create or update PR comment (no relevant changes)"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: github.event_name == 'pull_request' && needs.detect-changes.result == 'success' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped' && needs.go-build.result == 'skipped'
+        if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled && needs.detect-changes.result == 'success' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped' && needs.go-build.result == 'skipped'
         continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -742,7 +791,7 @@ jobs:
 
       - name: "Create or update PR comment (change detection failed)"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: github.event_name == 'pull_request' && needs.detect-changes.result != 'success' && needs.detect-changes.result != 'skipped'
+        if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled && needs.detect-changes.result != 'success' && needs.detect-changes.result != 'skipped'
         continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -754,13 +803,43 @@ jobs:
 
       - name: "Remove a stale gate comment (builds ran)"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: github.event_name == 'pull_request' && needs.detect-changes.result == 'success' && (needs.node-build.result != 'skipped' || needs.dotnet-build.result != 'skipped' || needs.python-build.result != 'skipped' || needs.go-build.result != 'skipped')
+        if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled && needs.detect-changes.result == 'success' && (needs.node-build.result != 'skipped' || needs.dotnet-build.result != 'skipped' || needs.python-build.result != 'skipped' || needs.go-build.result != 'skipped')
         continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: "build-results"
           comment_content: ""
           delete_when_empty: "true"
+
+      # With the PR report: a section only when no build ran (each build adds its own).
+      - name: "Describe the gate for the PR report"
+        id: gate-report
+        if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          IS_DRAFT: ${{ github.event.pull_request.draft == true }}
+          ANY_BUILD: ${{ needs.node-build.result != 'skipped' || needs.dotnet-build.result != 'skipped' || needs.python-build.result != 'skipped' || needs.go-build.result != 'skipped' }}
+        run: |
+          if [ "$DETECT_RESULT" = "success" ] && [ "$ANY_BUILD" = "true" ]; then
+            echo "add=false" >> "$GITHUB_OUTPUT"
+          elif [ "$DETECT_RESULT" = "success" ]; then
+            { echo "add=true"; echo "status=neutral"; echo "summary=no relevant changes"; echo "content=No relevant changes found for build or lint."; } >> "$GITHUB_OUTPUT"
+          elif [ "$DETECT_RESULT" = "skipped" ] && [ "$IS_DRAFT" = "true" ]; then
+            { echo "add=true"; echo "status=skipped"; echo "summary=draft PR"; echo "content=Builds are skipped until the PR is marked ready for review."; } >> "$GITHUB_OUTPUT"
+          else
+            { echo "add=true"; echo "status=failure"; echo "summary=change detection ${DETECT_RESULT}"; echo "content=Change detection did not succeed (${DETECT_RESULT}), so no build ran."; } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: "Add the gate to the PR report"
+        if: always() && steps.gate-report.outputs.add == 'true'
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        with:
+          id: build
+          title: Build
+          status: ${{ steps.gate-report.outputs.status }}
+          summary: ${{ steps.gate-report.outputs.summary }}
+          content: ${{ steps.gate-report.outputs.content }}
+          order: "10"
 
   dotnet-inspect-code:
     needs: detect-changes

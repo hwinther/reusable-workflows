@@ -1,0 +1,182 @@
+name: "PR report"
+
+# One PR comment for every report of a commit: builds, tests, image scans, e2e, previews. Jobs in any
+# workflow add a section with the `pr-report-section` action (an artifact named pr-report-<id>); this
+# workflow collects the sections of every run for the PR's head commit and keeps a single sticky
+# comment in sync.
+#
+# Call it from a workflow triggered by workflow_run on the workflows that add sections:
+#
+#   on:
+#     workflow_run:
+#       workflows: [CI, Container, PR e2e]
+#       types: [completed]
+#   permissions: {}
+#   jobs:
+#     report:
+#       if: github.event.workflow_run.event == 'pull_request'
+#       permissions:
+#         actions: read
+#         contents: read
+#         pull-requests: write
+#       uses: hwinther/reusable-workflows/.github/workflows/pr-report.yml@v2  # pin the release SHA in a consumer
+#
+# workflow_run runs with the base repository's token, so the comment is posted on fork and
+# Dependabot PRs too. The sections come from PR runs and are treated as data: parsed with jq and
+# shown as markdown, never executed. Each run renders the whole comment again from the artifacts, so
+# runs for the same commit can cancel each other; a run for a commit the PR has moved past does
+# nothing. Note that workflow_run uses the caller workflow file from the default branch.
+
+on:
+  workflow_call:
+    inputs:
+      comment_identifier:
+        required: false
+        type: string
+        description: "Identifier of the sticky comment."
+        default: "pr-report"
+      head_sha:
+        required: false
+        type: string
+        description: "Commit to report on, instead of the triggering workflow_run's (e.g. from workflow_dispatch, to debug)."
+        default: ""
+      pr_number:
+        required: false
+        type: string
+        description: "PR to comment on, instead of the one the commit belongs to."
+        default: ""
+      runs_on:
+        required: false
+        type: string
+        description: "Runner label, e.g. `self-hosted`. The runner needs bash, jq and the gh CLI."
+        default: "ubuntu-latest"
+
+permissions: {}
+
+jobs:
+  report:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    concurrency:
+      group: pr-report-${{ github.repository }}-${{ inputs.head_sha || github.event.workflow_run.head_sha }}
+      cancel-in-progress: true
+    steps:
+      - name: Resolve the PR and commit
+        id: target
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA_INPUT: ${{ inputs.head_sha }}
+          PR_INPUT: ${{ inputs.pr_number }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_PRS: ${{ toJSON(github.event.workflow_run.pull_requests) }}
+        run: |
+          set -euo pipefail
+          sha="${SHA_INPUT:-$RUN_SHA}"
+          if [ -z "$sha" ]; then
+            echo "::error::No commit to report on: call this from a workflow_run event, or pass head_sha."
+            exit 1
+          fi
+          if [ -z "$SHA_INPUT" ] && [ "$RUN_EVENT" != "pull_request" ]; then
+            echo "The triggering run is a ${RUN_EVENT} run, not a pull_request one; nothing to report."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          pr="$PR_INPUT"
+          # workflow_run lists the PR, except for a PR from a fork; then look it up by commit.
+          [ -n "$pr" ] || pr="$(jq -r '.[0].number // empty' <<< "${RUN_PRS:-[]}")"
+          [ -n "$pr" ] || pr="$(gh api "repos/${REPO}/commits/${sha}/pulls" --jq '[.[] | select(.state == "open")][0].number // empty' 2>/dev/null || true)"
+          [ -n "$pr" ] || pr="$(gh api -X GET search/issues -f q="repo:${REPO} is:pr is:open ${sha}" --jq '.items[0].number // empty' 2>/dev/null || true)"
+          if [ -z "$pr" ]; then
+            echo "No open PR for ${sha}; nothing to report."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # A run for an older commit finishing late must not overwrite the newer report.
+          head="$(gh api "repos/${REPO}/pulls/${pr}" --jq '.head.sha')"
+          if [ "$head" != "$sha" ]; then
+            echo "PR #${pr} has moved on to ${head}; not reporting on ${sha}."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          {
+            echo "sha=${sha}"
+            echo "pr=${pr}"
+            echo "skip=false"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Collect the sections
+        id: collect
+        if: steps.target.outputs.skip == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          dir="${RUNNER_TEMP}/pr-report"
+          rm -rf "$dir"
+          mkdir -p "$dir/runs"
+          # Every pull_request run for the commit (this run is a workflow_run one, so not among them).
+          gh api --paginate "repos/${REPO}/actions/runs?head_sha=${SHA}&event=pull_request&per_page=100" \
+            --jq '.workflow_runs[] | [(.id | tostring), .status, .name] | @tsv' > "$dir/runs.tsv"
+          : > "$dir/in-progress"
+          while IFS=$'\t' read -r id status name; do
+            [ -n "$id" ] || continue
+            [ "$status" = "completed" ] || echo "$name" >> "$dir/in-progress"
+            # A run without sections has no matching artifact; that's fine.
+            gh run download "$id" -R "$REPO" -p 'pr-report-*' -D "$dir/runs/$id" > /dev/null 2>&1 || true
+          done < "$dir/runs.tsv"
+          count="$(find "$dir/runs" -name status.json | wc -l | tr -d ' ')"
+          echo "Runs for ${SHA}: $(wc -l < "$dir/runs.tsv" | tr -d ' '); sections: ${count}."
+          delimiter="IN_PROGRESS_$(openssl rand -hex 16)"
+          {
+            echo "dir=${dir}"
+            echo "count=${count}"
+            echo "in_progress<<${delimiter}"
+            sort -u "$dir/in-progress"
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      # No sections means the repo doesn't use pr-report-section (yet): stay quiet.
+      - name: Render the report
+        if: steps.collect.outputs.count != '' && steps.collect.outputs.count != '0'
+        uses: hwinther/reusable-workflows/.github/actions/_pr-report-render@v2
+        with:
+          reports_dir: ${{ steps.collect.outputs.dir }}
+          sha: ${{ steps.target.outputs.sha }}
+          in_progress: ${{ steps.collect.outputs.in_progress }}
+          out_md: ${{ runner.temp }}/pr-report.md
+
+      - name: Read the report
+        id: report
+        if: steps.collect.outputs.count != '' && steps.collect.outputs.count != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat "${RUNNER_TEMP}/pr-report.md" >> "$GITHUB_STEP_SUMMARY"
+          delimiter="REPORT_$(openssl rand -hex 16)"
+          {
+            echo "body<<${delimiter}"
+            cat "${RUNNER_TEMP}/pr-report.md"
+            echo ""
+            echo "${delimiter}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update the PR comment
+        if: steps.collect.outputs.count != '' && steps.collect.outputs.count != '0'
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        with:
+          github_token: ${{ github.token }}
+          comment_identifier: ${{ inputs.comment_identifier }}
+          comment_content: ${{ steps.report.outputs.body }}
+          pr_number: ${{ steps.target.outputs.pr }}

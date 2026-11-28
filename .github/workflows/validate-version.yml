@@ -48,6 +48,8 @@ jobs:
         run: bash ./scripts/unrecognised-failure.test.sh
       - name: Run _sticky-pr-comment tests
         run: bash ./scripts/sticky-pr-comment.test.sh
+      - name: Run _pr-report-render tests
+        run: bash ./scripts/pr-report-render.test.sh
       - name: Run _format-detect tests
         run: bash ./scripts/format-detect.test.sh
       - name: Run badges tests
