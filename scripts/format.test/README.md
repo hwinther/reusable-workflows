@@ -17,7 +17,7 @@ Each case is a directory under `cases/<name>/`:
 
 | File | Required? | Purpose |
 |---|---|---|
-| `env.sh` | yes | Sourced before `format.sh` runs. Must set `FORMAT`. May set `ERROR_HEADER`, `WARNING_HEADER`, `SUCCESS_MESSAGE`, `MAX_WARNINGS_INLINE`, `PATH_STRIP`. |
+| `env.sh` | yes | Sourced before `format.sh` runs. Must set `FORMAT`. May set `ERROR_HEADER`, `WARNING_HEADER`, `SUCCESS_MESSAGE`, `MAX_WARNINGS_INLINE`, `MAX_ERRORS_INLINE`, `PATH_STRIP`. |
 | `errors` | optional | Pre-extracted error lines. Auto-mapped to `ERRORS_FILE` if present. |
 | `warnings` | optional | Pre-extracted warning lines. Auto-mapped to `WARNINGS_FILE`. |
 | `eslint.json` | optional | ESLint `--format json` report. Auto-mapped to `ERRORS_FILE` for `FORMAT=eslint-json` cases. |

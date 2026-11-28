@@ -49,8 +49,8 @@ Reference as `uses: hwinther/reusable-workflows/.github/workflows/<file>@v1`.
 
 Reference as `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`.
 
-- **`node-build`** — npm install + typecheck + build + `lint:ci` + `coverage:ci`. Every step runs even on prior failure; output is parsed into GitHub annotations and a combined PR-comment markdown blob (`pr-comment` output).
-- **`dotnet-build`** — `dotnet restore --locked-mode` + build + test (Microsoft.Testing.Platform + coverlet + xunit trx) + ReportGenerator coverage. Same fail-late + `pr-comment` pattern as `node-build`.
+- **`node-build`** — npm install + typecheck + build + `lint:ci` + `coverage:ci`. Every step runs even on prior failure; output is parsed into GitHub annotations and a combined PR-comment markdown blob (`pr-comment` output). A step that exits non-zero without a recognised error line (a crash, a missing binary, an out-of-memory kill) fails with the last lines of its output instead of reading as a success, and a stop at a step that reports nothing (setup, the extra command) is said in the comment.
+- **`dotnet-build`** — `dotnet restore --locked-mode` + build + test (Microsoft.Testing.Platform + coverlet + xunit trx) + ReportGenerator coverage. Same fail-late + `pr-comment` pattern as `node-build`. Tests are skipped when restore or build failed.
 - **`python-build`** — ruff + mypy + pytest + `python -m build`. Same fail-late + `pr-comment` pattern.
 - **`go-build`** — `go mod download/verify` + `gofmt -l` + `go vet` + `go build` + `go test -race` (JUnit via gotestsum, coverage converted to Cobertura). Same fail-late + `pr-comment` pattern; Go version from `go.mod` unless `go_version` is set.
 - **`changed-files`** — whether a pull request touches files matching `patterns` (EREs, one per line), from the PR files API without a checkout; `changed` is always `true` outside a pull request. For a workflow that must always report a required check but gates its expensive jobs on paths, in place of `on.pull_request.paths` (a paths-skipped workflow never reports, so its required check would block). Needs `pull-requests: read`.
@@ -63,7 +63,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`.
 - **`sticky-pr-comment`** — keeps one PR comment per `comment_identifier` (created the first time, updated after), found by a hidden first-line marker; e.g. a preview env's URL comment that the cleanup workflow later marks torn down. Inputs: `github_token`, `comment_identifier`, `comment_content`, optional `pr_number` (outside a pull_request event).
 - **`verify-image`** — read-only end-to-end smoke test. Pulls signature + attestation metadata back from the registry and runs `cosign verify`, `cosign verify-attestation --type cyclonedx`, `cosign verify-attestation --type vuln`, `gh attestation verify`, plus a tag → digest resolution check. Useful as a final job in the publishing pipeline so signing/attestation breakage shows up in CI instead of at the consumer's admission controller.
 
-Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_format-detect`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_push-staging-image`, `_choose-image-handoff`, `_resolve-image-handoff`, `_dotnet-add-nuget-source`, `_sticky-pr-comment`.
+Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_format-detect`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_push-staging-image`, `_choose-image-handoff`, `_resolve-image-handoff`, `_dotnet-add-nuget-source`, `_sticky-pr-comment`, `_unrecognised-failure`.
 
 ## Typical usage patterns
 

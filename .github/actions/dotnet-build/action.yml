@@ -92,8 +92,11 @@ runs:
       echo "::group::Restore"
       set +e
       dotnet restore "$SOLUTION_FILE" --locked-mode 2>&1 | tee $TEMP_DIR/restore.out
+      RESTORE_EXIT_CODE=${PIPESTATUS[0]}
       set -e
       echo "::endgroup::"
+      echo "Restore exit code: $RESTORE_EXIT_CODE"
+      echo "exit_code=$RESTORE_EXIT_CODE" >> "$GITHUB_OUTPUT"
 
       if git ls-files --error-unmatch nuget.config > /dev/null 2>&1; then
         git checkout HEAD -- nuget.config
@@ -118,9 +121,20 @@ runs:
       error_header: "## ❌ Restore failed"
       warning_header: "## ⚠️ Restore warnings (N total)"
 
+  # A non-zero exit with no recognised error line (crash, missing SDK, out of memory) must not pass.
+  - name: Check restore exit code
+    id: restore-exit
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    with:
+      label: "Restore"
+      exit_code: ${{ steps.dotnet-restore.outputs.exit_code }}
+      recognised_failed: ${{ steps.format-restore.outputs.failed }}
+      output_file: ${{ env.TEMP_DIR }}/restore.out
+      out_md: ${{ env.TEMP_DIR }}/restore.md
+
   - name: Build
     id: dotnet-build
-    if: steps.format-restore.outputs.failed != 'true'
+    if: steps.format-restore.outputs.failed != 'true' && steps.restore-exit.outputs.failed != 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -129,7 +143,10 @@ runs:
       echo "::group::Build"
       set +e
       dotnet build "$SOLUTION_FILE" -c Release --no-restore --nologo -consoleLoggerParameters:NoSummary -verbosity:quiet 1>$TEMP_DIR/build.out 2>&1
+      BUILD_EXIT_CODE=$?
       set -e
+      echo "Build exit code: $BUILD_EXIT_CODE"
+      echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
       cat $TEMP_DIR/build.out
       echo "::endgroup::"
 
@@ -138,7 +155,7 @@ runs:
 
   - name: Format build output
     id: format-build
-    if: steps.format-restore.outputs.failed != 'true'
+    if: steps.format-restore.outputs.failed != 'true' && steps.restore-exit.outputs.failed != 'true'
     uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
     with:
       format: csc
@@ -150,8 +167,19 @@ runs:
       success_message: "## ✅ Build succeeded"
       path_strip: "${{ github.workspace }}/"
 
+  - name: Check build exit code
+    id: build-exit
+    if: steps.dotnet-build.outcome == 'success'
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    with:
+      label: "Build"
+      exit_code: ${{ steps.dotnet-build.outputs.exit_code }}
+      recognised_failed: ${{ steps.format-build.outputs.failed }}
+      output_file: ${{ env.TEMP_DIR }}/build.out
+      out_md: ${{ env.TEMP_DIR }}/build.md
+
   - name: Run extra command
-    if: steps.format-restore.outputs.failed != 'true' && inputs.extra_command != ''
+    if: steps.format-restore.outputs.failed != 'true' && steps.restore-exit.outputs.failed != 'true' && inputs.extra_command != ''
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -173,7 +201,7 @@ runs:
 
   - name: Run tests
     id: run-tests
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.format-restore.outputs.failed != 'true' && steps.restore-exit.outputs.failed != 'true' && steps.format-build.outputs.failed != 'true' && steps.build-exit.outputs.failed != 'true' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -239,7 +267,7 @@ runs:
 
   - name: Format test warnings
     id: format-test-warn
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
     with:
       format: csc
@@ -251,7 +279,7 @@ runs:
   - name: Generate test report
     uses: dorny/test-reporter@d1b5dff021aa968b288b02285a8bf47471c5928a # v3.2.0
     id: test-reporter
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     with:
       name: "Testreport"
       path: "**/TestResults/*.trx"
@@ -260,7 +288,7 @@ runs:
 
   - name: Generate test run report
     id: test-markdown-report
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     shell: bash
     working-directory: ${{ inputs.working_directory }}
     env:
@@ -321,7 +349,7 @@ runs:
 
   - name: Code coverage report
     uses: irongut/CodeCoverageSummary@51cc3a756ddcd398d447c044c02cb6aa83fdae95 # v1.3.0
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     with:
       filename: "**/coverage.cobertura.*.xml"
       badge: true
@@ -335,7 +363,7 @@ runs:
 
   - name: Move code coverage report to temp folder
     shell: bash
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     run: |
       {
         echo "<details>"
@@ -350,7 +378,7 @@ runs:
 
   - name: Cache ReportGenerator tool
     id: cache-reportgenerator
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
     with:
       path: ~/.dotnet/tools
@@ -359,7 +387,7 @@ runs:
   - name: Generate ReportGenerator coverage report
     id: reportgenerator
     shell: bash
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     continue-on-error: true
     env:
       REPORTGENERATOR_CACHE_HIT: ${{ steps.cache-reportgenerator.outputs.cache-hit }}
@@ -375,7 +403,7 @@ runs:
 
   - name: Copy ReportGenerator summary to temp folder
     shell: bash
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
     run: |
       if [ -f "$TEMP_DIR/coverage-report/SummaryGithub.md" ]; then
         {
@@ -391,7 +419,7 @@ runs:
 
   - name: Upload coverage reports
     uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-    if: steps.format-restore.outputs.failed != 'true' && inputs.test == 'true' && steps.reportgenerator.outcome == 'success'
+    if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true' && steps.reportgenerator.outcome == 'success'
     with:
       name: coverage-report
       path: ${{ steps.reportgenerator.outputs.report-path }}
@@ -465,6 +493,13 @@ runs:
         echo "## ✅ No changes in files after restore and build were found" > $TEMP_DIR/git-status.md
       fi
 
+  # Marks a stop at a step that writes no section of its own (setup-dotnet, a NuGet source, the
+  # extra command, a crashed step), so the comment doesn't end in silence.
+  - name: Note an early stop
+    if: failure()
+    shell: bash
+    run: touch "$TEMP_DIR/stopped-early"
+
   - name: Combine output into single PR comment
     id: pr-comment-combiner
     if: always()
@@ -472,24 +507,37 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     env:
       SOLUTION_FILE: ${{ inputs.solution_file }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     run: |
       echo "# Dotnet build status (${SOLUTION_FILE})" > $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/restore.md ] && cat $TEMP_DIR/restore.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/tests.md ] && cat $TEMP_DIR/tests.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/test-warn.md ] && cat $TEMP_DIR/test-warn.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/test-results.md ] && cat $TEMP_DIR/test-results.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/reportgenerator-summary.md ] && cat $TEMP_DIR/reportgenerator-summary.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
-      echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
+      for section in restore build tests test-warn test-results code-coverage-results reportgenerator-summary git-status; do
+        if [ -f "$TEMP_DIR/$section.md" ]; then cat "$TEMP_DIR/$section.md" >> $TEMP_DIR/combined.md; fi
+      done
+      if [ -f "$TEMP_DIR/stopped-early" ] && ! grep -q '^## ❌' $TEMP_DIR/combined.md; then
+        {
+          echo ""
+          echo "## ❌ The build stopped at a step that reports nothing here"
+          echo ""
+          echo "A setup step or the extra command failed, or a step crashed. See the [workflow run](${RUN_URL})."
+        } >> $TEMP_DIR/combined.md
+      fi
+      # A random delimiter: build or test output can contain a line reading "EOF".
+      delimiter="PR_COMMENT_$(openssl rand -hex 16)"
+      {
+        echo "result<<${delimiter}"
+        cat $TEMP_DIR/combined.md
+        echo ""
+        echo "${delimiter}"
+      } >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
 
   - name: Fail workflow on restore or build errors
     if: |
       always()
       && (steps.format-restore.outputs.failed == 'true'
-          || steps.format-build.outputs.failed == 'true')
+          || steps.restore-exit.outputs.failed == 'true'
+          || steps.format-build.outputs.failed == 'true'
+          || steps.build-exit.outputs.failed == 'true')
     shell: bash
     run: |
       echo "::error::Restore or build reported errors. See PR comment for details."

@@ -44,6 +44,10 @@ jobs:
         run: bash ./scripts/grype-summary.test.sh
       - name: Run manifests tests
         run: bash ./scripts/manifests.test.sh
+      - name: Run _unrecognised-failure tests
+        run: bash ./scripts/unrecognised-failure.test.sh
+      - name: Run _sticky-pr-comment tests
+        run: bash ./scripts/sticky-pr-comment.test.sh
       - name: Run _format-detect tests
         run: bash ./scripts/format-detect.test.sh
       - name: Run badges tests

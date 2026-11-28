@@ -44,6 +44,10 @@ inputs:
     required: false
     description: "Cap on warnings shown inline; remainder summarized as '… and N more warnings'."
     default: "10"
+  max_errors_inline:
+    required: false
+    description: "Cap on errors shown inline; remainder summarized as '… and N more errors'. Every error is still annotated."
+    default: "50"
   path_strip:
     required: false
     description: "Prefix stripped from file paths in the markdown output. Defaults to GITHUB_WORKSPACE/."
@@ -74,5 +78,6 @@ runs:
         WARNING_HEADER: ${{ inputs.warning_header }}
         SUCCESS_MESSAGE: ${{ inputs.success_message }}
         MAX_WARNINGS_INLINE: ${{ inputs.max_warnings_inline }}
+        MAX_ERRORS_INLINE: ${{ inputs.max_errors_inline }}
         PATH_STRIP: ${{ inputs.path_strip }}
       run: bash "$GITHUB_ACTION_PATH/scripts/format.sh"

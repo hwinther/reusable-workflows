@@ -11,6 +11,9 @@ description: |
 
   Does nothing outside a pull_request event unless `pr_number` is given.
 
+  A body over GitHub's comment limit is cut at a line break, with a note pointing at the job
+  summary, instead of failing with 422 and leaving the previous comment in place.
+
 inputs:
   github_token:
     required: true
@@ -25,6 +28,17 @@ inputs:
     required: false
     description: "PR to comment on. Defaults to the pull_request event's PR."
     default: ""
+  fallback_content:
+    required: false
+    description: |
+      Markdown used when comment_content is empty, e.g. because the step that should have produced
+      it never ran (the job failed early, timed out or was cancelled). Without it an empty content
+      leaves a comment holding only the hidden marker.
+    default: ""
+  delete_when_empty:
+    required: false
+    description: "true: when there is nothing to say (empty content, no fallback), delete this identifier's comment instead of posting an empty one."
+    default: "false"
 
 runs:
   using: "composite"
@@ -35,6 +49,9 @@ runs:
         GH_TOKEN: ${{ inputs.github_token }}
         COMMENT_ID: ${{ inputs.comment_identifier }}
         COMMENT_CONTENT: ${{ inputs.comment_content }}
+        FALLBACK_CONTENT: ${{ inputs.fallback_content }}
+        DELETE_WHEN_EMPTY: ${{ inputs.delete_when_empty }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         PR_NUMBER: ${{ inputs.pr_number != '' && inputs.pr_number || github.event.pull_request.number }}
       run: |
         set -euo pipefail
@@ -45,7 +62,7 @@ runs:
 
         export MARKER="<!-- sticky-pr-comment: ${COMMENT_ID} -->"
         body_file="$(mktemp)"
-        printf '%s\n%s' "$MARKER" "$COMMENT_CONTENT" > "$body_file"
+        action="$(CONTENT="$COMMENT_CONTENT" BODY_FILE="$body_file" bash "$GITHUB_ACTION_PATH/scripts/body.sh")"
 
         # One id per line across all pages; take the first. Not piped to head, so
         # pipefail can't trip on SIGPIPE.
@@ -53,7 +70,14 @@ runs:
           --jq '.[] | select((.body // "") | startswith($ENV.MARKER)) | .id')"
         existing="${ids%%$'\n'*}"
 
-        if [ -n "$existing" ]; then
+        if [ "$action" = "delete" ]; then
+          if [ -n "$existing" ]; then
+            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" > /dev/null
+            echo "Deleted PR #${PR_NUMBER} comment ${existing} (${COMMENT_ID}): nothing to report."
+          else
+            echo "Nothing to report and no existing comment (${COMMENT_ID}); not commenting."
+          fi
+        elif [ -n "$existing" ]; then
           jq -n --rawfile body "$body_file" '{body: $body}' \
             | gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" --input - > /dev/null
           echo "Updated PR #${PR_NUMBER} comment ${existing} (${COMMENT_ID})."

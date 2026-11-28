@@ -454,10 +454,18 @@ jobs:
       - name: "Create or update PR comment for node"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: always() && github.event_name == 'pull_request'
+        # The result is in the job summary too; a comment that can't be posted (read-only token on a
+        # fork PR, API error) must not fail a build that passed.
+        continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: "build-results-node"
           comment_content: ${{ steps.node-build.outputs.pr-comment }}
+          # Empty when the build step never produced a report (setup failed, timeout, cancel).
+          fallback_content: |
+            ## ❌ No Node build report
+
+            The build job stopped before it could write one: a setup step failed, or the job timed out or was cancelled. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
   dotnet-build:
     needs: detect-changes
@@ -495,10 +503,18 @@ jobs:
       - name: "Create or update PR comment for dotnet"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: always() && github.event_name == 'pull_request'
+        # The result is in the job summary too; a comment that can't be posted (read-only token on a
+        # fork PR, API error) must not fail a build that passed.
+        continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: "build-results-dotnet"
           comment_content: ${{ steps.dotnet-build.outputs.pr-comment }}
+          # Empty when the build step never produced a report (setup failed, timeout, cancel).
+          fallback_content: |
+            ## ❌ No Dotnet build report
+
+            The build job stopped before it could write one: a setup step failed, or the job timed out or was cancelled. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
   python-build:
     needs: detect-changes
@@ -531,10 +547,18 @@ jobs:
       - name: "Create or update PR comment for python"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: always() && github.event_name == 'pull_request'
+        # The result is in the job summary too; a comment that can't be posted (read-only token on a
+        # fork PR, API error) must not fail a build that passed.
+        continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: "build-results-python"
           comment_content: ${{ steps.python-build.outputs.pr-comment }}
+          # Empty when the build step never produced a report (setup failed, timeout, cancel).
+          fallback_content: |
+            ## ❌ No Python build report
+
+            The build job stopped before it could write one: a setup step failed, or the job timed out or was cancelled. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
   go-build:
     needs: detect-changes
@@ -565,10 +589,18 @@ jobs:
       - name: "Create or update PR comment for go"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         if: always() && github.event_name == 'pull_request'
+        # The result is in the job summary too; a comment that can't be posted (read-only token on a
+        # fork PR, API error) must not fail a build that passed.
+        continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: "build-results-go"
           comment_content: ${{ steps.go-build.outputs.pr-comment }}
+          # Empty when the build step never produced a report (setup failed, timeout, cancel).
+          fallback_content: |
+            ## ❌ No Go build report
+
+            The build job stopped before it could write one: a setup step failed, or the job timed out or was cancelled. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
   pr-build:
     needs: [detect-changes, node-build, dotnet-build, python-build, go-build]
@@ -579,9 +611,16 @@ jobs:
       pull-requests: write
     steps:
       - name: Write change check status to summary
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          IS_DRAFT: ${{ github.event.pull_request.draft == true }}
         run: |
           echo "## Change checks" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "Change detection: **${DETECT_RESULT}**$( [ "$IS_DRAFT" = "true" ] && echo " (draft PR)")" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "| Check | Changes detected | Build result |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|------------------|--------------|" >> $GITHUB_STEP_SUMMARY
           NODE_RESULT="${{ needs.node-build.result }}"
@@ -641,7 +680,21 @@ jobs:
           echo "| Go | $GO_STATUS | $GO_BUILD |" >> $GITHUB_STEP_SUMMARY
 
       - name: Check build status
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          IS_DRAFT: ${{ github.event.pull_request.draft == true }}
         run: |
+          # Every build is skipped when change detection didn't run, so check it first: a failed
+          # detect-changes used to read as "no relevant changes" and pass.
+          if [ "$DETECT_RESULT" = "skipped" ] && [ "$IS_DRAFT" = "true" ]; then
+            echo "Draft PR: builds are skipped until it is marked ready for review."
+            exit 0
+          fi
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "❌ Change detection did not succeed (${DETECT_RESULT}), so no build ran."
+            exit 1
+          fi
+
           NODE_RESULT="${{ needs.node-build.result }}"
           DOTNET_RESULT="${{ needs.dotnet-build.result }}"
           PYTHON_RESULT="${{ needs.python-build.result }}"
@@ -676,13 +729,38 @@ jobs:
           echo "✅ All relevant builds succeeded."
           exit 0
 
+      # One gate comment (build-results): "no relevant changes", or why nothing ran. Deleted when
+      # builds ran, since their own comments say how they went.
       - name: "Create or update PR comment (no relevant changes)"
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
-        if: github.event_name == 'pull_request' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped' && needs.go-build.result == 'skipped'
+        if: github.event_name == 'pull_request' && needs.detect-changes.result == 'success' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped' && needs.go-build.result == 'skipped'
+        continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: "build-results"
           comment_content: "## ✅ No relevant changes found for build or lint."
+
+      - name: "Create or update PR comment (change detection failed)"
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        if: github.event_name == 'pull_request' && needs.detect-changes.result != 'success' && needs.detect-changes.result != 'skipped'
+        continue-on-error: true
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "build-results"
+          comment_content: |
+            ## ❌ Change detection failed, so no build ran
+
+            See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+
+      - name: "Remove a stale gate comment (builds ran)"
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        if: github.event_name == 'pull_request' && needs.detect-changes.result == 'success' && (needs.node-build.result != 'skipped' || needs.dotnet-build.result != 'skipped' || needs.python-build.result != 'skipped' || needs.go-build.result != 'skipped')
+        continue-on-error: true
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          comment_identifier: "build-results"
+          comment_content: ""
+          delete_when_empty: "true"
 
   dotnet-inspect-code:
     needs: detect-changes

@@ -8,7 +8,7 @@
 # Per-case files (all optional unless noted):
 #   env.sh             — sourced before format.sh runs. MUST set FORMAT and may set
 #                        ERROR_HEADER, WARNING_HEADER, SUCCESS_MESSAGE,
-#                        MAX_WARNINGS_INLINE, PATH_STRIP.
+#                        MAX_WARNINGS_INLINE, MAX_ERRORS_INLINE, PATH_STRIP.
 #   errors             — line-based input passed to format.sh as ERRORS_FILE
 #                        (auto-detected if env.sh doesn't set ERRORS_FILE).
 #   warnings           — same, for WARNINGS_FILE.
@@ -67,7 +67,7 @@ run_case() {
   # Reset state in this subshell-ish scope. Variables intentionally local so they
   # don't leak between cases.
   unset FORMAT ERRORS_FILE WARNINGS_FILE OUT_MD ERROR_HEADER WARNING_HEADER \
-        SUCCESS_MESSAGE MAX_WARNINGS_INLINE PATH_STRIP
+        SUCCESS_MESSAGE MAX_WARNINGS_INLINE MAX_ERRORS_INLINE PATH_STRIP
 
   local out_md="$work/actual.md"
   local out_outputs="$work/actual.outputs"
@@ -107,6 +107,7 @@ run_case() {
   [ -n "${WARNING_HEADER:-}" ] && export WARNING_HEADER
   [ -n "${SUCCESS_MESSAGE:-}" ] && export SUCCESS_MESSAGE
   [ -n "${MAX_WARNINGS_INLINE:-}" ] && export MAX_WARNINGS_INLINE
+  [ -n "${MAX_ERRORS_INLINE:-}" ] && export MAX_ERRORS_INLINE
   [ -n "${PATH_STRIP:-}" ] && export PATH_STRIP
 
   bash "$FORMAT_SCRIPT" > "$out_stdout" 2> "$out_stderr"

@@ -78,8 +78,15 @@ runs:
       if [[ $exit_code -ne 0 ]]
       then
         echo "::error::Dependency installation failed."
-        echo "## ❌ Dependency installation failed:" > $TEMP_DIR/dependency.md
-        cat $TEMP_DIR/dependency.out >> $TEMP_DIR/dependency.md
+        {
+          echo "## ❌ Dependency installation failed (exit code $exit_code)"
+          echo ""
+          echo "The last 100 lines of \`npm ci\`:"
+          echo ""
+          echo '```text'
+          tail -n 100 $TEMP_DIR/dependency.out
+          echo '```'
+        } > $TEMP_DIR/dependency.md
         exit 1
       else
         echo "## ✅ Dependency installation succeeded" > $TEMP_DIR/dependency.md
@@ -112,6 +119,7 @@ runs:
       TYPECHECK_EXIT_CODE=$?
       set -e
       echo "Typecheck exit code: $TYPECHECK_EXIT_CODE"
+      echo "exit_code=$TYPECHECK_EXIT_CODE" >> "$GITHUB_OUTPUT"
       cat $TEMP_DIR/typecheck.out
       echo "::endgroup::"
 
@@ -141,6 +149,18 @@ runs:
       success_message: "## ✅ Typecheck succeeded"
 
   # Build: same shape as typecheck. Build warnings include "Warning:" / "[…][Warning]" bundler output.
+  # A non-zero exit with no recognised error line (crash, missing binary, out of memory) must not pass.
+  - name: Check typecheck exit code
+    id: typecheck-exit
+    if: steps.node-typecheck.outcome == 'success' && steps.node-typecheck.outputs.skipped != 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    with:
+      label: "Typecheck"
+      exit_code: ${{ steps.node-typecheck.outputs.exit_code }}
+      recognised_failed: ${{ steps.format-typecheck.outputs.failed }}
+      output_file: ${{ env.TEMP_DIR }}/typecheck.out
+      out_md: ${{ env.TEMP_DIR }}/typecheck.md
+
   - name: Build
     id: node-build
     if: steps.dependency-install.outcome == 'success'
@@ -165,6 +185,7 @@ runs:
       BUILD_EXIT_CODE=$?
       set -e
       echo "Build exit code: $BUILD_EXIT_CODE"
+      echo "exit_code=$BUILD_EXIT_CODE" >> "$GITHUB_OUTPUT"
       cat $TEMP_DIR/build.out
       echo "::endgroup::"
 
@@ -189,6 +210,17 @@ runs:
       error_header: "## ❌ The following build errors should be fixed:"
       warning_header: "## ⚠️ Build warnings:"
       success_message: "## ✅ Build succeeded"
+
+  - name: Check build exit code
+    id: build-exit
+    if: steps.node-build.outcome == 'success' && steps.node-build.outputs.skipped != 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    with:
+      label: "Build"
+      exit_code: ${{ steps.node-build.outputs.exit_code }}
+      recognised_failed: ${{ steps.format-build.outputs.failed }}
+      output_file: ${{ env.TEMP_DIR }}/build.out
+      out_md: ${{ env.TEMP_DIR }}/build.md
 
   - name: Run extra command
     if: steps.dependency-install.outcome == 'success' && inputs.extra_command != ''
@@ -230,6 +262,7 @@ runs:
       LINT_EXIT_CODE=$?
       set -e
       echo "Lint exit code: $LINT_EXIT_CODE"
+      echo "exit_code=$LINT_EXIT_CODE" >> "$GITHUB_OUTPUT"
       cat $TEMP_DIR/eslint.json
       echo "::endgroup::"
 
@@ -253,6 +286,18 @@ runs:
       error_header: "## ❌ The following lint issues should be fixed:"
       warning_header: "## ⚠️ Lint warnings:"
       success_message: "## ✅ No lint issues 🎊"
+
+  - name: Check lint exit code
+    id: lint-exit
+    if: steps.node-lint.outcome == 'success' && steps.node-lint.outputs.skipped != 'true' && steps.node-lint.outputs.lint_runtime_error != 'true'
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    with:
+      label: "Lint"
+      exit_code: ${{ steps.node-lint.outputs.exit_code }}
+      recognised_failed: ${{ steps.format-lint.outputs.failed }}
+      output_file: ${{ env.TEMP_DIR }}/lint.err
+      out_md: ${{ env.TEMP_DIR }}/lint.md
+      hint: "ESLint exits 1 with only warnings when --max-warnings is exceeded; lint:ci may also run more than ESLint."
 
   - name: Run tests
     id: test-coverage
@@ -489,6 +534,13 @@ runs:
         echo "## ✅ No changes in files after install and build were found" > $TEMP_DIR/git-status.md
       fi
 
+  # Marks a stop at a step that writes no section of its own (setup-node, the extra command, a
+  # crashed step), so the comment doesn't end in silence.
+  - name: Note an early stop
+    if: failure()
+    shell: bash
+    run: touch "$TEMP_DIR/stopped-early"
+
   - name: Combine output into PR comment
     id: pr-comment-combiner
     if: always()
@@ -496,24 +548,38 @@ runs:
     working-directory: ${{ inputs.working_directory }}
     env:
       WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     run: |
       echo "# Node build status (${WORKING_DIRECTORY})" > $TEMP_DIR/combined.md
-      cat $TEMP_DIR/dependency.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/typecheck.md ] && cat $TEMP_DIR/typecheck.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/build.md ] && cat $TEMP_DIR/build.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/lint.md ] && cat $TEMP_DIR/lint.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/test-output.md ] && cat $TEMP_DIR/test-output.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/test-results.md ] && cat $TEMP_DIR/test-results.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/code-coverage-results.md ] && cat $TEMP_DIR/code-coverage-results.md >> $TEMP_DIR/combined.md
-      [ -f $TEMP_DIR/git-status.md ] && cat $TEMP_DIR/git-status.md >> $TEMP_DIR/combined.md
-      echo "result<<EOF"$'\n'"$(cat $TEMP_DIR/combined.md)"$'\n'EOF >> $GITHUB_OUTPUT
+      for section in dependency typecheck build lint test-output test-results code-coverage-results git-status; do
+        if [ -f "$TEMP_DIR/$section.md" ]; then cat "$TEMP_DIR/$section.md" >> $TEMP_DIR/combined.md; fi
+      done
+      if [ -f "$TEMP_DIR/stopped-early" ] && ! grep -q '^## ❌' $TEMP_DIR/combined.md; then
+        {
+          echo ""
+          echo "## ❌ The build stopped at a step that reports nothing here"
+          echo ""
+          echo "A setup step or the extra command failed, or a step crashed. See the [workflow run](${RUN_URL})."
+        } >> $TEMP_DIR/combined.md
+      fi
+      # A random delimiter: build or test output can contain a line reading "EOF".
+      delimiter="PR_COMMENT_$(openssl rand -hex 16)"
+      {
+        echo "result<<${delimiter}"
+        cat $TEMP_DIR/combined.md
+        echo ""
+        echo "${delimiter}"
+      } >> $GITHUB_OUTPUT
       cat $TEMP_DIR/combined.md >> $GITHUB_STEP_SUMMARY
 
   - name: Fail workflow on typecheck/build/lint errors
     if: |
       steps.format-typecheck.outputs.failed == 'true'
+      || steps.typecheck-exit.outputs.failed == 'true'
       || steps.format-build.outputs.failed == 'true'
+      || steps.build-exit.outputs.failed == 'true'
       || steps.format-lint.outputs.failed == 'true'
+      || steps.lint-exit.outputs.failed == 'true'
       || steps.node-lint.outputs.lint_runtime_error == 'true'
     shell: bash
     run: |
