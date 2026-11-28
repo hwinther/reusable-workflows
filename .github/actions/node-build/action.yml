@@ -148,7 +148,7 @@ runs:
   - name: Format typecheck output
     id: format-typecheck
     if: steps.dependency-install.outcome == 'success' && steps.node-typecheck.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.46.0
     with:
       format: ts
       errors_file: ${{ env.TEMP_DIR }}/typecheck.err
@@ -163,7 +163,7 @@ runs:
   - name: Check typecheck exit code
     id: typecheck-exit
     if: steps.node-typecheck.outcome == 'success' && steps.node-typecheck.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2.46.0
     with:
       label: "Typecheck"
       exit_code: ${{ steps.node-typecheck.outputs.exit_code }}
@@ -211,7 +211,7 @@ runs:
   - name: Format build output
     id: format-build
     if: steps.dependency-install.outcome == 'success' && steps.node-build.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.46.0
     with:
       format: ts
       errors_file: ${{ env.TEMP_DIR }}/build.err
@@ -224,7 +224,7 @@ runs:
   - name: Check build exit code
     id: build-exit
     if: steps.node-build.outcome == 'success' && steps.node-build.outputs.skipped != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2.46.0
     with:
       label: "Build"
       exit_code: ${{ steps.node-build.outputs.exit_code }}
@@ -288,7 +288,7 @@ runs:
   - name: Format lint output
     id: format-lint
     if: steps.dependency-install.outcome == 'success' && steps.node-lint.outputs.skipped != 'true' && steps.node-lint.outputs.lint_runtime_error != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.46.0
     with:
       format: eslint-json
       errors_file: ${{ env.TEMP_DIR }}/eslint.json
@@ -300,7 +300,7 @@ runs:
   - name: Check lint exit code
     id: lint-exit
     if: steps.node-lint.outcome == 'success' && steps.node-lint.outputs.skipped != 'true' && steps.node-lint.outputs.lint_runtime_error != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2.46.0
     with:
       label: "Lint"
       exit_code: ${{ steps.node-lint.outputs.exit_code }}
@@ -547,7 +547,7 @@ runs:
   - name: Summarise the build
     id: summary
     if: always()
-    uses: hwinther/reusable-workflows/.github/actions/_build-summary@v2
+    uses: hwinther/reusable-workflows/.github/actions/_build-summary@v2.46.0
     with:
       steps: |
         typecheck|${{ steps.format-typecheck.outputs.error_count }}|${{ steps.typecheck-exit.outputs.failed }}|${{ steps.node-typecheck.outputs.exit_code }}

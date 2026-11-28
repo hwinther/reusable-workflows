@@ -19,7 +19,7 @@ name: "PR report"
 #         actions: read
 #         contents: read
 #         pull-requests: write
-#       uses: hwinther/reusable-workflows/.github/workflows/pr-report.yml@v2  # pin the release SHA in a consumer
+#       uses: hwinther/reusable-workflows/.github/workflows/pr-report.yml@v2.46.0  # pin the release SHA in a consumer
 #
 # workflow_run runs with the base repository's token, so the comment is posted on fork and
 # Dependabot PRs too. The sections come from PR runs and are treated as data: parsed with jq and
@@ -150,7 +150,7 @@ jobs:
       # No sections means the repo doesn't use pr-report-section (yet): stay quiet.
       - name: Render the report
         if: steps.collect.outputs.count != '' && steps.collect.outputs.count != '0'
-        uses: hwinther/reusable-workflows/.github/actions/_pr-report-render@v2
+        uses: hwinther/reusable-workflows/.github/actions/_pr-report-render@v2.46.0
         with:
           reports_dir: ${{ steps.collect.outputs.dir }}
           sha: ${{ steps.target.outputs.sha }}
@@ -174,7 +174,7 @@ jobs:
 
       - name: Create or update the PR comment
         if: steps.collect.outputs.count != '' && steps.collect.outputs.count != '0'
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         with:
           github_token: ${{ github.token }}
           comment_identifier: ${{ inputs.comment_identifier }}

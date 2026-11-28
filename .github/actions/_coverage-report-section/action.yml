@@ -38,7 +38,7 @@ runs:
         COVERAGE_THRESHOLDS: ${{ inputs.coverage_thresholds }}
       run: bash "$GITHUB_ACTION_PATH/scripts/parse.sh"
 
-    - uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+    - uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2.46.0
       with:
         id: ${{ inputs.id }}
         title: ${{ inputs.title }}

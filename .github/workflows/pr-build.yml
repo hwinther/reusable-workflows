@@ -452,7 +452,7 @@ jobs:
 
       - name: Build node
         id: node-build
-        uses: hwinther/reusable-workflows/.github/actions/node-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/node-build@v2.46.0
         with:
           coverage_thresholds: ${{ inputs.coverage_thresholds }}
           node_version: ${{ inputs.node_version }}
@@ -466,7 +466,7 @@ jobs:
 
       - name: "Add the node build to the PR report"
         if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
-        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2.46.0
         with:
           id: build-node-${{ inputs.node_working_directory }}
           title: Build · Node${{ inputs.node_working_directory != '' && format(' ({0})', inputs.node_working_directory) || '' }}
@@ -477,7 +477,7 @@ jobs:
           order: "10"
 
       - name: "Create or update PR comment for node"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
@@ -511,7 +511,7 @@ jobs:
 
       - name: Build dotnet
         id: dotnet-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2.46.0
         with:
           coverage_thresholds: ${{ inputs.coverage_thresholds }}
           dotnet_version: ${{ inputs.dotnet_version }}
@@ -528,7 +528,7 @@ jobs:
 
       - name: "Add the dotnet build to the PR report"
         if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
-        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2.46.0
         with:
           id: build-dotnet-${{ inputs.dotnet_solution_file }}
           title: Build · .NET${{ inputs.dotnet_solution_file != '' && format(' ({0})', inputs.dotnet_solution_file) || '' }}
@@ -539,7 +539,7 @@ jobs:
           order: "10"
 
       - name: "Create or update PR comment for dotnet"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
@@ -572,7 +572,7 @@ jobs:
 
       - name: Build python
         id: python-build
-        uses: hwinther/reusable-workflows/.github/actions/python-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/python-build@v2.46.0
         with:
           python_version: ${{ inputs.python_version }}
           working_directory: ${{ inputs.python_working_directory }}
@@ -584,7 +584,7 @@ jobs:
 
       - name: "Add the python build to the PR report"
         if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
-        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2.46.0
         with:
           id: build-python-${{ inputs.python_working_directory }}
           title: Build · Python${{ inputs.python_working_directory != '' && format(' ({0})', inputs.python_working_directory) || '' }}
@@ -593,7 +593,7 @@ jobs:
           order: "10"
 
       - name: "Create or update PR comment for python"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
@@ -626,7 +626,7 @@ jobs:
 
       - name: Build go
         id: go-build
-        uses: hwinther/reusable-workflows/.github/actions/go-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/go-build@v2.46.0
         with:
           go_version: ${{ inputs.go_version }}
           working_directory: ${{ inputs.go_working_directory }}
@@ -636,7 +636,7 @@ jobs:
 
       - name: "Add the go build to the PR report"
         if: always() && github.event_name == 'pull_request' && inputs.pr_report_enabled
-        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2.46.0
         with:
           id: build-go-${{ inputs.go_working_directory }}
           title: Build · Go${{ inputs.go_working_directory != '' && format(' ({0})', inputs.go_working_directory) || '' }}
@@ -645,7 +645,7 @@ jobs:
           order: "10"
 
       - name: "Create or update PR comment for go"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled
         # The result is in the job summary too; a comment that can't be posted (read-only token on a
         # fork PR, API error) must not fail a build that passed.
@@ -792,7 +792,7 @@ jobs:
       # One gate comment (build-results): "no relevant changes", or why nothing ran. Deleted when
       # builds ran, since their own comments say how they went.
       - name: "Create or update PR comment (no relevant changes)"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled && needs.detect-changes.result == 'success' && needs.node-build.result == 'skipped' && needs.dotnet-build.result == 'skipped' && needs.python-build.result == 'skipped' && needs.go-build.result == 'skipped'
         continue-on-error: true
         with:
@@ -801,7 +801,7 @@ jobs:
           comment_content: "## ✅ No relevant changes found for build or lint."
 
       - name: "Create or update PR comment (change detection failed)"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled && needs.detect-changes.result != 'success' && needs.detect-changes.result != 'skipped'
         continue-on-error: true
         with:
@@ -813,7 +813,7 @@ jobs:
             See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
 
       - name: "Remove a stale gate comment (builds ran)"
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         if: always() && github.event_name == 'pull_request' && !inputs.pr_report_enabled && needs.detect-changes.result == 'success' && (needs.node-build.result != 'skipped' || needs.dotnet-build.result != 'skipped' || needs.python-build.result != 'skipped' || needs.go-build.result != 'skipped')
         continue-on-error: true
         with:
@@ -843,7 +843,7 @@ jobs:
 
       - name: "Add the gate to the PR report"
         if: always() && steps.gate-report.outputs.add == 'true'
-        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2.46.0
         with:
           id: build
           title: Build
@@ -870,7 +870,7 @@ jobs:
 
       - name: Restore and build
         id: dotnet-restore-build
-        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2
+        uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2.46.0
         with:
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}

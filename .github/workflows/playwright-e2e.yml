@@ -605,7 +605,7 @@ jobs:
 
       - name: Slow spans report
         if: ${{ always() && inputs.otel_traces_file != '' }}
-        uses: hwinther/reusable-workflows/.github/actions/otel-slow-spans@v2
+        uses: hwinther/reusable-workflows/.github/actions/otel-slow-spans@v2.46.0
         with:
           traces_file: ${{ inputs.otel_traces_file }}
           threshold_ms: ${{ inputs.slow_span_threshold_ms }}
@@ -796,7 +796,7 @@ jobs:
 
       - name: Post or update PR comment
         if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_comment_enabled && !inputs.pr_report_enabled }}
-        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2.46.0
         continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -805,7 +805,7 @@ jobs:
 
       - name: Add the e2e run to the PR report
         if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_report_enabled }}
-        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2.46.0
         with:
           id: e2e
           title: E2E (Playwright)

@@ -84,7 +84,7 @@ runs:
 
   - name: Add extra NuGet source
     if: inputs.extra_nuget_source != ''
-    uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v2
+    uses: hwinther/reusable-workflows/.github/actions/_dotnet-add-nuget-source@v2.46.0
     with:
       extra_nuget_source: ${{ inputs.extra_nuget_source }}
       extra_nuget_source_name: ${{ inputs.extra_nuget_source_name }}
@@ -122,7 +122,7 @@ runs:
 
   - name: Format restore output
     id: format-restore
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.46.0
     with:
       format: nuget
       errors_file: ${{ env.TEMP_DIR }}/restore.err
@@ -134,7 +134,7 @@ runs:
   # A non-zero exit with no recognised error line (crash, missing SDK, out of memory) must not pass.
   - name: Check restore exit code
     id: restore-exit
-    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2.46.0
     with:
       label: "Restore"
       exit_code: ${{ steps.dotnet-restore.outputs.exit_code }}
@@ -166,7 +166,7 @@ runs:
   - name: Format build output
     id: format-build
     if: steps.format-restore.outputs.failed != 'true' && steps.restore-exit.outputs.failed != 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.46.0
     with:
       format: csc
       errors_file: ${{ env.TEMP_DIR }}/build.err
@@ -180,7 +180,7 @@ runs:
   - name: Check build exit code
     id: build-exit
     if: steps.dotnet-build.outcome == 'success'
-    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2
+    uses: hwinther/reusable-workflows/.github/actions/_unrecognised-failure@v2.46.0
     with:
       label: "Build"
       exit_code: ${{ steps.dotnet-build.outputs.exit_code }}
@@ -278,7 +278,7 @@ runs:
   - name: Format test warnings
     id: format-test-warn
     if: steps.run-tests.outcome != 'skipped' && inputs.test == 'true'
-    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2
+    uses: hwinther/reusable-workflows/.github/actions/_format-output@v2.46.0
     with:
       format: csc
       warnings_file: ${{ env.TEMP_DIR }}/test.warn
@@ -506,7 +506,7 @@ runs:
   - name: Summarise the build
     id: summary
     if: always()
-    uses: hwinther/reusable-workflows/.github/actions/_build-summary@v2
+    uses: hwinther/reusable-workflows/.github/actions/_build-summary@v2.46.0
     with:
       steps: |
         restore|${{ steps.format-restore.outputs.error_count }}|${{ steps.restore-exit.outputs.failed }}|${{ steps.dotnet-restore.outputs.exit_code }}

@@ -27,7 +27,7 @@ name: "Publish to GitHub Pages"
 #     pages:
 #       if: github.event.workflow_run.event == 'push' && contains(fromJSON('["success","failure"]'), github.event.workflow_run.conclusion)
 #       permissions: { actions: read, contents: read, pages: write, id-token: write }
-#       uses: hwinther/reusable-workflows/.github/workflows/pages.yml@v2
+#       uses: hwinther/reusable-workflows/.github/workflows/pages.yml@v2.46.0
 #       with:
 #         layers: badges:${{ github.event.workflow_run.id }}
 #
@@ -36,7 +36,7 @@ name: "Publish to GitHub Pages"
 #   jobs:
 #     pages:
 #       permissions: { actions: read, contents: read, pages: write, id-token: write }
-#       uses: hwinther/reusable-workflows/.github/workflows/pages.yml@v2
+#       uses: hwinther/reusable-workflows/.github/workflows/pages.yml@v2.46.0
 #       with:
 #         layers: dir:docs/site=.
 #
@@ -165,13 +165,13 @@ jobs:
 
       - name: Render badges
         if: steps.resolve.outputs.quality_summary != ''
-        uses: hwinther/reusable-workflows/.github/actions/badges@v2
+        uses: hwinther/reusable-workflows/.github/actions/badges@v2.46.0
         with:
           quality_summary: ${{ steps.resolve.outputs.quality_summary }}
           out: ${{ runner.temp }}/pages-badges
 
       - name: Assemble site
-        uses: hwinther/reusable-workflows/.github/actions/_pages-site@v2
+        uses: hwinther/reusable-workflows/.github/actions/_pages-site@v2.46.0
         with:
           site: ${{ runner.temp }}/site
           layers_file: ${{ steps.resolve.outputs.layers_file }}
