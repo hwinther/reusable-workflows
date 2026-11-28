@@ -32,6 +32,10 @@ inputs:
     description: "Run tests"
     default: "true"
 
+  coverage_thresholds:
+    required: false
+    description: 'Colours of the line coverage in the summary output, "red green": below red is 🔴, below green 🟡, else 🟢.'
+    default: "40 80"
 outputs:
   pr-comment:
     description: "Combined PR comment with build status"
@@ -559,6 +563,7 @@ runs:
       coverage_dir: ${{ inputs.working_directory != '' && inputs.working_directory || '.' }}/coverage
       coverage_name: "cobertura-coverage.xml"
       git_status_file: ${{ env.TEMP_DIR }}/git-status.md
+      coverage_thresholds: ${{ inputs.coverage_thresholds }}
 
   # Marks a stop at a step that writes no section of its own (setup-node, the extra command, a
   # crashed step), so the comment doesn't end in silence.

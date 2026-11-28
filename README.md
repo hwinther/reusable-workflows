@@ -65,7 +65,7 @@ Reference as `uses: hwinther/reusable-workflows/.github/actions/<name>@v1`.
 - **`pr-report-section`** — adds one section (status, a table line, a markdown body) to the combined comment `pr-report.yml` renders, as the artifact `pr-report-<id>`.
 - **`verify-image`** — read-only end-to-end smoke test. Pulls signature + attestation metadata back from the registry and runs `cosign verify`, `cosign verify-attestation --type cyclonedx`, `cosign verify-attestation --type vuln`, `gh attestation verify`, plus a tag → digest resolution check. Useful as a final job in the publishing pipeline so signing/attestation breakage shows up in CI instead of at the consumer's admission controller.
 
-Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_format-detect`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_push-staging-image`, `_choose-image-handoff`, `_resolve-image-handoff`, `_dotnet-add-nuget-source`, `_sticky-pr-comment`, `_unrecognised-failure`, `_pr-report-render`, `_build-summary`.
+Internal helpers (prefixed `_`) are implementation details of the workflows above and are not part of the public surface: `_build-image-docker`, `_build-image-dotnet`, `_scan-image`, `_grype-summary`, `_format-output`, `_format-detect`, `_push-image-with-signatures`, `_save-image-artifact`, `_load-image-artifact`, `_push-staging-image`, `_choose-image-handoff`, `_resolve-image-handoff`, `_dotnet-add-nuget-source`, `_sticky-pr-comment`, `_unrecognised-failure`, `_pr-report-render`, `_build-summary`, `_coverage-report-section`.
 
 ## Typical usage patterns
 

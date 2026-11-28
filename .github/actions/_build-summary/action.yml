@@ -44,6 +44,10 @@ inputs:
     required: false
     description: "The uncommitted-changes section; a ❌ heading counts as a failure."
     default: ""
+  coverage_thresholds:
+    required: false
+    description: '"red green": line coverage below red is 🔴, below green 🟡, else 🟢. Informational.'
+    default: "40 80"
 
 outputs:
   summary:
@@ -68,4 +72,5 @@ runs:
         COVERAGE_DIR: ${{ inputs.coverage_dir }}
         COVERAGE_NAME: ${{ inputs.coverage_name }}
         GIT_STATUS_FILE: ${{ inputs.git_status_file }}
+        COVERAGE_THRESHOLDS: ${{ inputs.coverage_thresholds }}
       run: bash "$GITHUB_ACTION_PATH/scripts/summary.sh"

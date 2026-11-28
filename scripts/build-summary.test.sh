@@ -56,11 +56,11 @@ trx "$D/tests/Gen.Tests" 3 3 0
 cobertura "$D/tests/Api.Tests/TestResults/x/coverage.cobertura.1.xml" 800 1000
 cobertura "$D/tests/Gen.Tests/TestResults/y/coverage.cobertura.2.xml" 42 100
 
-expect dotnet-green "51/51 tests · 76.5 % lines" success \
+expect dotnet-green "51/51 tests · 🟡 76.5 % lines" success \
   STEPS=$'restore|0|false|0\nbuild|0|false|0' WARNINGS="0 0 0" TESTS_FORMAT=trx TESTS_PATH="$D" \
   COVERAGE_DIR="$D" COVERAGE_NAME='coverage.cobertura*.xml'
 
-expect dotnet-warnings "51/51 tests · 76.5 % lines · 3 warnings" warning \
+expect dotnet-warnings "51/51 tests · 🟡 76.5 % lines · 3 warnings" warning \
   STEPS=$'restore|0|false|0\nbuild|0|false|0' WARNINGS="1 2 " TESTS_FORMAT=trx TESTS_PATH="$D" \
   COVERAGE_DIR="$D" COVERAGE_NAME='coverage.cobertura*.xml'
 
@@ -84,7 +84,7 @@ N="$WORK/node"
 mkdir -p "$N/coverage"
 echo '{"numTotalTests":129,"numPassedTests":126,"numFailedTests":3,"numPendingTests":0,"numTodoTests":0,"success":false}' > "$N/coverage/json-report.json"
 cobertura "$N/coverage/cobertura-coverage.xml" 715 1000
-expect node-failing "3/129 tests failed · 71.5 % lines" failure \
+expect node-failing "3/129 tests failed · 🟡 71.5 % lines" failure \
   STEPS=$'typecheck|0|false|0\nbuild|0|false|0\nlint|0|false|0' TESTS_FORMAT=jest-json \
   TESTS_PATH="$N/coverage/json-report.json" COVERAGE_DIR="$N/coverage" COVERAGE_NAME=cobertura-coverage.xml
 
@@ -99,7 +99,16 @@ expect git-status "files changed by the build" failure GIT_STATUS_FILE="$G"
 R="$WORK/rate-only"
 mkdir -p "$R"
 printf '<coverage line-rate="0.842" branch-rate="0">\n</coverage>\n' > "$R/cobertura-coverage.xml"
-expect rate-only "84.2 % lines" success COVERAGE_DIR="$R" COVERAGE_NAME=cobertura-coverage.xml
+expect rate-only "🟢 84.2 % lines" success COVERAGE_DIR="$R" COVERAGE_NAME=cobertura-coverage.xml
+
+L="$WORK/low"
+cobertura "$L/cobertura-coverage.xml" 399 1000
+expect coverage-red "🔴 39.9 % lines" success COVERAGE_DIR="$L" COVERAGE_NAME=cobertura-coverage.xml
+expect coverage-thresholds "🟢 39.9 % lines" success COVERAGE_DIR="$L" COVERAGE_NAME=cobertura-coverage.xml COVERAGE_THRESHOLDS="20 30"
+expect coverage-bad-thresholds "🔴 39.9 % lines" success COVERAGE_DIR="$L" COVERAGE_NAME=cobertura-coverage.xml COVERAGE_THRESHOLDS="x"
+G80="$WORK/edge"
+cobertura "$G80/cobertura-coverage.xml" 800 1000
+expect coverage-edge "🟢 80.0 % lines" success COVERAGE_DIR="$G80" COVERAGE_NAME=cobertura-coverage.xml
 
 expect nothing "" success
 

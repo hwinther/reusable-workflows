@@ -1,0 +1,48 @@
+name: "Add the unit + e2e coverage to the PR report"
+description: |
+  Internal helper for e2e-coverage-summary.yml. Turns wshno-coverage-summary's markdown into a PR
+  report section: the table line sums it up ("unit 🟡 71.5 % · e2e 🟡 54.0 % · combined 🟢 82.3 %
+  (+10.8 from e2e)"), coloured by coverage_thresholds, and the markdown is the section's body.
+  Informational, so the status is neutral.
+
+  Not part of the public surface — leading underscore signals internal-only.
+
+inputs:
+  markdown_file:
+    required: true
+    description: "wshno-coverage-summary's markdown."
+  id:
+    required: false
+    description: "Section id."
+    default: "coverage-frontend"
+  title:
+    required: false
+    description: "Section title."
+    default: "Frontend coverage (unit + e2e)"
+  coverage_thresholds:
+    required: false
+    description: '"red green": below red is 🔴, below green 🟡, else 🟢.'
+    default: "40 80"
+  order:
+    required: false
+    description: "Position in the report (40 is e2e)."
+    default: "41"
+
+runs:
+  using: "composite"
+  steps:
+    - id: parse
+      shell: bash
+      env:
+        MARKDOWN_FILE: ${{ inputs.markdown_file }}
+        COVERAGE_THRESHOLDS: ${{ inputs.coverage_thresholds }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/parse.sh"
+
+    - uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+      with:
+        id: ${{ inputs.id }}
+        title: ${{ inputs.title }}
+        status: neutral
+        summary: ${{ steps.parse.outputs.summary }}
+        content_file: ${{ inputs.markdown_file }}
+        order: ${{ inputs.order }}
