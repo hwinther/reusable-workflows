@@ -2,7 +2,7 @@ name: "Add the unit + e2e coverage to the PR report"
 description: |
   Internal helper for e2e-coverage-summary.yml. Turns wshno-coverage-summary's markdown into a PR
   report section: the table line sums it up ("unit 🟡 71.5 % · e2e 🟡 54.0 % · combined 🟢 82.3 %
-  (+10.8 from e2e)"), coloured by coverage_thresholds, and the markdown is the section's body.
+  (+108 lines from e2e)"), coloured by coverage_thresholds, and the markdown is the section's body.
   Informational, so the status is neutral.
 
   Not part of the public surface — leading underscore signals internal-only.
