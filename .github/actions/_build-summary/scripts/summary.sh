@@ -13,6 +13,7 @@
 #   COVERAGE_DIR     directory searched for Cobertura files named COVERAGE_NAME
 #   COVERAGE_NAME    find -name pattern, e.g. coverage.cobertura*.xml
 #   GIT_STATUS_FILE  the uncommitted-changes section; a ❌ heading counts as a failure
+#   COVERAGE_THRESHOLDS  "red green": coverage below red is 🔴, below green 🟡, else 🟢 (default "40 80")
 # Writes summary= and status= to GITHUB_OUTPUT.
 set -uo pipefail
 
@@ -20,6 +21,15 @@ parts=()
 failed=false
 
 plural() { if [ "$1" -eq 1 ]; then echo "$1 $2"; else echo "$1 ${2}s"; fi; }
+
+# The same colouring as _coverage-report-section. Informational: it doesn't change the status.
+read -r COV_RED COV_GREEN _ <<< "${COVERAGE_THRESHOLDS:-40 80}"
+[[ "${COV_RED:-}" =~ ^[0-9.]+$ ]] || COV_RED=40
+[[ "${COV_GREEN:-}" =~ ^[0-9.]+$ ]] || COV_GREEN=80
+cov() {
+  awk -v p="$1" -v r="$COV_RED" -v g="$COV_GREEN" \
+    'BEGIN { printf "%s %.1f %% lines", (p < r) ? "🔴" : (p < g) ? "🟡" : "🟢", p }'
+}
 
 # --- failures of the build steps
 while IFS='|' read -r label errors unrecognised code; do
@@ -103,9 +113,9 @@ if [ -n "${COVERAGE_DIR:-}" ] && [ -n "${COVERAGE_NAME:-}" ] && [ -d "$COVERAGE_
     fi
   done < <(find "$COVERAGE_DIR" -name "$COVERAGE_NAME" -not -path '*/node_modules/*' -print0 2>/dev/null)
   if [ "$valid" -gt 0 ]; then
-    parts+=("$(awk -v c="$covered" -v v="$valid" 'BEGIN { printf "%.1f %% lines", 100 * c / v }')")
+    parts+=("$(cov "$(awk -v c="$covered" -v v="$valid" 'BEGIN { printf "%.4f", 100 * c / v }')")")
   elif [ "$files" -eq 1 ] && [ -n "$rate" ]; then
-    parts+=("$(awk -v r="$rate" 'BEGIN { printf "%.1f %% lines", 100 * r }')")
+    parts+=("$(cov "$(awk -v r="$rate" 'BEGIN { printf "%.4f", 100 * r }')")")
   fi
 fi
 

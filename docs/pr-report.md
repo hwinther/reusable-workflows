@@ -8,10 +8,11 @@ different workflows. `pr-report.yml` replaces them with one comment per PR:
 
 | Check | Result | Run |
 |---|---|---|
-| ✅ Build · .NET (Backend.slnx) | passed · 51/51 tests · 84.2 % lines | run |
-| ⚠️ Build · Node (src/frontend) | 129/129 tests · 71.5 % lines · 3 warnings | run |
+| ✅ Build · .NET (Backend.slnx) | passed · 51/51 tests · 🟢 84.2 % lines | run |
+| ⚠️ Build · Node (src/frontend) | 129/129 tests · 🟡 71.5 % lines · 3 warnings | run |
 | ⚠️ Image scan · api | warnings · 0 critical, 2 high | run |
-| ⏳ PR e2e | running | |
+| ✅ E2E (Playwright) | passed · 34/34 tests · 2m 10s | run |
+| ℹ️ Frontend coverage (unit + e2e) | unit 🟡 71.5 % · e2e 🟡 54.0 % · combined 🟢 82.3 % (+10.8 from e2e) | run |
 
 ▸ ✅ Build · .NET (Backend.slnx)        (collapsed)
 ▾ ⚠️ Image scan · api                    (open: needs attention)
@@ -67,6 +68,15 @@ comment. For .NET and Node its table line sums the build up: failures first (`2 
 `build exit 137 (killed)`, `3/129 tests failed`), otherwise tests, line coverage (summed over the
 Cobertura files) and warnings; warnings alone make it ⚠️ while the build still passes. The gate adds a `build` section when no build ran (no relevant changes, a draft, or a
 failed change detection).
+
+The e2e workflows take the same input: `playwright-e2e.yml` with `pr_report_enabled: true` adds the
+`e2e` section (tests, flaky, duration; or which compose services kept the stack down), and
+`e2e-coverage-summary.yml` adds `coverage-frontend` (unit, e2e and combined line coverage, and how
+much e2e adds), both in place of their own comments.
+
+Coverage is coloured 🔴 below 40 %, 🟡 below 80 % and 🟢 from 80 %; change it with
+`coverage_thresholds: "50 90"` on `pr-build.yml` and `e2e-coverage-summary.yml`. The colour is
+informational and never changes a section's status.
 
 A job of your own adds a section like this:
 

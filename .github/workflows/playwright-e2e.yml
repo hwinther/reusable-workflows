@@ -162,6 +162,11 @@ on:
         required: false
         type: boolean
         default: true
+      pr_report_enabled:
+        description: "Add the run to the combined PR report (pr-report.yml) as the `e2e` section, instead of its own PR comment. Needs a pr-report.yml caller in the repo."
+        required: false
+        type: boolean
+        default: false
       playwright_env:
         description: "Extra environment variables for the Playwright run. Newline-separated KEY=VALUE pairs; each is exported into $GITHUB_ENV before 'Run Playwright' so the test command sees them. Caller resolves any secrets at its level (e.g. KEY=secrets.E2E_USERNAME via the standard expression syntax) before passing the value in. The runner masks known secret values in logs."
         required: false
@@ -659,6 +664,13 @@ jobs:
                 echo "The Playwright run did not produce a report — check the [workflow logs](${RUN_URL}) for setup or compose failures."
               fi
             } > "$out"
+            # The PR report's table line: which services kept the stack down, when that's known.
+            report_status=failure
+            report_summary="no test results"
+            if [ -s "${compose_dir}/services.json" ]; then
+              down="$(jq -r '[.[] | select(.problem != "") | .name] | join(", ")' "${compose_dir}/services.json" 2>/dev/null || true)"
+              report_summary="compose stack did not come up${down:+ (${down})}"
+            fi
           else
             passed=$(jq -r '.stats.expected // 0' "$REPORT_JSON")
             failed=$(jq -r '.stats.unexpected // 0' "$REPORT_JSON")
@@ -672,6 +684,19 @@ jobs:
             else
               header="❌ ${failed} test(s) failed"
             fi
+            # The PR report's table line: failures first, flaky tests make it a warning.
+            if [ "$failed" -gt 0 ]; then
+              report_status=failure
+              report_summary="${failed}/${total} tests failed"
+            elif [ "$flaky" -gt 0 ]; then
+              report_status=warning
+              report_summary="$((passed + flaky))/${total} tests · ${flaky} flaky"
+            else
+              report_status=success
+              report_summary="${passed}/${total} tests"
+            fi
+            [ "$skipped" -gt 0 ] && report_summary="${report_summary} (${skipped} skipped)"
+            report_summary="${report_summary} · ${duration}"
             {
               echo "### 🎭 Playwright E2E — ${header}"
               echo
@@ -757,20 +782,37 @@ jobs:
               echo "</details>"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
-          # Stash the same markdown for the downstream PR-comment step.
+          # Stash the same markdown for the downstream PR-comment step. A random delimiter: test
+          # output can contain any line.
+          delimiter="PR_COMMENT_$(openssl rand -hex 16)"
           {
-            echo "comment<<__EOM__"
+            echo "comment<<${delimiter}"
             cat "$out"
-            echo "__EOM__"
+            echo ""
+            echo "${delimiter}"
+            echo "report_status=${report_status}"
+            echo "report_summary=${report_summary}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Post or update PR comment
-        if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_comment_enabled }}
+        if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_comment_enabled && !inputs.pr_report_enabled }}
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
+        continue-on-error: true
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: ${{ inputs.comment_identifier }}
           comment_content: ${{ steps.e2e-summary.outputs.comment }}
+
+      - name: Add the e2e run to the PR report
+        if: ${{ always() && github.event_name == 'pull_request' && inputs.pr_report_enabled }}
+        uses: hwinther/reusable-workflows/.github/actions/pr-report-section@v2
+        with:
+          id: e2e
+          title: E2E (Playwright)
+          status: ${{ steps.e2e-summary.outputs.report_status || 'failure' }}
+          summary: ${{ steps.e2e-summary.outputs.report_summary }}
+          content: ${{ steps.e2e-summary.outputs.comment || 'The e2e job stopped before it wrote a report; see its run.' }}
+          order: "40"
 
       - name: Resolve report and coverage paths
         id: resolve-paths

@@ -114,6 +114,19 @@ on:
         required: false
         type: boolean
         default: true
+      pr_report_enabled:
+        description: >-
+          Add the summary to the combined PR report (pr-report.yml) as the `coverage-frontend` section,
+          instead of its own PR comment; it works on fork and Dependabot PRs too. Needs a pr-report.yml
+          caller in the repo.
+        required: false
+        type: boolean
+        default: false
+      coverage_thresholds:
+        description: 'Colours of the PR report line, "red green": coverage below red is 🔴, below green 🟡, else 🟢.'
+        required: false
+        type: string
+        default: "40 80"
     outputs:
       combined_pct:
         description: "Combined line coverage in percent (one decimal), empty when the summary didn't run."
@@ -265,10 +278,17 @@ jobs:
 
       - name: Post or update the PR comment
         if: >-
-          ${{ steps.merge.outputs.markdown != '' && inputs.pr_comment_enabled && github.event_name == 'pull_request'
+          ${{ steps.merge.outputs.markdown != '' && inputs.pr_comment_enabled && !inputs.pr_report_enabled && github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
         uses: hwinther/reusable-workflows/.github/actions/_sticky-pr-comment@v2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           comment_identifier: ${{ inputs.comment_identifier }}
           comment_content: ${{ steps.merge.outputs.markdown }}
+
+      - name: Add the coverage to the PR report
+        if: ${{ steps.merge.outputs.markdown != '' && inputs.pr_report_enabled && github.event_name == 'pull_request' }}
+        uses: hwinther/reusable-workflows/.github/actions/_coverage-report-section@v2
+        with:
+          markdown_file: ${{ runner.temp }}/coverage-summary.md
+          coverage_thresholds: ${{ inputs.coverage_thresholds }}

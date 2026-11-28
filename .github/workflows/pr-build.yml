@@ -206,6 +206,11 @@ on:
         type: boolean
         description: "Create TODO PR comment"
         default: true
+      coverage_thresholds:
+        required: false
+        type: string
+        description: 'Colours of the line coverage in the PR report, "red green": below red is 🔴, below green 🟡, else 🟢.'
+        default: "40 80"
       pr_report_enabled:
         required: false
         type: boolean
@@ -449,6 +454,7 @@ jobs:
         id: node-build
         uses: hwinther/reusable-workflows/.github/actions/node-build@v2
         with:
+          coverage_thresholds: ${{ inputs.coverage_thresholds }}
           node_version: ${{ inputs.node_version }}
           working_directory: ${{ inputs.node_working_directory }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -507,6 +513,7 @@ jobs:
         id: dotnet-build
         uses: hwinther/reusable-workflows/.github/actions/dotnet-build@v2
         with:
+          coverage_thresholds: ${{ inputs.coverage_thresholds }}
           dotnet_version: ${{ inputs.dotnet_version }}
           working_directory: ${{ inputs.dotnet_working_directory }}
           solution_file: ${{ inputs.dotnet_solution_file }}
