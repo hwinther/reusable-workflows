@@ -411,7 +411,80 @@ jobs:
           COMPOSE_FILE: ${{ inputs.compose_file }}
           COMPOSE_TIMEOUT: ${{ inputs.compose_up_timeout_seconds }}
         run: |
-          docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout "$COMPOSE_TIMEOUT"
+          set -uo pipefail
+          # --wait-timeout does not bound the wait for a `service_completed_successfully` dependency (some
+          # Compose versions wait for it forever), so cap the whole command: twice the timeout plus a minute.
+          timeout --kill-after=15 "$((COMPOSE_TIMEOUT * 2 + 60))"   docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout "$COMPOSE_TIMEOUT" && exit 0
+          status=$?
+          [ "$status" -eq 124 ] && echo "docker compose up did not return within $((COMPOSE_TIMEOUT * 2 + 60))s."
+
+          # The stack did not come up. `up --wait` only says "application not healthy", so work out which
+          # services are at fault, print every service's logs here, and leave a table for the summary step.
+          dir="${RUNNER_TEMP}/e2e-compose"
+          mkdir -p "$dir"
+          docker compose -f "$COMPOSE_FILE" config --format json > "$dir/config.json" 2>/dev/null || echo '{}' > "$dir/config.json"
+          # `ps --format json` is one array on older Compose and one object per line on newer: flatten both.
+          docker compose -f "$COMPOSE_FILE" ps -a --format json 2>/dev/null | jq -s 'flatten' > "$dir/ps.json" || echo '[]' > "$dir/ps.json"
+          jq -n --slurpfile config "$dir/config.json" --slurpfile ps "$dir/ps.json" '
+            ($config[0].services // {}) as $svcs | $ps[0] as $ps
+            # One-shot services (migrators, readiness sidecars): others wait for them to exit 0.
+            | ([$svcs[] | (.depends_on // {}) | to_entries[]
+                | select(.value.condition == "service_completed_successfully") | .key] | unique) as $oneshots
+            | ([$svcs | keys[]] + [$ps[].Service] | unique) as $names
+            | [ $names[] as $name
+                | ([$ps[] | select(.Service == $name)] | .[0]) as $c
+                | { name: $name,
+                    state: ($c.State // "not created"),
+                    health: ($c.Health // ""),
+                    problem: (
+                      if $c == null then "never started (a dependency failed first?)"
+                      elif $c.State == "exited" and ($c.ExitCode // 0) != 0 then "exited with code \($c.ExitCode)"
+                      elif $c.Health == "unhealthy" then "unhealthy"
+                      elif $c.Health == "starting" then "health check never passed"
+                      elif $c.State == "created" then "not started (blocked by a dependency)"
+                      elif ($oneshots | index($name)) != null and $c.State != "exited"
+                        then "never finished (others wait for it to exit 0)"
+                      elif $c.State != "running" and $c.State != "exited" then $c.State
+                      else "" end) } ]' > "$dir/services.json" || echo '[]' > "$dir/services.json"
+
+          problems=$(jq -r '[.[] | select(.problem != "") | "\(.name): \(.problem)"] | join("; ")' "$dir/services.json")
+
+          echo "::group::docker compose ps -a"
+          docker compose -f "$COMPOSE_FILE" ps -a || true
+          echo "::endgroup::"
+          # Every service's logs, the faulty ones first: the cause is often in a service that looks fine,
+          # e.g. an api answering 500 that keeps its readiness sidecar from finishing.
+          mkdir -p "$dir/tail"
+          jq -r 'sort_by(.problem == "") | .[].name' "$dir/services.json" | while IFS= read -r svc; do
+            docker compose -f "$COMPOSE_FILE" logs --no-color --no-log-prefix --tail 200 "$svc" > "$dir/tail/$svc.log" 2>&1 || true
+            echo "::group::logs: $svc (last 200 lines)"
+            cat "$dir/tail/$svc.log"
+            echo "::endgroup::"
+          done
+
+          # Markdown for the summary step: the table (also used in the PR comment) and an excerpt of
+          # error-looking lines (step summary only).
+          {
+            echo "| Service | State | Health | Problem |"
+            echo "|---------|-------|--------|---------|"
+            jq -r 'sort_by(.problem == "") | .[]
+              | "| `\(.name)` | \(.state) | \(if .health == "" then "–" else .health end) | \(if .problem == "" then "–" else "**\(.problem)**" end) |"' \
+              "$dir/services.json"
+          } > "$dir/table.md"
+          excerpt=$(
+            for f in "$dir"/tail/*.log; do
+              [ -e "$f" ] || continue
+              svc=$(basename "$f" .log)
+              grep -E -i '(^|[^a-z])(error|fail|fatal|crit|exception|panic|refused|denied)' "$f" \
+                | cut -c 1-300 | awk '!seen[$0]++' | head -n 15 | sed "s/^/${svc}: /"
+            done
+          )
+          if [ -n "$excerpt" ]; then
+            printf '%s\n' "$excerpt" | head -n 60 > "$dir/excerpt.txt"
+          fi
+
+          echo "::error title=Compose stack did not come up::${problems:-docker compose up --wait failed with exit code ${status}}. Service logs are in this step's log groups and the e2e-compose-logs artifact."
+          exit "$status"
 
       - name: Point Playwright at the deployed app
         if: ${{ inputs.compose_file == '' }}
@@ -541,6 +614,22 @@ jobs:
           COMPOSE_FILE: ${{ inputs.compose_file }}
         run: |
           docker compose -f "$COMPOSE_FILE" logs --no-color > "${RUNNER_TEMP}/compose-logs.txt" || true
+          # One file per service (and the final `ps`) for the e2e-compose-logs artifact.
+          dir="${RUNNER_TEMP}/e2e-compose-logs"
+          mkdir -p "$dir"
+          docker compose -f "$COMPOSE_FILE" ps -a > "$dir/_ps.txt" 2>&1 || true
+          docker compose -f "$COMPOSE_FILE" ps -a --services 2>/dev/null | while IFS= read -r svc; do
+            docker compose -f "$COMPOSE_FILE" logs --no-color --no-log-prefix --timestamps "$svc" > "$dir/$svc.log" 2>&1 || true
+          done
+
+      - name: Upload compose logs
+        if: ${{ always() && inputs.compose_file != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-compose-logs
+          path: ${{ runner.temp }}/e2e-compose-logs
+          retention-days: ${{ inputs.artifact_retention_days }}
+          if-no-files-found: ignore
 
       - name: Build Playwright summary
         id: e2e-summary
@@ -554,11 +643,21 @@ jobs:
         run: |
           set -euo pipefail
           out=/tmp/comment.md
+          compose_dir="${RUNNER_TEMP}/e2e-compose"
           if [ ! -f "$REPORT_JSON" ]; then
             {
-              echo "### 🎭 Playwright E2E"
+              echo "### 🎭 Playwright E2E — ❌ no test results"
               echo
-              echo "The Playwright run did not produce a report — check the [workflow logs](${RUN_URL}) for setup or compose failures."
+              if [ -s "${compose_dir}/table.md" ]; then
+                # Written by "Start compose stack" when `docker compose up --wait` failed.
+                echo "The compose stack did not come up, so Playwright never ran."
+                echo
+                cat "${compose_dir}/table.md"
+                echo
+                echo "Service logs: the \`e2e-compose-logs\` [artifact](${RUN_URL}#artifacts), or the log groups of the \"Start compose stack\" step."
+              else
+                echo "The Playwright run did not produce a report — check the [workflow logs](${RUN_URL}) for setup or compose failures."
+              fi
             } > "$out"
           else
             passed=$(jq -r '.stats.expected // 0' "$REPORT_JSON")
@@ -644,6 +743,20 @@ jobs:
           fi
           # Job summary: always — useful for workflow_dispatch / push runs too, not just PRs.
           cat "$out" >> "$GITHUB_STEP_SUMMARY"
+          # Error-looking log lines of a stack that did not come up: job summary only, not the PR
+          # comment (which stays on the PR after the run's logs expire).
+          if [ -s "${compose_dir}/excerpt.txt" ]; then
+            {
+              echo
+              echo "<details open><summary><strong>Error lines from the service logs</strong></summary>"
+              echo
+              echo '```text'
+              cat "${compose_dir}/excerpt.txt"
+              echo '```'
+              echo
+              echo "</details>"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
           # Stash the same markdown for the downstream PR-comment step.
           {
             echo "comment<<__EOM__"
