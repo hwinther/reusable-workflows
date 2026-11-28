@@ -1,0 +1,3 @@
+FORMAT=plain
+ERROR_HEADER='## ❌ Errors'
+MAX_ERRORS_INLINE=2

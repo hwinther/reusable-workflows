@@ -1,0 +1,55 @@
+name: "Report an unrecognised failure"
+description: |
+  Internal helper for node-build and dotnet-build. A step whose command exited non-zero but whose
+  output had no error line the parsers recognise (a crash, a missing binary, an out-of-memory kill,
+  an error format nobody anticipated) used to be reported as a success. This turns it into a
+  failure: an ::error annotation, and a "❌ <label> failed (exit code N)" section with the last
+  lines of the output in place of the section's success line.
+
+  Not part of the public surface — leading underscore signals internal-only.
+
+inputs:
+  label:
+    required: true
+    description: 'What ran, for the heading and annotation, e.g. "Build".'
+  exit_code:
+    required: true
+    description: "The command's exit code. Empty or 0 means nothing to report."
+  recognised_failed:
+    required: true
+    description: "The formatter's `failed` output: true when error lines were recognised, which the section already shows."
+  output_file:
+    required: false
+    description: "The command's raw output, whose last lines are shown."
+    default: ""
+  out_md:
+    required: true
+    description: "The section's markdown file (the formatter's out_md), rewritten when reporting."
+  hint:
+    required: false
+    description: "Optional sentence on a likely cause, shown under the heading."
+    default: ""
+  tail_lines:
+    required: false
+    description: "How many output lines to show."
+    default: "60"
+
+outputs:
+  failed:
+    description: "true when it reported an unrecognised failure."
+    value: ${{ steps.check.outputs.failed }}
+
+runs:
+  using: "composite"
+  steps:
+    - id: check
+      shell: bash
+      env:
+        LABEL: ${{ inputs.label }}
+        EXIT_CODE: ${{ inputs.exit_code }}
+        RECOGNISED_FAILED: ${{ inputs.recognised_failed }}
+        OUTPUT_FILE: ${{ inputs.output_file }}
+        OUT_MD: ${{ inputs.out_md }}
+        HINT: ${{ inputs.hint }}
+        TAIL_LINES: ${{ inputs.tail_lines }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/check.sh"

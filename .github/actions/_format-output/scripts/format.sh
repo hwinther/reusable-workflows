@@ -15,6 +15,9 @@ ERROR_HEADER="${ERROR_HEADER:-}"
 WARNING_HEADER="${WARNING_HEADER:-}"
 SUCCESS_MESSAGE="${SUCCESS_MESSAGE:-}"
 MAX_WARNINGS_INLINE="${MAX_WARNINGS_INLINE:-10}"
+# Errors are capped too, so a build with hundreds of errors still fits in a PR comment.
+# Every error stays an annotation in the job log.
+MAX_ERRORS_INLINE="${MAX_ERRORS_INLINE:-50}"
 
 # PATH_STRIP defaults to GITHUB_WORKSPACE/ when both are set. If neither is, no stripping.
 # Without this guard, an unset GITHUB_WORKSPACE would default PATH_STRIP to "/" which would
@@ -146,7 +149,11 @@ if [ "$FORMAT" = "eslint-json" ]; then
             + ":" + (.line | tostring) + ":" + (.column | tostring)
             + " - " + .message + " (" + (.ruleId // "unknown") + ")"
         ' "$ERRORS_FILE" > "$WORK_DIR/eslint-err.md" 2>/dev/null || true
-        cat "$WORK_DIR/eslint-err.md" >> "$OUT_MD"
+        head -n "$MAX_ERRORS_INLINE" "$WORK_DIR/eslint-err.md" >> "$OUT_MD"
+        if [ "$ERROR_COUNT" -gt "$MAX_ERRORS_INLINE" ]; then
+          echo "" >> "$OUT_MD"
+          echo "... and $((ERROR_COUNT - MAX_ERRORS_INLINE)) more errors (see the job log)" >> "$OUT_MD"
+        fi
       fi
       if [ "$WARNING_COUNT" -gt 0 ]; then
         [ "$ERROR_COUNT" -gt 0 ] && echo "" >> "$OUT_MD"
@@ -192,7 +199,14 @@ else
   else
     : > "$OUT_MD"
     [ -n "$ERROR_HEADER" ] && echo "$ERROR_HEADER" >> "$OUT_MD"
-    format_bullet_list "$ERR_TMP" "❌" >> "$OUT_MD"
+    if [ "$ERROR_COUNT" -le "$MAX_ERRORS_INLINE" ]; then
+      format_bullet_list "$ERR_TMP" "❌" >> "$OUT_MD"
+    else
+      head -n "$MAX_ERRORS_INLINE" "$ERR_TMP" > "$WORK_DIR/err-head"
+      format_bullet_list "$WORK_DIR/err-head" "❌" >> "$OUT_MD"
+      echo "" >> "$OUT_MD"
+      echo "... and $((ERROR_COUNT - MAX_ERRORS_INLINE)) more errors (see the job log)" >> "$OUT_MD"
+    fi
   fi
 
   if [ "$WARNING_COUNT" -gt 0 ]; then
